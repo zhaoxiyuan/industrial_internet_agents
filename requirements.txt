@@ -31,3 +31,6 @@ asyncio-throttle>=1.0.2
 # 调试与可观测性
 structlog>=24.0.0
 rich>=15.0.0
+
+# Gradio Web 前端
+gradio>=4.0.0

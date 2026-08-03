@@ -31,4 +31,6 @@ dependencies = [
     "structlog>=24.0.0",
     "create-agent>=0.0.3",
     "rprint>=0.0.8",
+    # Gradio Web 前端
+    "gradio>=4.0.0",
 ]
