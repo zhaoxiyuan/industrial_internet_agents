@@ -1,0 +1,34 @@
+[project]
+name = "industrial-internet-agents"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # LangChain 核心 (0.3.x 为当前最新稳定版)
+    "langchain>=0.3.0,<1.0.0",
+    "langchain-core>=0.3.0,<1.0.0",
+    "langchain-community>=0.3.0,<1.0.0",
+    "langchain-openai>=0.2.0",
+    # OpenAI
+    "openai>=1.0.0",
+    # 向量化与嵌入
+    "numpy>=1.26.0",
+    "tiktoken>=0.7.0",
+    # 日志与配置
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # 常用工具库
+    "requests>=2.31.0",
+    "httpx>=0.27.0",
+    "tenacity>=8.2.0",
+    "orjson>=3.9.0",
+    "cachetools>=5.3.0",
+    # 异步支持
+    "aiohttp>=3.9.0",
+    "asyncio-throttle>=1.0.2",
+    # 调试与可观测性
+    "structlog>=24.0.0",
+    "create-agent>=0.0.3",
+    "rprint>=0.0.8",
+]
