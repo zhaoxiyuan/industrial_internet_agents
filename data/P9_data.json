@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "stage": "P9",
+  "name": "闭环跟踪与报告",
+  "description": "跟踪整改状态，复核处置结果，汇总全过程记录",
+  "tools": ["closure_status", "closure_verify", "closure_report", "closure_close"],
+  "human_confirm": "关闭事件和作业",
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "status_output": {
+    "schema_version": "1.0",
+    "command": "closure status",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "closure_status": "in_progress",
+      "steps": {
+        "task_received": true,
+        "rectification_completed": true,
+        "feedback_submitted": false,
+        "review_confirmed": false
+      }
+    }
+  },
+  "verify_output": {
+    "schema_version": "1.0",
+    "command": "closure verify",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "complete": false,
+      "checks": [
+        {"name": "处置记录完整性", "passed": true,  "details": "所有处置记录完整"},
+        {"name": "证据材料齐全性", "passed": true,  "details": "视频证据完整"},
+        {"name": "复核签字有效性", "passed": false, "details": "缺少复核签字"},
+        {"name": "时间线连续性",   "passed": true,  "details": "时间线连续"}
+      ],
+      "blocked_by": ["复核签字"]
+    }
+  },
+  "report_output": {
+    "schema_version": "1.0",
+    "command": "closure report",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "report_id": "REP-20260804001",
+      "format": "markdown",
+      "content": "# 作业过程报告\n\n## 基本信息\n- 任务ID: TASK-WELD-01-20260804-001\n- 作业类型: 受限空间作业\n- 区域: 炼油厂区01\n- 开始时间: 2026-08-04T09:00:00Z\n- 结束时间: 2026-08-04T17:00:00Z\n\n## 核验结果汇总\n- 总计: 6项 | 通过: 3项 | 待确认: 2项 | 不符合: 1项\n\n## 风险事件\n- CE-20260804001: 人员进入受限空间未佩戴呼吸器 [HIGH]\n\n## 处置记录\n- DT-20260804001: 属地责任人-张三 整改中",
+      "generated_at": "2026-08-04T17:00:00Z"
+    }
+  }
+}

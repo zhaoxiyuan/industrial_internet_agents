@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "stage": "P7",
+  "name": "风险研判与分级",
+  "description": "融合上下文、模型结果、规则和历史事件，去重并判级",
+  "tools": ["risk_analyze", "risk_grade", "risk_cases", "risk_list"],
+  "human_confirm": "高风险判断确认",
+  "input": {
+    "candidate_event_id": "CE-20260804001"
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "risk analyze",
+    "result": {
+      "event_id": "CE-20260804001",
+      "description": "人员进入受限空间未佩戴呼吸器",
+      "facts": [
+        "视频画面显示人员A进入R-101",
+        "未检测到呼吸器佩戴"
+      ],
+      "evidence": [{"type": "video", "timestamp": "2026-08-04T10:23:15Z", "clip": "clip_001.mp4"}],
+      "rule_bases": ["GBXXXX-X 5.2.3", "企业安规-受限空间篇 3.1"],
+      "confidence": 0.95,
+      "level": "HIGH",
+      "suggestion": "立即整改"
+    }
+  },
+  "grade_output": {
+    "schema_version": "1.0",
+    "command": "risk grade",
+    "result": {
+      "event_id": "RE-20260804001",
+      "level": "HIGH",
+      "score": 0.85,
+      "factors": [
+        {"factor": "证据充分性", "weight": 0.3, "contribution": 0.9},
+        {"factor": "规则匹配度", "weight": 0.3, "contribution": 0.95},
+        {"factor": "历史相似度", "weight": 0.2, "contribution": 0.8},
+        {"factor": "置信度", "weight": 0.2, "contribution": 0.95}
+      ],
+      "requires_human_confirm": true
+    }
+  },
+  "cases_output": {
+    "schema_version": "1.0",
+    "command": "risk cases",
+    "result": [
+      {
+        "case_id": "CASE-20260804-001",
+        "description": "2026-07-15 炼油厂区01 受限空间作业人员未佩戴呼吸器",
+        "similarity": 0.92,
+        "resolution": "现场整改完成",
+        "occurred_at": "2026-07-15T14:30:00Z"
+      },
+      {
+        "case_id": "CASE-20260804-002",
+        "description": "2026-06-20 炼油厂区02 受限空间作业气体检测不合格",
+        "similarity": 0.78,
+        "resolution": "暂停作业，完成通风后重新检测",
+        "occurred_at": "2026-06-20T10:15:00Z"
+      }
+    ]
+  }
+}

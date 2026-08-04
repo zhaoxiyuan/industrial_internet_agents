@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "stage": "P6",
+  "name": "作业过程动态监测",
+  "description": "持续获取视频、传感器、定位和作业状态，识别违章及条件变化",
+  "tools": ["monitor_start", "monitor_stop", "monitor_status", "monitor_events"],
+  "human_confirm": null,
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "start_output": {
+    "schema_version": "1.0",
+    "command": "monitor start",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "session_id": "SESSION-20260804001",
+      "status": "running",
+      "started_at": "2026-08-04T09:15:00Z",
+      "idempotent": false
+    }
+  },
+  "events_output": [
+    {
+      "event_type": "candidate_event",
+      "event_id": "CE-20260804001",
+      "task_id": "TASK-WELD-01-20260804-001",
+      "description": "检测到人员未佩戴呼吸器",
+      "confidence": 0.85,
+      "evidence": [{"type": "video", "timestamp": "2026-08-04T10:23:15Z", "clip": "clip_001.mp4"}],
+      "severity": "HIGH",
+      "timestamp": "2026-08-04T10:23:15Z"
+    }
+  ],
+  "status_output": {
+    "schema_version": "1.0",
+    "command": "monitor status",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "session_id": "SESSION-20260804001",
+      "status": "running",
+      "sampling_rate": "1帧/秒",
+      "model_selected": ["CV-高空作业模型", "VL-受限空间模型"],
+      "events_count": 1,
+      "started_at": "2026-08-04T09:15:00Z"
+    }
+  }
+}

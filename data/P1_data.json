@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "stage": "P1",
+  "name": "作业预约、JSA与作业票",
+  "description": "接收作业申请，识别作业类型、区域、设备、人员和时间；分析JSA；辅助形成作业票",
+  "tools": ["permit_submit", "jsa_analyze", "permit_generate_draft"],
+  "human_confirm": "作业票审批",
+  "input": {
+    "application": {
+      "schema_version": "1.0",
+      "work_type": "受限空间作业",
+      "region": "炼油厂区01",
+      "equipment": ["反应器R-101", "管道P-205"],
+      "medium": "原油",
+      "personnel": [
+        {
+          "name": "张三",
+          "badge_id": "P-101",
+          "qualifications": ["受限空间作业证", "易燃易爆作业证"]
+        }
+      ],
+      "planned_start": "2026-08-04T09:00:00Z",
+      "planned_end": "2026-08-04T17:00:00Z"
+    }
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "permit submit",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "permit_draft_id": "PD-20260804001",
+      "status": "draft",
+      "missing_fields": [],
+      "jsa_complete": true
+    },
+    "errors": []
+  },
+  "jsa_output": {
+    "schema_version": "1.0",
+    "command": "permit analyze-jsa",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "hazards": [
+        {"id": "H-001", "description": "受限空间内存在有毒有害气体", "severity": "高", "measures": ["气体检测", "强制通风", "佩戴呼吸器"]},
+        {"id": "H-002", "description": "高温设备烫伤风险", "severity": "中", "measures": ["设备降温", "佩戴防护手套", "设置警戒区域"]},
+        {"id": "H-003", "description": "人员误入风险区域", "severity": "中", "measures": ["设置警戒标识", "专人监护", "门禁管理"]}
+      ],
+      "completeness_score": 0.85,
+      "missing_items": ["建议补充应急救援预案"]
+    }
+  },
+  "draft_output": {
+    "schema_version": "1.0",
+    "command": "permit generate-draft",
+    "result": {
+      "permit_draft_id": "PD-20260804001",
+      "content": {
+        "task_id": "TASK-WELD-01-20260804-001",
+        "work_type": "受限空间作业",
+        "region": "炼油厂区01",
+        "equipment": ["反应器R-101", "管道P-205"],
+        "medium": "原油",
+        "personnel": [{"name": "张三", "badge_id": "P-101"}],
+        "hazards": ["有毒有害气体", "高温烫伤", "人员误入"],
+        "measures": ["气体检测", "通风", "警戒标识"]
+      },
+      "missing_fields": [],
+      "requires_approval": true
+    }
+  }
+}

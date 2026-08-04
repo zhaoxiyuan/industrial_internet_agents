@@ -1,0 +1,622 @@
+{
+  "schema_version": "1.0",
+  "description": "P1-P10 工作流各阶段输入输出示例数据",
+  "stages": {
+
+    "P1": {
+      "name": "作业预约、JSA与作业票",
+      "description": "接收作业申请，识别作业类型、区域、设备、人员和时间；分析JSA；辅助形成作业票",
+      "tools": ["permit_submit", "jsa_analyze", "permit_generate_draft"],
+      "human_confirm": "作业票审批",
+      "input": {
+        "application": {
+          "schema_version": "1.0",
+          "work_type": "受限空间作业",
+          "region": "炼油厂区01",
+          "equipment": ["反应器R-101", "管道P-205"],
+          "medium": "原油",
+          "personnel": [
+            {
+              "name": "张三",
+              "badge_id": "P-101",
+              "qualifications": ["受限空间作业证", "易燃易爆作业证"]
+            }
+          ],
+          "planned_start": "2026-08-04T09:00:00Z",
+          "planned_end": "2026-08-04T17:00:00Z"
+        }
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "permit submit",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "permit_draft_id": "PD-20260804001",
+          "status": "draft",
+          "missing_fields": [],
+          "jsa_complete": true
+        },
+        "errors": []
+      },
+      "jsa_output": {
+        "schema_version": "1.0",
+        "command": "permit analyze-jsa",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "hazards": [
+            {
+              "id": "H-001",
+              "description": "受限空间内存在有毒有害气体",
+              "severity": "高",
+              "measures": ["气体检测", "强制通风", "佩戴呼吸器"]
+            },
+            {
+              "id": "H-002",
+              "description": "高温设备烫伤风险",
+              "severity": "中",
+              "measures": ["设备降温", "佩戴防护手套", "设置警戒区域"]
+            },
+            {
+              "id": "H-003",
+              "description": "人员误入风险区域",
+              "severity": "中",
+              "measures": ["设置警戒标识", "专人监护", "门禁管理"]
+            }
+          ],
+          "completeness_score": 0.85,
+          "missing_items": ["建议补充应急救援预案"]
+        }
+      },
+      "draft_output": {
+        "schema_version": "1.0",
+        "command": "permit generate-draft",
+        "result": {
+          "permit_draft_id": "PD-20260804001",
+          "content": {
+            "task_id": "TASK-WELD-01-20260804-001",
+            "work_type": "受限空间作业",
+            "region": "炼油厂区01",
+            "equipment": ["反应器R-101", "管道P-205"],
+            "medium": "原油",
+            "personnel": [{"name": "张三", "badge_id": "P-101"}],
+            "hazards": ["有毒有害气体", "高温烫伤", "人员误入"],
+            "measures": ["气体检测", "通风", "警戒标识"]
+          },
+          "missing_fields": [],
+          "requires_approval": true
+        }
+      }
+    },
+
+    "P2": {
+      "name": "作业任务获取",
+      "description": "从作业票系统获取已批准或待执行任务，建立唯一任务实例",
+      "tools": ["task_instance_create", "task_list", "task_get"],
+      "human_confirm": "是否纳入智能监测",
+      "input": {
+        "permit_id": "PD-20260804001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "task instance-create",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "permit_id": "PD-20260804001",
+          "status": "pending",
+          "created_at": "2026-08-04T09:00:00Z",
+          "idempotent": false
+        },
+        "errors": []
+      },
+      "list_output": {
+        "schema_version": "1.0",
+        "command": "task list",
+        "result": {
+          "tasks": [
+            {
+              "task_id": "TASK-WELD-01-20260804-001",
+              "permit_id": "PD-20260804001",
+              "work_type": "受限空间作业",
+              "region": "炼油厂区01",
+              "status": "pending",
+              "created_at": "2026-08-04T09:00:00Z"
+            }
+          ],
+          "total": 1,
+          "filtered_by": {"region": null, "status": null}
+        }
+      }
+    },
+
+    "P3": {
+      "name": "作业上下文理解",
+      "description": "聚合作业类型、区域、设备、介质、风险、措施、人员、时间和关联作业",
+      "tools": ["context_build", "context_validate", "context_history"],
+      "human_confirm": "上下文缺失确认",
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "context build",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "context": {
+            "work_type": "受限空间作业",
+            "region": "炼油厂区01",
+            "equipment": ["反应器R-101", "管道P-205"],
+            "medium": "原油",
+            "personnel": [
+              {
+                "name": "张三",
+                "badge_id": "P-101",
+                "qualifications": ["受限空间作业证", "易燃易爆作业证"]
+              }
+            ],
+            "qualifications": ["受限空间作业证", "易燃易爆作业证"],
+            "risks": [
+              {"id": "R-001", "description": "有毒有害气体", "severity": "高"},
+              {"id": "R-002", "description": "高温烫伤", "severity": "中"}
+            ],
+            "measures": [
+              {"id": "M-001", "description": "气体检测", "status": "已落实"},
+              {"id": "M-002", "description": "强制通风", "status": "已落实"},
+              {"id": "M-003", "description": "佩戴呼吸器", "status": "待确认"}
+            ],
+            "time_range": {
+              "start": "2026-08-04T09:00:00Z",
+              "end": "2026-08-04T17:00:00Z"
+            },
+            "related_tasks": [],
+            "data_sources": {
+              "work_permit": "permit-system-v2",
+              "personnel": "hr-system-v3",
+              "equipment": "equipment-db-v1"
+            },
+            "valid_until": "2026-08-04T17:00:00Z"
+          },
+          "completeness": "95%",
+          "missing_fields": ["related_tasks"]
+        }
+      }
+    },
+
+    "P4": {
+      "name": "摄像与数据关联",
+      "description": "匹配固定/移动摄像、传感器、定位和报警数据",
+      "tools": ["binding_match", "binding_status", "binding_confirm", "binding_request_manual"],
+      "human_confirm": "资源绑定确认",
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "binding match",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "bindings": {
+            "fixed_cameras": [
+              {"camera_id": "CAM-001", "coverage": "95%", "location": "R-101入口"},
+              {"camera_id": "CAM-002", "coverage": "88%", "location": "R-101中部"}
+            ],
+            "mobile_devices": [],
+            "sensors": [
+              {"sensor_id": "GAS-001", "type": "combustible_gas", "location": "R-101内部"},
+              {"sensor_id": "TEMP-001", "type": "temperature", "location": "R-101内部"}
+            ],
+            "personnel_locations": [
+              {"badge_id": "P-101", "zone": "R-101"}
+            ]
+          },
+          "unmatched_resources": [],
+          "status": "auto_matched",
+          "requires_manual_confirm": true
+        }
+      },
+      "confirm_output": {
+        "schema_version": "1.0",
+        "command": "binding confirm",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "confirmed": true,
+          "confirmed_by": "operator",
+          "confirmed_at": "2026-08-04T09:05:00Z"
+        }
+      }
+    },
+
+    "P5": {
+      "name": "作业前条件核验",
+      "description": "核对隔离、警戒、消防、气体检测、人员资质和PPE",
+      "tools": ["verify_checklist", "verify_execute", "verify_recommendation"],
+      "human_confirm": "允许开工或整改",
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "verify execute",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "checklist_id": "CL-20260804001",
+          "checklist_results": [
+            {"item": "隔离措施落实", "result": "PASS", "evidence": ["video_snippet_001"], "checked_at": "2026-08-04T09:10:00Z"},
+            {"item": "警戒标识设置", "result": "PASS", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"},
+            {"item": "消防器材配备", "result": "PENDING", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"},
+            {"item": "气体检测合格", "result": "FAIL", "evidence": ["sensor_data_GAS-001"], "checked_at": "2026-08-04T09:10:00Z"},
+            {"item": "人员资质有效", "result": "PASS", "evidence": ["cert_check_api"], "checked_at": "2026-08-04T09:10:00Z"},
+            {"item": "PPE配备齐全", "result": "PENDING", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"}
+          ],
+          "pass_rate": "50%",
+          "recommendation": "整改后开工"
+        }
+      },
+      "recommendation_output": {
+        "schema_version": "1.0",
+        "command": "verify recommendation",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "decision": "整改后开工",
+          "reasons": [
+            "气体检测不合格（GAS-001检测到可燃气体）",
+            "消防器材配备待确认",
+            "PPE配备待确认"
+          ],
+          "conditions": [
+            "完成气体检测并合格",
+            "确认消防器材可用",
+            "确认PPE配备齐全"
+          ]
+        }
+      }
+    },
+
+    "P6": {
+      "name": "作业过程动态监测",
+      "description": "持续获取视频、传感器、定位和作业状态，识别违章及条件变化",
+      "tools": ["monitor_start", "monitor_stop", "monitor_status", "monitor_events"],
+      "human_confirm": null,
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "monitor start",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "session_id": "SESSION-20260804001",
+          "status": "running",
+          "started_at": "2026-08-04T09:15:00Z",
+          "idempotent": false
+        }
+      },
+      "events_output": [
+        {
+          "event_type": "candidate_event",
+          "event_id": "CE-20260804001",
+          "task_id": "TASK-WELD-01-20260804-001",
+          "description": "检测到人员未佩戴呼吸器",
+          "confidence": 0.85,
+          "evidence": [
+            {"type": "video", "timestamp": "2026-08-04T10:23:15Z", "clip": "clip_001.mp4"}
+          ],
+          "severity": "HIGH",
+          "timestamp": "2026-08-04T10:23:15Z"
+        }
+      ],
+      "status_output": {
+        "schema_version": "1.0",
+        "command": "monitor status",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "session_id": "SESSION-20260804001",
+          "status": "running",
+          "sampling_rate": "1帧/秒",
+          "model_selected": ["CV-高空作业模型", "VL-受限空间模型"],
+          "events_count": 1,
+          "started_at": "2026-08-04T09:15:00Z"
+        }
+      }
+    },
+
+    "P7": {
+      "name": "风险研判与分级",
+      "description": "融合上下文、模型结果、规则和历史事件，去重并判级",
+      "tools": ["risk_analyze", "risk_grade", "risk_cases", "risk_list"],
+      "human_confirm": "高风险判断确认",
+      "input": {
+        "candidate_event_id": "CE-20260804001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "risk analyze",
+        "result": {
+          "event_id": "CE-20260804001",
+          "description": "人员进入受限空间未佩戴呼吸器",
+          "facts": [
+            "视频画面显示人员A进入R-101",
+            "未检测到呼吸器佩戴"
+          ],
+          "evidence": [
+            {"type": "video", "timestamp": "2026-08-04T10:23:15Z", "clip": "clip_001.mp4"}
+          ],
+          "rule_bases": ["GBXXXX-X 5.2.3", "企业安规-受限空间篇 3.1"],
+          "confidence": 0.95,
+          "level": "HIGH",
+          "suggestion": "立即整改"
+        }
+      },
+      "grade_output": {
+        "schema_version": "1.0",
+        "command": "risk grade",
+        "result": {
+          "event_id": "RE-20260804001",
+          "level": "HIGH",
+          "score": 0.85,
+          "factors": [
+            {"factor": "证据充分性", "weight": 0.3, "contribution": 0.9},
+            {"factor": "规则匹配度", "weight": 0.3, "contribution": 0.95},
+            {"factor": "历史相似度", "weight": 0.2, "contribution": 0.8},
+            {"factor": "置信度", "weight": 0.2, "contribution": 0.95}
+          ],
+          "requires_human_confirm": true
+        }
+      },
+      "cases_output": {
+        "schema_version": "1.0",
+        "command": "risk cases",
+        "result": [
+          {
+            "case_id": "CASE-20260804-001",
+            "description": "2026-07-15 炼油厂区01 受限空间作业人员未佩戴呼吸器",
+            "similarity": 0.92,
+            "resolution": "现场整改完成",
+            "occurred_at": "2026-07-15T14:30:00Z"
+          },
+          {
+            "case_id": "CASE-20260804-002",
+            "description": "2026-06-20 炼油厂区02 受限空间作业气体检测不合格",
+            "similarity": 0.78,
+            "resolution": "暂停作业，完成通风后重新检测",
+            "occurred_at": "2026-06-20T10:15:00Z"
+          }
+        ]
+      }
+    },
+
+    "P8": {
+      "name": "人机协同处置",
+      "description": "按角色与权限推送责任人，形成整改、暂停、复核或升级建议",
+      "tools": ["disposition_create", "disposition_confirm", "disposition_status", "disposition_list"],
+      "human_confirm": "下发、暂停、恢复",
+      "input": {
+        "risk_event_id": "RE-20260804001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "disposition create",
+        "result": {
+          "disposition_task_id": "DT-20260804001",
+          "risk_event_id": "RE-20260804001",
+          "assignee": "属地责任人-张三",
+          "action_type": "rectify",
+          "status": "pending",
+          "due_at": "2026-08-04T11:23:15Z",
+          "push_strategy": "phone+sms+message"
+        }
+      },
+      "confirm_output": {
+        "schema_version": "1.0",
+        "command": "disposition confirm",
+        "result": {
+          "disposition_task_id": "DT-20260804001",
+          "action": "approve",
+          "confirmed_by": "operator",
+          "confirmed_at": "2026-08-04T10:30:00Z",
+          "notes": null
+        }
+      },
+      "push_strategy_table": {
+        "LOW":      {"push": "消息",         "time_limit": "24h"},
+        "MEDIUM":   {"push": "短信+消息",     "time_limit": "4h"},
+        "HIGH":     {"push": "电话+短信+消息","time_limit": "1h"},
+        "CRITICAL": {"push": "电话直达",      "time_limit": "实时"}
+      }
+    },
+
+    "P9": {
+      "name": "闭环跟踪与报告",
+      "description": "跟踪整改状态，复核处置结果，汇总全过程记录",
+      "tools": ["closure_status", "closure_verify", "closure_report", "closure_close"],
+      "human_confirm": "关闭事件和作业",
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "closure status",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "closure_status": "in_progress",
+          "steps": {
+            "task_received": true,
+            "rectification_completed": true,
+            "feedback_submitted": false,
+            "review_confirmed": false
+          }
+        }
+      },
+      "verify_output": {
+        "schema_version": "1.0",
+        "command": "closure verify",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "complete": false,
+          "checks": [
+            {"name": "处置记录完整性", "passed": true,  "details": "所有处置记录完整"},
+            {"name": "证据材料齐全性", "passed": true,  "details": "视频证据完整"},
+            {"name": "复核签字有效性", "passed": false, "details": "缺少复核签字"},
+            {"name": "时间线连续性",   "passed": true,  "details": "时间线连续"}
+          ],
+          "blocked_by": ["复核签字"]
+        }
+      },
+      "report_output": {
+        "schema_version": "1.0",
+        "command": "closure report",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "report_id": "REP-20260804001",
+          "format": "markdown",
+          "content": "# 作业过程报告\n\n## 基本信息\n- 任务ID: TASK-WELD-01-20260804-001\n- 作业类型: 受限空间作业\n- 区域: 炼油厂区01\n- 开始时间: 2026-08-04T09:00:00Z\n- 结束时间: 2026-08-04T17:00:00Z\n\n## 核验结果汇总\n- 总计: 6项 | 通过: 3项 | 待确认: 2项 | 不符合: 1项\n\n## 风险事件\n- CE-20260804001: 人员进入受限空间未佩戴呼吸器 [HIGH]\n\n## 处置记录\n- DT-20260804001: 属地责任人-张三 整改中",
+          "generated_at": "2026-08-04T17:00:00Z"
+        }
+      }
+    },
+
+    "P10": {
+      "name": "归档与复盘",
+      "description": "归档票证、视频证据、风险事件、处置记录和报告，形成案例",
+      "tools": ["archive_task", "archive_cases", "archive_performance", "archive_suggestions"],
+      "human_confirm": "档案确认、规则发布",
+      "input": {
+        "task_id": "TASK-WELD-01-20260804-001"
+      },
+      "output": {
+        "schema_version": "1.0",
+        "command": "archive task",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "archive_id": "ARC-20260804001",
+          "archived_at": "2026-08-04T17:30:00Z",
+          "contents": [
+            "作业票证",
+            "视频证据片段",
+            "风险事件记录",
+            "处置全记录",
+            "作业报告"
+          ],
+          "status": "archived"
+        }
+      },
+      "cases_output": {
+        "schema_version": "1.0",
+        "command": "archive cases",
+        "result": [
+          {
+            "case_id": "CASE-20260804-001",
+            "type": "misdetection",
+            "description": "CV模型误将管道反光识别为未佩戴安全帽",
+            "evidence": ["clip_误报001.mp4"],
+            "mined_at": "2026-08-04T17:30:00Z"
+          },
+          {
+            "case_id": "CASE-20260804-002",
+            "type": "missed",
+            "description": "人工发现作业区域温度异常但传感器未报警",
+            "evidence": ["人工记录表"],
+            "mined_at": "2026-08-04T17:30:00Z"
+          },
+          {
+            "case_id": "CASE-20260804-003",
+            "type": "rule_conflict",
+            "description": "GB标准和企标在受限空间作业时间限制上存在冲突",
+            "evidence": ["GBXXXX-X", "企标-QHSE-003"],
+            "mined_at": "2026-08-04T17:30:00Z"
+          }
+        ]
+      },
+      "performance_output": {
+        "schema_version": "1.0",
+        "command": "archive performance",
+        "result": {
+          "task_id": "TASK-WELD-01-20260804-001",
+          "metrics": {
+            "detection_rate": 0.92,
+            "false_positive_rate": 0.08,
+            "avg_response_time_seconds": 180.5,
+            "closure_time_hours": 4.2
+          }
+        }
+      },
+      "suggestions_output": {
+        "schema_version": "1.0",
+        "command": "archive suggestions",
+        "result": [
+          {
+            "rule_id": "R-001",
+            "type": "rule_modify",
+            "description": "建议增加受限空间作业气体检测频次，从每30分钟一次改为每15分钟一次",
+            "priority": "high"
+          },
+          {
+            "rule_id": null,
+            "type": "model_update",
+            "description": "建议优化CV模型，减少管道反光误报",
+            "priority": "medium"
+          },
+          {
+            "rule_id": "R-002",
+            "type": "rule_add",
+            "description": "建议新增规则：高空作业前必须确认安全带挂点",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+
+  },
+
+  "workflow_context": {
+    "task_id_format": "{作业类型}_{区域代码}_{时间戳}_{序号}",
+    "example_task_id": "TASK-WELD-01-20260804-001",
+    "智能化程度分级": {
+      "L1": {"description": "人工操作，系统记录",   "applicable_scenarios": ["特殊作业"]},
+      "L2": {"description": "系统辅助，人工决策",   "applicable_scenarios": ["高风险作业"]},
+      "L3": {"description": "系统推荐，人工确认",   "applicable_scenarios": ["常规作业"]},
+      "L4": {"description": "自动执行，事后报告",   "applicable_scenarios": ["低风险作业"]},
+      "L5": {"description": "全自动，异常才干预",  "applicable_scenarios": ["标准化作业"]}
+    },
+    "risk_levels": {
+      "LOW":      {"color": "green",  "push_strategy": "消息",         "requires_human_confirm": false},
+      "MEDIUM":   {"color": "yellow", "push_strategy": "短信+消息",    "requires_human_confirm": false},
+      "HIGH":     {"color": "orange", "push_strategy": "电话+短信+消息","requires_human_confirm": true},
+      "CRITICAL": {"color": "red",    "push_strategy": "电话直达",     "requires_human_confirm": true}
+    },
+    "verification_results": {
+      "PASS":    "符合",
+      "PENDING": "待确认",
+      "FAIL":    "不符合",
+      "N/A":     "不适用"
+    },
+    "task_status": {
+      "pending": "待执行",
+      "running": "执行中",
+      "closed":  "已关闭"
+    },
+    "human_control_points": [
+      {"stage": "P1",  "control": "作业票审批"},
+      {"stage": "P2",  "control": "是否纳入智能监测"},
+      {"stage": "P3",  "control": "上下文缺失确认"},
+      {"stage": "P4",  "control": "资源绑定确认"},
+      {"stage": "P5",  "control": "允许开工或整改"},
+      {"stage": "P7",  "control": "高风险判断确认"},
+      {"stage": "P8",  "control": "下发、暂停、恢复"},
+      {"stage": "P9",  "control": "关闭事件和作业"},
+      {"stage": "P10", "control": "档案确认、规则发布"}
+    ]
+  },
+
+  "cli_usage_examples": {
+    "permit_submit": "python -m agents.cli permit submit CLI-SPEC/fixtures/valid_application.json",
+    "task_list":     "python -m agents.cli task list --region 01 --status pending",
+    "context_build": "python -m agents.cli context build TASK-WELD-01-20260804-001",
+    "binding_match": "python -m agents.cli binding match TASK-WELD-01-20260804-001",
+    "verify_execute":"python -m agents.cli verify execute TASK-WELD-01-20260804-001",
+    "monitor_start": "python -m agents.cli monitor start TASK-WELD-01-20260804-001",
+    "risk_analyze":  "python -m agents.cli risk analyze CE-20260804001",
+    "disposition_create": "python -m agents.cli disposition create RE-20260804001",
+    "closure_report": "python -m agents.cli closure report TASK-WELD-01-20260804-001 --format markdown",
+    "archive_task":   "python -m agents.cli archive task TASK-WELD-01-20260804-001"
+  }
+}

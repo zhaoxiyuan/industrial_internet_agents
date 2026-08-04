@@ -1,0 +1,656 @@
+schema_version: "1.0"
+namespace: edge-monitor
+
+# ============================================================
+# 全局测试配置
+# ============================================================
+
+global:
+  test_timeout_seconds: 30
+  retry_attempts: 3
+  retry_delay_seconds: 1
+
+# ============================================================
+# permit (P1) 测试用例
+# ============================================================
+
+permit:
+  test_suite: P1_permit
+  cases:
+
+    - id: permit-submit-valid
+      description: 提交有效作业申请
+      command: permit submit ./fixtures/valid_application.json
+      expected:
+        exit_code: 0
+        schema_version: "1.0"
+        result.status: draft
+        result.missing_fields: exists
+        errors: []
+
+    - id: permit-submit-invalid-json
+      description: 提交无效JSON格式申请
+      command: permit submit ./fixtures/invalid.json
+      expected:
+        exit_code: 2
+        errors[0].code: PERMIT_INVALID
+
+    - id: permit-submit-duplicate
+      description: 重复提交同一申请（幂等）
+      command: permit submit ./fixtures/valid_application.json
+      expected:
+        exit_code: 0
+        result.status: draft
+        errors[0].code: PERMIT_DUPLICATE
+        result.idempotent: true
+
+    - id: permit-submit-dry-run
+      description: dry-run模式验证格式
+      command: permit submit ./fixtures/valid_application.json --dry-run
+      expected:
+        exit_code: 0
+        result.would_submit: true
+
+    - id: permit-analyze-jsa-valid
+      description: 分析有效任务的JSA
+      command: permit analyze-jsa TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.hazards: exists
+        result.completeness_score: ">=" 0.0
+
+    - id: permit-analyze-jsa-not-found
+      description: JSA分析任务不存在
+      command: permit analyze-jsa TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+    - id: permit-generate-draft
+      description: 生成作业票草稿
+      command: permit generate-draft TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.requires_approval: true
+        result.missing_fields: exists
+
+    - id: permit-check-valid
+      description: 查看作业票状态
+      command: permit check PD-20260804001
+      expected:
+        exit_code: 0
+        result.permit_id: PD-20260804001
+
+    - id: permit-check-json-output
+      description: JSON格式输出
+      command: permit check PD-20260804001 --output json
+      expected:
+        exit_code: 0
+        schema_version: "1.0"
+        command: "permit check"
+
+# ============================================================
+# task (P2) 测试用例
+# ============================================================
+
+task:
+  test_suite: P2_task
+  cases:
+
+    - id: task-list-all
+      description: 列出所有任务
+      command: task list
+      expected:
+        exit_code: 0
+        result.tasks: exists
+        result.total: ">=" 0
+
+    - id: task-list-filtered
+      description: 按区域和状态筛选
+      command: task list --region 01 --status pending
+      expected:
+        exit_code: 0
+        result.filtered_by.region: "01"
+        result.filtered_by.status: "pending"
+
+    - id: task-list-invalid-status
+      description: 无效状态筛选
+      command: task list --status invalid_status
+      expected:
+        exit_code: 2
+
+    - id: task-get-valid
+      description: 获取有效任务详情
+      command: task get TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.task_id: TASK-WELD-01-20260804-001
+        result.status: exists
+
+    - id: task-get-not-found
+      description: 任务不存在
+      command: task get TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+    - id: task-instance-create
+      description: 创建任务实例（幂等）
+      command: task instance-create PD-20260804001
+      expected:
+        exit_code: 0
+        result.task_id: exists
+        result.idempotent: true
+
+    - id: task-instance-create-duplicate
+      description: 重复创建任务实例
+      command: task instance-create PD-20260804001
+      expected:
+        exit_code: 0
+        errors[0].code: TASK_DUPLICATE
+
+    - id: task-subscribe
+      description: 订阅任务变更
+      command: task subscribe TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        output: jsonl
+        stream_event.event_type: exists
+
+# ============================================================
+# context (P3) 测试用例
+# ============================================================
+
+context:
+  test_suite: P3_context
+  cases:
+
+    - id: context-build-valid
+      description: 构建有效上下文
+      command: context build TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.context.work_type: exists
+        result.context.region: exists
+        result.completeness: exists
+
+    - id: context-build-not-found
+      description: 任务不存在
+      command: context build TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+    - id: context-validate-complete
+      description: 验证完整上下文
+      command: context validate TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.valid: true
+
+    - id: context-validate-incomplete
+      description: 验证不完整上下文
+      command: context validate TASK-INCOMPLETE-001
+      expected:
+        exit_code: 0
+        result.valid: false
+        result.missing_fields: exists
+        result.requires_manual_confirmation: true
+
+    - id: context-history
+      description: 获取上下文变更历史
+      command: context history TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result: array
+
+# ============================================================
+# binding (P4) 测试用例
+# ============================================================
+
+binding:
+  test_suite: P4_binding
+  cases:
+
+    - id: binding-match-valid
+      description: 匹配监测资源
+      command: binding match TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.bindings.fixed_cameras: exists
+        result.status: exists
+
+    - id: binding-match-task-not-found
+      description: 任务不存在
+      command: binding match TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+    - id: binding-status
+      description: 查看绑定状态
+      command: binding status TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.bindings: exists
+
+    - id: binding-confirm
+      description: 人工确认绑定
+      command: binding confirm TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.confirmed: true
+        result.confirmed_by: exists
+
+    - id: binding-request-manual
+      description: 请求人工补充资源
+      command: binding request-manual TASK-WELD-01-20260804-001 --resource-type camera
+      expected:
+        exit_code: 0
+        result.request_id: exists
+        result.resource_type: camera
+
+    - id: binding-request-manual-invalid-type
+      description: 无效资源类型
+      command: binding request-manual TASK-WELD-01-20260804-001 --resource-type invalid
+      expected:
+        exit_code: 2
+
+# ============================================================
+# verify (P5) 测试用例
+# ============================================================
+
+verify:
+  test_suite: P5_verification
+  cases:
+
+    - id: verify-checklist
+      description: 生成核验清单
+      command: verify checklist TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.checklist_id: exists
+        result.items: exists
+        result.items[0].item_id: exists
+
+    - id: verify-execute
+      description: 执行核验
+      command: verify execute TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.checklist_results: exists
+        result.pass_rate: exists
+        result.recommendation: exists
+
+    - id: verify-execute-checklist-id
+      description: 指定清单ID执行核验
+      command: verify execute TASK-WELD-01-20260804-001 --checklist-id CL-001
+      expected:
+        exit_code: 0
+        result.checklist_id: CL-001
+
+    - id: verify-recommendation
+      description: 获取开工建议
+      command: verify recommendation TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.decision: exists
+
+    - id: verify-checklist-not-found
+      description: 任务不存在
+      command: verify checklist TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+# ============================================================
+# monitor (P6) 测试用例
+# ============================================================
+
+monitor:
+  test_suite: P6_monitoring
+  cases:
+
+    - id: monitor-start
+      description: 启动监测（幂等）
+      command: monitor start TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.session_id: exists
+        result.status: running
+        result.idempotent: true
+
+    - id: monitor-start-duplicate
+      description: 重复启动监测
+      command: monitor start TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.idempotent: true
+
+    - id: monitor-status
+      description: 查看监测状态
+      command: monitor status TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.status: running
+        result.sampling_rate: exists
+
+    - id: monitor-status-not-running
+      description: 监测未启动时查询状态
+      command: monitor status TASK-NEW-001
+      expected:
+        exit_code: 0
+        result.status: idle
+
+    - id: monitor-events
+      description: 获取候选风险事件
+      command: monitor events TASK-WELD-01-20260804-001 --since 2026-08-04T10:00:00Z
+      expected:
+        exit_code: 0
+        output: jsonl
+
+    - id: monitor-stop
+      description: 停止监测
+      command: monitor stop TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.status: stopped
+
+    - id: monitor-session-not-found
+      description: 监测会话不存在
+      command: monitor stop TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: MONITOR_SESSION_NOT_FOUND
+
+# ============================================================
+# risk (P7) 测试用例
+# ============================================================
+
+risk:
+  test_suite: P7_risk
+  cases:
+
+    - id: risk-analyze
+      description: 综合研判候选事件
+      command: risk analyze CE-20260804001
+      expected:
+        exit_code: 0
+        result.event_id: CE-20260804001
+        result.level: exists
+        result.confidence: ">=" 0.0
+        result.suggestion: exists
+
+    - id: risk-analyze-not-found
+      description: 候选事件不存在
+      command: risk analyze CE-NONEXISTENT
+      expected:
+        exit_code: 1
+        errors[0].code: RISK_EVENT_NOT_FOUND
+
+    - id: risk-grade
+      description: 计算风险等级
+      command: risk grade RE-20260804001
+      expected:
+        exit_code: 0
+        result.level: exists
+        result.score: ">=" 0.0
+
+    - id: risk-cases
+      description: 查询相似案例
+      command: risk cases RE-20260804001 --limit 5
+      expected:
+        exit_code: 0
+        result: array
+        result[0].similarity: ">=" 0.0
+
+    - id: risk-list
+      description: 列出任务所有风险事件
+      command: risk list TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.events: exists
+        result.total: ">=" 0
+
+# ============================================================
+# disposition (P8) 测试用例
+# ============================================================
+
+disposition:
+  test_suite: P8_disposition
+  cases:
+
+    - id: disposition-create
+      description: 创建处置任务
+      command: disposition create RE-20260804001
+      expected:
+        exit_code: 0
+        result.disposition_task_id: exists
+        result.action_type: exists
+
+    - id: disposition-confirm-approve
+      description: 确认处置（批准）
+      command: disposition confirm DT-20260804001 --action approve
+      expected:
+        exit_code: 0
+        result.confirmed_by: exists
+
+    - id: disposition-confirm-reject
+      description: 确认处置（否决）
+      command: disposition confirm DT-20260804001 --action reject
+      expected:
+        exit_code: 0
+        result.action: reject
+
+    - id: disposition-confirm-escalate
+      description: 确认处置（升级）
+      command: disposition confirm DT-20260804001 --action escalate
+      expected:
+        exit_code: 0
+        result.action: escalate
+
+    - id: disposition-confirm-human-required
+      description: 高风险需要人工确认
+      command: disposition confirm DT-HIGH-001 --action approve
+      expected:
+        exit_code: 3
+        errors[0].code: DISPOSITION_HUMAN_CONFIRM_REQUIRED
+
+    - id: disposition-status
+      description: 查看处置状态
+      command: disposition status DT-20260804001
+      expected:
+        exit_code: 0
+        result.disposition_task_id: DT-20260804001
+
+    - id: disposition-list
+      description: 列出任务所有处置任务
+      command: disposition list TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result: array
+
+    - id: disposition-confirm-invalid-action
+      description: 无效操作类型
+      command: disposition confirm DT-20260804001 --action invalid
+      expected:
+        exit_code: 2
+
+# ============================================================
+# closure (P9) 测试用例
+# ============================================================
+
+closure:
+  test_suite: P9_closure
+  cases:
+
+    - id: closure-status
+      description: 跟踪闭环状态
+      command: closure status TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.closure_status: exists
+        result.steps: exists
+
+    - id: closure-verify-complete
+      description: 完整性检查通过
+      command: closure verify TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.complete: true
+        result.blocked_by: []
+
+    - id: closure-verify-incomplete
+      description: 完整性检查未通过
+      command: closure verify TASK-INCOMPLETE-001
+      expected:
+        exit_code: 0
+        result.complete: false
+        result.blocked_by: exists
+
+    - id: closure-report-json
+      description: 生成JSON格式报告
+      command: closure report TASK-WELD-01-20260804-001 --format json
+      expected:
+        exit_code: 0
+        result.format: json
+        result.content: exists
+
+    - id: closure-report-markdown
+      description: 生成Markdown格式报告
+      command: closure report TASK-WELD-01-20260804-001 --format markdown
+      expected:
+        exit_code: 0
+        result.format: markdown
+
+    - id: closure-close
+      description: 关闭任务（需人工确认）
+      command: closure close TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.requires_human_confirm: true
+
+    - id: closure-close-incomplete
+      description: 未完整则无法关闭
+      command: closure close TASK-INCOMPLETE-001
+      expected:
+        exit_code: 1
+        errors[0].code: CLOSURE_NOT_COMPLETE
+
+# ============================================================
+# archive (P10) 测试用例
+# ============================================================
+
+archive:
+  test_suite: P10_archive
+  cases:
+
+    - id: archive-task
+      description: 归档任务数据
+      command: archive task TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.archive_id: exists
+        result.status: archived
+        result.contents: exists
+
+    - id: archive-task-not-found
+      description: 任务不存在
+      command: archive task TASK-NONEXISTENT-001
+      expected:
+        exit_code: 1
+        errors[0].code: TASK_NOT_FOUND
+
+    - id: archive-cases-all
+      description: 挖掘所有类型案例
+      command: archive cases TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result: array
+
+    - id: archive-cases-misdetection
+      description: 挖掘误报案例
+      command: archive cases TASK-WELD-01-20260804-001 --type misdetection
+      expected:
+        exit_code: 0
+        result[0].type: misdetection
+
+    - id: archive-cases-missed
+      description: 挖掘漏报案例
+      command: archive cases TASK-WELD-01-20260804-001 --type missed
+      expected:
+        exit_code: 0
+        result[0].type: missed
+
+    - id: archive-cases-rule-conflict
+      description: 挖掘规则冲突案例
+      command: archive cases TASK-WELD-01-20260804-001 --type rule_conflict
+      expected:
+        exit_code: 0
+        result[0].type: rule_conflict
+
+    - id: archive-performance
+      description: 分析处置效果
+      command: archive performance TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result.metrics: exists
+        result.metrics.detection_rate: ">=" 0.0
+
+    - id: archive-suggestions
+      description: 生成规则优化建议
+      command: archive suggestions TASK-WELD-01-20260804-001
+      expected:
+        exit_code: 0
+        result: array
+        result[0].priority: exists
+
+# ============================================================
+# 全局质量门禁
+# ============================================================
+
+quality_gates:
+  - name: all_commands_require_auth
+    description: 所有命令需要认证信息
+    check: |
+      执行任何命令前验证 --config 或环境变量包含有效认证
+
+  - name: json_output_has_schema_version
+    description: JSON输出必须包含schema_version
+    check: |
+      所有 --output json 的响应必须包含 schema_version 字段
+
+  - name: error_codes_match_contract
+    description: 错误码必须与contract.yaml一致
+    check: |
+      所有错误响应的 code 字段必须在 contract.yaml errors.definitions 中定义
+
+  - name: dry_run_produces_preview
+    description: dry-run模式不产生副作用
+    check: |
+      --dry-run 执行后状态不变，仅返回预览
+
+  - name: idempotent_operations_safe
+    description: 幂等操作重复执行安全
+    check: |
+      instance-create, monitor start 等幂等操作重复调用不产生错误
+
+  - name: human_confirm_required_for_high_risk
+    description: 高风险操作需要人工确认
+    check: |
+      disposition confirm --action pause/resume 和 closure close 在高风险场景返回 exit_code: 3
+
+# ============================================================
+# 测试夹具路径
+# ============================================================
+
+fixtures:
+  path: ./CLI-SPEC/fixtures
+  files:
+    valid_application: valid_application.json
+    invalid_json: invalid.json
+    valid_task: TASK-WELD-01-20260804-001
+    valid_permit: PD-20260804001
+    valid_candidate_event: CE-20260804001
+    valid_risk_event: RE-20260804001
+    valid_disposition_task: DT-20260804001

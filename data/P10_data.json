@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "stage": "P10",
+  "name": "归档与复盘",
+  "description": "归档票证、视频证据、风险事件、处置记录和报告，形成案例",
+  "tools": ["archive_task", "archive_cases", "archive_performance", "archive_suggestions"],
+  "human_confirm": "档案确认、规则发布",
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "archive_output": {
+    "schema_version": "1.0",
+    "command": "archive task",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "archive_id": "ARC-20260804001",
+      "archived_at": "2026-08-04T17:30:00Z",
+      "contents": ["作业票证", "视频证据片段", "风险事件记录", "处置全记录", "作业报告"],
+      "status": "archived"
+    }
+  },
+  "cases_output": {
+    "schema_version": "1.0",
+    "command": "archive cases",
+    "result": [
+      {
+        "case_id": "CASE-20260804-001",
+        "type": "misdetection",
+        "description": "CV模型误将管道反光识别为未佩戴安全帽",
+        "evidence": ["clip_误报001.mp4"],
+        "mined_at": "2026-08-04T17:30:00Z"
+      },
+      {
+        "case_id": "CASE-20260804-002",
+        "type": "missed",
+        "description": "人工发现作业区域温度异常但传感器未报警",
+        "evidence": ["人工记录表"],
+        "mined_at": "2026-08-04T17:30:00Z"
+      },
+      {
+        "case_id": "CASE-20260804-003",
+        "type": "rule_conflict",
+        "description": "GB标准和企标在受限空间作业时间限制上存在冲突",
+        "evidence": ["GBXXXX-X", "企标-QHSE-003"],
+        "mined_at": "2026-08-04T17:30:00Z"
+      }
+    ]
+  },
+  "performance_output": {
+    "schema_version": "1.0",
+    "command": "archive performance",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "metrics": {
+        "detection_rate": 0.92,
+        "false_positive_rate": 0.08,
+        "avg_response_time_seconds": 180.5,
+        "closure_time_hours": 4.2
+      }
+    }
+  },
+  "suggestions_output": {
+    "schema_version": "1.0",
+    "command": "archive suggestions",
+    "result": [
+      {
+        "rule_id": "R-001",
+        "type": "rule_modify",
+        "description": "建议增加受限空间作业气体检测频次，从每30分钟一次改为每15分钟一次",
+        "priority": "high"
+      },
+      {
+        "rule_id": null,
+        "type": "model_update",
+        "description": "建议优化CV模型，减少管道反光误报",
+        "priority": "medium"
+      },
+      {
+        "rule_id": "R-002",
+        "type": "rule_add",
+        "description": "建议新增规则：高空作业前必须确认安全带挂点",
+        "priority": "medium"
+      }
+    ]
+  }
+}

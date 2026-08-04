@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "description": "有效作业申请 fixture",
+  "application": {
+    "work_type": "受限空间作业",
+    "region": "炼油厂区01",
+    "equipment": ["反应器R-101", "管道P-205"],
+    "medium": "原油",
+    "personnel": [
+      {
+        "name": "张三",
+        "badge_id": "P-101",
+        "qualifications": ["受限空间作业证", "易燃易爆作业证"]
+      }
+    ],
+    "planned_start": "2026-08-04T09:00:00Z",
+    "planned_end": "2026-08-04T17:00:00Z"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "stage": "P3",
+  "name": "作业上下文理解",
+  "description": "聚合作业类型、区域、设备、介质、风险、措施、人员、时间和关联作业",
+  "tools": ["context_build", "context_validate", "context_history"],
+  "human_confirm": "上下文缺失确认",
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "context build",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "context": {
+        "work_type": "受限空间作业",
+        "region": "炼油厂区01",
+        "equipment": ["反应器R-101", "管道P-205"],
+        "medium": "原油",
+        "personnel": [
+          {"name": "张三", "badge_id": "P-101", "qualifications": ["受限空间作业证", "易燃易爆作业证"]}
+        ],
+        "qualifications": ["受限空间作业证", "易燃易爆作业证"],
+        "risks": [
+          {"id": "R-001", "description": "有毒有害气体", "severity": "高"},
+          {"id": "R-002", "description": "高温烫伤", "severity": "中"}
+        ],
+        "measures": [
+          {"id": "M-001", "description": "气体检测", "status": "已落实"},
+          {"id": "M-002", "description": "强制通风", "status": "已落实"},
+          {"id": "M-003", "description": "佩戴呼吸器", "status": "待确认"}
+        ],
+        "time_range": {"start": "2026-08-04T09:00:00Z", "end": "2026-08-04T17:00:00Z"},
+        "related_tasks": [],
+        "data_sources": {
+          "work_permit": "permit-system-v2",
+          "personnel": "hr-system-v3",
+          "equipment": "equipment-db-v1"
+        },
+        "valid_until": "2026-08-04T17:00:00Z"
+      },
+      "completeness": "95%",
+      "missing_fields": ["related_tasks"]
+    }
+  }
+}
