@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "stage": "P5",
+  "name": "作业前条件核验",
+  "description": "核对隔离、警戒、消防、气体检测、人员资质和PPE",
+  "tools": ["verify_checklist", "verify_execute", "verify_recommendation"],
+  "human_confirm": "允许开工或整改",
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "verify execute",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "checklist_id": "CL-20260804001",
+      "checklist_results": [
+        {"item": "隔离措施落实", "result": "PASS", "evidence": ["video_snippet_001"], "checked_at": "2026-08-04T09:10:00Z"},
+        {"item": "警戒标识设置", "result": "PASS", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"},
+        {"item": "消防器材配备", "result": "PENDING", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"},
+        {"item": "气体检测合格", "result": "FAIL", "evidence": ["sensor_data_GAS-001"], "checked_at": "2026-08-04T09:10:00Z"},
+        {"item": "人员资质有效", "result": "PASS", "evidence": ["cert_check_api"], "checked_at": "2026-08-04T09:10:00Z"},
+        {"item": "PPE配备齐全", "result": "PENDING", "evidence": [], "checked_at": "2026-08-04T09:10:00Z"}
+      ],
+      "pass_rate": "50%",
+      "recommendation": "整改后开工"
+    }
+  },
+  "recommendation_output": {
+    "schema_version": "1.0",
+    "command": "verify recommendation",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "decision": "整改后开工",
+      "reasons": [
+        "气体检测不合格（GAS-001检测到可燃气体）",
+        "消防器材配备待确认",
+        "PPE配备待确认"
+      ],
+      "conditions": [
+        "完成气体检测并合格",
+        "确认消防器材可用",
+        "确认PPE配备齐全"
+      ]
+    }
+  }
+}

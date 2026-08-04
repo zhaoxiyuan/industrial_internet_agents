@@ -1,0 +1,822 @@
+schema_version: "1.0"
+namespace: edge-monitor
+
+# ============================================================
+# 全局契约
+# ============================================================
+
+global:
+  output_formats:
+    - text
+    - json
+  default_format: text
+  schema_version_field: schema_version
+
+# ============================================================
+# 共同字段定义
+# ============================================================
+
+common:
+  Meta:
+    schema_version: string
+    command: string
+    timestamp: string (ISO8601)
+    request_id: string
+
+  Error:
+    code: string
+    message: string
+    details: object
+    recoverable: boolean
+    action: string
+
+# ============================================================
+# permit (P1) 输出契约
+# ============================================================
+
+permit:
+  submit:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string, const: "1.0" }
+        command: { type: string, const: "permit submit" }
+        timestamp: string
+        result:
+          type: object
+          fields:
+            task_id: string
+            permit_draft_id: string
+            status: { type: string, enum: [draft, submitted, approved, rejected] }
+            missing_fields: array of string
+            jsa_complete: boolean
+        errors: array of Error
+
+    error_codes:
+      - code: PERMIT_INVALID
+        http_status: 422
+        recoverable: false
+      - code: PERMIT_DUPLICATE
+        http_status: 409
+        recoverable: true
+      - code: PERMIT_NOT_FOUND
+        http_status: 404
+        recoverable: false
+
+  analyze-jsa:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            hazards: array of { id: string, description: string, severity: string, measures: array of string }
+            completeness_score: float
+            missing_items: array of string
+
+  generate-draft:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            permit_draft_id: string
+            content: object
+            missing_fields: array of string
+            requires_approval: { type: boolean, const: true }
+
+  check:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            permit_id: string
+            status: string
+            task_id: string
+            created_at: string
+            approved_by: string | null
+            approved_at: string | null
+
+# ============================================================
+# task (P2) 输出契约
+# ============================================================
+
+task:
+  list:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            tasks: array of
+              - task_id: string
+                permit_id: string
+                work_type: string
+                region: string
+                status: string
+                created_at: string
+            total: integer
+            filtered_by: { region: string | null, status: string | null }
+
+  get:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            permit_id: string
+            work_type: string
+            region: string
+            status: string
+            context: object
+            resources: object
+            created_at: string
+            updated_at: string
+
+  instance-create:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            permit_id: string
+            status: { type: string, enum: [pending, running, closed] }
+            created_at: string
+            idempotent: boolean
+        errors: array of Error
+
+    error_codes:
+      - code: TASK_DUPLICATE
+        http_status: 409
+        recoverable: true
+
+  subscribe:
+    output: jsonl
+    stream_event:
+      type: object
+      fields:
+        event_type: { type: string, enum: [created, updated, status_changed] }
+        task_id: string
+        data: object
+        timestamp: string
+
+# ============================================================
+# context (P3) 输出契约
+# ============================================================
+
+context:
+  build:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            context:
+              type: object
+              fields:
+                work_type: string
+                region: string
+                equipment: array of string
+                medium: string
+                personnel: array of object
+                qualifications: array of string
+                risks: array of object
+                measures: array of object
+                time_range: { start: string, end: string }
+                related_tasks: array of string
+                data_sources: map of string to string
+                valid_until: string
+            completeness: string (e.g. "95%")
+            missing_fields: array of string
+
+  validate:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            valid: boolean
+            completeness: string
+            missing_fields: array of string
+            requires_manual_confirmation: boolean
+
+  history:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: array of
+            - version: integer
+              context: object
+              changed_at: string
+              changed_by: string
+
+# ============================================================
+# binding (P4) 输出契约
+# ============================================================
+
+binding:
+  match:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            bindings:
+              type: object
+              fields:
+                fixed_cameras: array of { camera_id: string, coverage: string, location: string }
+                mobile_devices: array of { device_id: string, type: string }
+                sensors: array of { sensor_id: string, type: string, location: string }
+                personnel_locations: array of { badge_id: string, zone: string }
+            unmatched_resources: array of string
+            status: { type: string, enum: [auto_matched, partial, requires_manual] }
+            requires_manual_confirm: boolean
+
+  confirm:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            confirmed: boolean
+            confirmed_by: string
+            confirmed_at: string
+
+  request-manual:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            request_id: string
+            resource_type: string
+            status: { type: string, const: "pending" }
+            requested_at: string
+
+# ============================================================
+# verify (P5) 输出契约
+# ============================================================
+
+verify:
+  checklist:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            checklist_id: string
+            items: array of
+              - item_id: string
+                description: string
+                category: string
+                required: boolean
+
+  execute:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            checklist_id: string
+            checklist_results:
+              type: array of
+                - item: string
+                  result: { type: string, enum: [PASS, PENDING, FAIL, N/A] }
+                  evidence: array of string
+                  checked_at: string
+            pass_rate: string
+            recommendation: { type: string, enum: [允许开工, 整改后开工, 暂停作业] }
+
+  recommendation:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            decision: string
+            reasons: array of string
+            conditions: array of string
+
+# ============================================================
+# monitor (P6) 输出契约
+# ============================================================
+
+monitor:
+  start:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            session_id: string
+            status: { type: string, const: "running" }
+            started_at: string
+            idempotent: boolean
+
+  status:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            session_id: string | null
+            status: { type: string, enum: [running, stopped, idle] }
+            sampling_rate: string
+            model_selected: array of string
+            events_count: integer
+            started_at: string
+
+  events:
+    output: jsonl
+    stream_event:
+      type: object
+      fields:
+        event_type: { type: string, const: "candidate_event" }
+        event_id: string
+        task_id: string
+        description: string
+        confidence: float
+        evidence: array of { type: string, timestamp: string, clip: string }
+        severity: string
+        timestamp: string
+
+  stop:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            status: { type: string, const: "stopped" }
+            events_captured: integer
+            duration_seconds: integer
+
+# ============================================================
+# risk (P7) 输出契约
+# ============================================================
+
+risk:
+  analyze:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            event_id: string
+            description: string
+            facts: array of string
+            evidence: array of { type: string, timestamp: string, clip: string }
+            rule_bases: array of string
+            confidence: float
+            level: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+            suggestion: string
+
+  grade:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            event_id: string
+            level: string
+            score: float
+            factors: array of { factor: string, weight: float, contribution: float }
+            requires_human_confirm: boolean
+
+  cases:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: array of
+            - case_id: string
+              description: string
+              similarity: float
+              resolution: string
+              occurred_at: string
+
+  list:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            events: array of
+              - event_id: string
+                description: string
+                level: string
+                status: string
+                created_at: string
+            total: integer
+
+# ============================================================
+# disposition (P8) 输出契约
+# ============================================================
+
+disposition:
+  create:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            disposition_task_id: string
+            risk_event_id: string
+            assignee: string
+            action_type: string
+            status: { type: string, enum: [pending, confirmed, rejected, completed] }
+            due_at: string
+            push_strategy: string
+
+  confirm:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            disposition_task_id: string
+            action: string
+            confirmed_by: string
+            confirmed_at: string
+            notes: string | null
+
+    error_codes:
+      - code: DISPOSITION_HUMAN_CONFIRM_REQUIRED
+        http_status: 403
+        recoverable: true
+
+  status:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            disposition_task_id: string
+            status: string
+            assignee: string
+            action_type: string
+            due_at: string
+            completed_at: string | null
+
+  list:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: array of
+            - disposition_task_id: string
+              risk_event_id: string
+              level: string
+              status: string
+              assignee: string
+              due_at: string
+
+# ============================================================
+# closure (P9) 输出契约
+# ============================================================
+
+closure:
+  status:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            closure_status: { type: string, enum: [open, in_progress, completed] }
+            steps:
+              type: object
+              fields:
+                task_received: boolean
+                rectification_completed: boolean
+                feedback_submitted: boolean
+                review_confirmed: boolean
+
+  verify:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            complete: boolean
+            checks:
+              type: array of
+                - name: string
+                  passed: boolean
+                  details: string
+            blocked_by: array of string
+
+  report:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            report_id: string
+            format: string
+            content: string | object
+            generated_at: string
+
+  close:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            closed: boolean
+            closed_by: string
+            closed_at: string
+            requires_human_confirm: boolean
+
+# ============================================================
+# archive (P10) 输出契约
+# ============================================================
+
+archive:
+  task:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            archive_id: string
+            archived_at: string
+            contents: array of string
+            status: { type: string, const: "archived" }
+
+  cases:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: array of
+            - case_id: string
+              type: { type: string, enum: [misdetection, missed, rule_conflict] }
+              description: string
+              evidence: array of string
+              mined_at: string
+
+  performance:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: object
+          fields:
+            task_id: string
+            metrics:
+              type: object
+              fields:
+                detection_rate: float
+                false_positive_rate: float
+                avg_response_time_seconds: float
+                closure_time_hours: float
+
+  suggestions:
+    output:
+      type: object
+      fields:
+        schema_version: { type: string }
+        command: { type: string }
+        result:
+          type: array of
+            - rule_id: string | null
+              type: { type: string, enum: [model_update, rule_add, rule_modify, process_change] }
+              description: string
+              priority: { type: string, enum: [low, medium, high] }
+
+# ============================================================
+# 全局错误模型
+# ============================================================
+
+errors:
+  definitions:
+    - code: INTERNAL_ERROR
+      http_status: 500
+      recoverable: false
+      message: "Internal server error"
+
+    - code: INVALID_ARGUMENT
+      http_status: 422
+      recoverable: false
+      message: "Invalid argument: {detail}"
+
+    - code: PERMIT_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Permit {permit_id} not found"
+
+    - code: PERMIT_INVALID
+      http_status: 422
+      recoverable: false
+      message: "Permit validation failed: {detail}"
+
+    - code: PERMIT_DUPLICATE
+      http_status: 409
+      recoverable: true
+      message: "Duplicate permit submission"
+
+    - code: TASK_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Task {task_id} not found"
+
+    - code: TASK_DUPLICATE
+      http_status: 409
+      recoverable: true
+      message: "Task already exists for this permit"
+
+    - code: CONTEXT_INCOMPLETE
+      http_status: 422
+      recoverable: true
+      message: "Context is incomplete, missing: {fields}"
+
+    - code: BINDING_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Binding for task {task_id} not found"
+
+    - code: BINDING_REQUIRES_MANUAL
+      http_status: 403
+      recoverable: true
+      message: "Binding requires manual confirmation"
+
+    - code: VERIFICATION_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Verification for task {task_id} not found"
+
+    - code: MONITOR_SESSION_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Monitoring session for task {task_id} not found"
+
+    - code: RISK_EVENT_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Risk event {event_id} not found"
+
+    - code: DISPOSITION_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Disposition task {id} not found"
+
+    - code: DISPOSITION_HUMAN_CONFIRM_REQUIRED
+      http_status: 403
+      recoverable: true
+      message: "This action requires human confirmation"
+
+    - code: CLOSURE_NOT_COMPLETE
+      http_status: 422
+      recoverable: true
+      message: "Closure completeness check failed: {blocked_by}"
+
+    - code: CLOSURE_HUMAN_CONFIRM_REQUIRED
+      http_status: 403
+      recoverable: true
+      message: "Closing this task requires human confirmation"
+
+    - code: ARCHIVE_NOT_FOUND
+      http_status: 404
+      recoverable: false
+      message: "Archive for task {task_id} not found"
+
+    - code: UNAUTHORIZED
+      http_status: 401
+      recoverable: false
+      message: "Unauthorized"
+
+    - code: FORBIDDEN
+      http_status: 403
+      recoverable: false
+      message: "Forbidden"
+
+# ============================================================
+# Dry-run 行为定义
+# ============================================================
+
+dry_run:
+  permit_submit:
+    behavior: validate_input_only
+    returns: { validation_result: object, would_submit: true }
+
+  disposition_confirm:
+    behavior: preview_action_only
+    returns: { action: string, target: object, would_execute: true }
+
+  closure_close:
+    behavior: preview_checklist_only
+    returns: { completeness: object, would_close: boolean }

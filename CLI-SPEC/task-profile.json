@@ -1,0 +1,177 @@
+{
+  "schema_version": "1.0",
+  "cli_name": "edge-monitor",
+  "description": "工业互联网边缘智能作业监测系统 CLI",
+
+  "subcommands": {
+    "permit": {
+      "stage": "P1",
+      "description": "作业预约、JSA分析与作业票",
+      "operations": ["submit", "analyze-jsa", "generate-draft", "check"],
+      "max_concurrent": 10,
+      "timeout_seconds": 60
+    },
+    "task": {
+      "stage": "P2",
+      "description": "作业任务获取与实例化",
+      "operations": ["list", "get", "subscribe", "instance-create"],
+      "max_concurrent": 20,
+      "timeout_seconds": 30
+    },
+    "context": {
+      "stage": "P3",
+      "description": "作业上下文理解与标准化",
+      "operations": ["build", "validate", "history"],
+      "max_concurrent": 15,
+      "timeout_seconds": 45
+    },
+    "binding": {
+      "stage": "P4",
+      "description": "监测资源绑定与数据关联",
+      "operations": ["match", "status", "confirm", "request-manual"],
+      "max_concurrent": 10,
+      "timeout_seconds": 90
+    },
+    "verify": {
+      "stage": "P5",
+      "description": "作业前条件核验",
+      "operations": ["checklist", "execute", "recommendation"],
+      "max_concurrent": 10,
+      "timeout_seconds": 120
+    },
+    "monitor": {
+      "stage": "P6",
+      "description": "作业过程动态监测",
+      "operations": ["start", "stop", "status", "events"],
+      "max_concurrent": 50,
+      "timeout_seconds": 3600
+    },
+    "risk": {
+      "stage": "P7",
+      "description": "风险研判与分级",
+      "operations": ["analyze", "grade", "cases", "list"],
+      "max_concurrent": 20,
+      "timeout_seconds": 60
+    },
+    "disposition": {
+      "stage": "P8",
+      "description": "人机协同处置",
+      "operations": ["create", "confirm", "status", "list"],
+      "max_concurrent": 30,
+      "timeout_seconds": 30
+    },
+    "closure": {
+      "stage": "P9",
+      "description": "闭环跟踪与报告",
+      "operations": ["status", "verify", "report", "close"],
+      "max_concurrent": 10,
+      "timeout_seconds": 120
+    },
+    "archive": {
+      "stage": "P10",
+      "description": "归档与复盘",
+      "operations": ["task", "cases", "performance", "suggestions"],
+      "max_concurrent": 5,
+      "timeout_seconds": 300
+    }
+  },
+
+  "global_thresholds": {
+    "max_retries": 3,
+    "retry_delay_ms": 1000,
+    "default_timeout_seconds": 30,
+    "max_concurrent_requests": 100,
+    "output_max_size_mb": 10
+  },
+
+  "risk_levels": {
+    "LOW": {
+      "color": "green",
+      "push_strategy": "message",
+      "response_time_hours": 24
+    },
+    "MEDIUM": {
+      "color": "yellow",
+      "push_strategy": "sms+message",
+      "response_time_hours": 4
+    },
+    "HIGH": {
+      "color": "orange",
+      "push_strategy": "phone+sms+message",
+      "response_time_hours": 1,
+      "requires_human_confirm": true
+    },
+    "CRITICAL": {
+      "color": "red",
+      "push_strategy": "phone_direct",
+      "response_time_hours": 0,
+      "requires_human_confirm": true
+    }
+  },
+
+  "verification_results": {
+    "PASS": "符合",
+    "PENDING": "待确认",
+    "FAIL": "不符合",
+    "N/A": "不适用"
+  },
+
+  "task_status": {
+    "pending": "待执行",
+    "running": "执行中",
+    "closed": "已关闭"
+  },
+
+  "context_completeness": {
+    "required_fields": [
+      "work_type",
+      "region",
+      "equipment",
+      "medium",
+      "personnel",
+      "qualifications",
+      "risks",
+      "measures",
+      "time_range",
+      "related_tasks",
+      "data_sources"
+    ],
+    "min_completeness_percent": 80
+  },
+
+  "closure_checks": [
+    "disposition_records_complete",
+    "evidence_materials_complete",
+    "review_signatures_valid",
+    "timeline_continuous"
+  ],
+
+  "case_types": {
+    "misdetection": "检测模型误报",
+    "missed": "人工发现漏报",
+    "rule_conflict": "规则冲突"
+  },
+
+  "智能化程度分级": {
+    "L1": {
+      "description": "人工操作，系统记录",
+      "applicable_scenarios": ["特殊作业"]
+    },
+    "L2": {
+      "description": "系统辅助，人工决策",
+      "applicable_scenarios": ["高风险作业"]
+    },
+    "L3": {
+      "description": "系统推荐，人工确认",
+      "applicable_scenarios": ["常规作业"]
+    },
+    "L4": {
+      "description": "自动执行，事后报告",
+      "applicable_scenarios": ["低风险作业"]
+    },
+    "L5": {
+      "description": "全自动，异常才干预",
+      "applicable_scenarios": ["标准化作业"]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "stage": "P4",
+  "name": "摄像与数据关联",
+  "description": "匹配固定/移动摄像、传感器、定位和报警数据",
+  "tools": ["binding_match", "binding_status", "binding_confirm", "binding_request_manual"],
+  "human_confirm": "资源绑定确认",
+  "input": {
+    "task_id": "TASK-WELD-01-20260804-001"
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "binding match",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "bindings": {
+        "fixed_cameras": [
+          {"camera_id": "CAM-001", "coverage": "95%", "location": "R-101入口"},
+          {"camera_id": "CAM-002", "coverage": "88%", "location": "R-101中部"}
+        ],
+        "mobile_devices": [],
+        "sensors": [
+          {"sensor_id": "GAS-001", "type": "combustible_gas", "location": "R-101内部"},
+          {"sensor_id": "TEMP-001", "type": "temperature", "location": "R-101内部"}
+        ],
+        "personnel_locations": [
+          {"badge_id": "P-101", "zone": "R-101"}
+        ]
+      },
+      "unmatched_resources": [],
+      "status": "auto_matched",
+      "requires_manual_confirm": true
+    }
+  },
+  "confirm_output": {
+    "schema_version": "1.0",
+    "command": "binding confirm",
+    "result": {
+      "task_id": "TASK-WELD-01-20260804-001",
+      "confirmed": true,
+      "confirmed_by": "operator",
+      "confirmed_at": "2026-08-04T09:05:00Z"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "stage": "P8",
+  "name": "人机协同处置",
+  "description": "按角色与权限推送责任人，形成整改、暂停、复核或升级建议",
+  "tools": ["disposition_create", "disposition_confirm", "disposition_status", "disposition_list"],
+  "human_confirm": "下发、暂停、恢复",
+  "input": {
+    "risk_event_id": "RE-20260804001"
+  },
+  "output": {
+    "schema_version": "1.0",
+    "command": "disposition create",
+    "result": {
+      "disposition_task_id": "DT-20260804001",
+      "risk_event_id": "RE-20260804001",
+      "assignee": "属地责任人-张三",
+      "action_type": "rectify",
+      "status": "pending",
+      "due_at": "2026-08-04T11:23:15Z",
+      "push_strategy": "phone+sms+message"
+    }
+  },
+  "confirm_output": {
+    "schema_version": "1.0",
+    "command": "disposition confirm",
+    "result": {
+      "disposition_task_id": "DT-20260804001",
+      "action": "approve",
+      "confirmed_by": "operator",
+      "confirmed_at": "2026-08-04T10:30:00Z",
+      "notes": null
+    }
+  },
+  "push_strategy_table": {
+    "LOW":      {"push": "消息",          "time_limit": "24h"},
+    "MEDIUM":   {"push": "短信+消息",      "time_limit": "4h"},
+    "HIGH":     {"push": "电话+短信+消息","time_limit": "1h"},
+    "CRITICAL": {"push": "电话直达",       "time_limit": "实时"}
+  }
+}
