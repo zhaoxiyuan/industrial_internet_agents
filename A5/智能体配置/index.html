@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A5 智能体 · 模型配置中心</title>
+<style>
+  :root {
+    --bg:         #0f1115;
+    --panel:      #161a22;
+    --panel-2:    #1d222b;
+    --border:     #2a303a;
+    --text:       #e6e8eb;
+    --text-mute:  #8b95a3;
+    --accent:     #5b8def;       /* LLM 主色 */
+    --accent-vl:  #b07ce6;       /* VL 主色 */
+    --ok:         #4ade80;
+    --err:        #f87171;
+    --warn:       #facc15;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); margin: 0; height: 100%; }
+  body {
+    font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+
+  /* ------- Layout ------- */
+  .app { max-width: 1180px; margin: 0 auto; padding: 24px 28px 80px; }
+  h1   { font-size: 22px; margin: 0 0 4px; font-weight: 600; letter-spacing: 0.5px; }
+  .sub { color: var(--text-mute); font-size: 13px; margin-bottom: 28px; }
+  h2   { font-size: 15px; margin: 0 0 12px; font-weight: 500; color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; }
+
+  /* ------- Active cards ------- */
+  .active-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 26px;
+  }
+  .active-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+    position: relative; overflow: hidden;
+  }
+  .active-card.llm { border-top: 3px solid var(--accent); }
+  .active-card.vl  { border-top: 3px solid var(--accent-vl); }
+  .active-card .tag {
+    display: inline-block; font-size: 11px; padding: 2px 8px;
+    border-radius: 10px; margin-right: 6px;
+  }
+  .llm .tag { background: rgba(91,141,239,0.15); color: var(--accent); }
+  .vl  .tag { background: rgba(176,124,230,0.15); color: var(--accent-vl); }
+  .active-card .name { font-size: 14px; font-weight: 500; margin: 4px 0 8px; }
+  .active-card .meta { font-size: 12px; color: var(--text-mute); word-break: break-all; }
+  .active-card .meta b { color: var(--text); font-weight: 500; }
+
+  /* ------- Tabs ------- */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+  .tab {
+    padding: 10px 18px; cursor: pointer; color: var(--text-mute);
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+  .tab.active.llm { color: var(--accent); border-color: var(--accent); }
+  .tab.active.vl  { color: var(--accent-vl); border-color: var(--accent-vl); }
+  .tab:hover { color: var(--text); }
+
+  /* ------- Form ------- */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 22px; margin-bottom: 26px;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 12px; color: var(--text-mute); margin-bottom: 5px; }
+  label .req { color: var(--err); margin-left: 2px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 13px;
+    font-family: inherit;
+    transition: border 0.15s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .tab-pane.vl input:focus, .tab-pane.vl select:focus { border-color: var(--accent-vl); }
+
+  .row-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .hint { font-size: 11px; color: var(--text-mute); }
+  .hint-link {
+    color: var(--accent); text-decoration: none; cursor: pointer;
+    transition: color 0.15s; white-space: nowrap;
+  }
+  .hint-link:hover { color: #7dadff; text-decoration: underline; }
+
+  /* ------- Buttons ------- */
+  button {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 14px; cursor: pointer; font-size: 13px;
+    transition: all 0.15s ease;
+    font-family: inherit;
+  }
+  button:hover { border-color: #3c4452; background: #232934; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #4d7cdc; border-color: #4d7cdc; }
+  button.vl { background: var(--accent-vl); color: #fff; border-color: var(--accent-vl); }
+  button.vl:hover { background: #9f6cd4; border-color: #9f6cd4; }
+  button.danger { color: var(--err); }
+  button.danger:hover { border-color: var(--err); }
+
+  /* ------- Test result ------- */
+  .result {
+    margin-top: 12px; padding: 10px 12px;
+    border-radius: 6px; font-size: 12px; line-height: 1.6;
+    border: 1px solid var(--border); background: var(--panel-2);
+    display: none;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .result.ok   { border-color: var(--ok);   color: var(--ok); }
+  .result.err  { border-color: var(--err);  color: var(--err); }
+  .result.warn { border-color: var(--warn); color: var(--warn); }
+
+  /* ------- Save controls ------- */
+  .save-bar {
+    display: flex; gap: 10px; align-items: center;
+    padding: 14px 16px; background: var(--panel-2);
+    border-radius: 8px; margin-top: 18px;
+  }
+  .save-bar input { flex: 0 0 240px; }
+
+  /* ------- Saved configs grid ------- */
+  .configs {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px; margin-top: 14px;
+  }
+  .cfg-card {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; transition: all 0.15s;
+    cursor: pointer; position: relative;
+  }
+  .cfg-card:hover { border-color: #4c566b; transform: translateY(-1px); }
+  .cfg-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .cfg-card.active.vl { border-color: var(--accent-vl); box-shadow: 0 0 0 1px var(--accent-vl); }
+  .cfg-card.active.llm { border-color: var(--accent); }
+  .cfg-card .cfg-name {
+    font-size: 14px; font-weight: 600; margin-bottom: 4px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .cfg-card .cfg-name .badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 8px;
+    background: var(--accent); color: #fff;
+  }
+  .cfg-card .cfg-meta { font-size: 11px; color: var(--text-mute); }
+  .cfg-card .cfg-llm, .cfg-card .cfg-vl {
+    font-size: 12px; margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--border);
+  }
+  .cfg-card .cfg-vl { border-top-color: rgba(176,124,230,0.3); }
+  .cfg-card .cfg-vl b { color: var(--accent-vl); }
+  .cfg-card .cfg-llm b { color: var(--accent); }
+  .cfg-card .cfg-row b { font-weight: 500; color: var(--text); }
+  .cfg-card .cfg-actions {
+    display: flex; gap: 6px; margin-top: 12px;
+  }
+  .cfg-card .cfg-actions button { padding: 5px 10px; font-size: 12px; }
+
+  .empty-tip { color: var(--text-mute); font-size: 12px; padding: 20px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; }
+
+  /* ------- Protocol tag ------- */
+  .proto-tag {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 8px; background: rgba(91,141,239,0.18); color: var(--accent);
+    margin-left: 6px; font-weight: 500; vertical-align: middle;
+  }
+  .proto-tag.vl-tag { background: rgba(176,124,230,0.18); color: var(--accent-vl); }
+
+  /* ------- VL image picker ------- */
+  .img-preview {
+    margin-top: 8px; max-width: 180px; max-height: 120px;
+    border-radius: 6px; border: 1px solid var(--border);
+    display: none;
+  }
+  .img-preview.has { display: block; }
+
+  /* ------- Modal ------- */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 9999;
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 22px 24px; min-width: 360px;
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 15px; }
+  .modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="file-warn" style="display:none; background:#4a2020; border:1px solid var(--err); border-radius:8px; padding:14px 18px; margin-bottom:18px; color:var(--err); font-size:13px; line-height:1.7;">
+    ⚠️ <b>你正在以 <code>file://</code> 方式打开本页面,后端 API 不可用。</b><br>
+    请改为在浏览器地址栏输入: <code style="background:var(--panel-2);padding:3px 8px;border-radius:4px;color:var(--ok);">http://127.0.0.1:5000</code><br>
+    前提是已执行 <code>python 智能体配置/app.py</code> 启动后端。
+  </div>
+  <h1>🛠 A5 智能体 · 模型配置中心</h1>
+  <p class="sub">配置两类模型(主推理 LLM / 视觉模型 VL),支持命名保存与一键切换。</p>
+
+  <!-- ============ Active now ============ -->
+  <h2>当前激活</h2>
+  <div class="active-row">
+    <div class="active-card llm">
+      <span class="tag">LLM</span>
+      <div class="name" id="active-llm-name">— 未设置 —</div>
+      <div class="meta" id="active-llm-meta">请在下方填写并测试</div>
+    </div>
+    <div class="active-card vl">
+      <span class="tag">VL</span>
+      <div class="name" id="active-vl-name">— 未设置 —</div>
+      <div class="meta" id="active-vl-meta">请在下方填写并测试</div>
+    </div>
+  </div>
+
+  <!-- ============ Tabs ============ -->
+  <h2>编辑模型</h2>
+  <div class="tabs">
+    <div class="tab llm active" data-tab="llm">主推理 LLM</div>
+    <div class="tab vl"  data-tab="vl">视觉模型 VL</div>
+  </div>
+
+  <!-- ============ LLM form ============ -->
+  <div class="panel tab-pane" id="pane-llm">
+    <div class="grid">
+      <div class="full">
+        <label>协议<span class="req">*</span></label>
+        <select id="llm-protocol">
+          <option value="openai">OpenAI / OpenAI 兼容 (含 DashScope / DeepSeek / GLM / Kimi / vLLM / OneAPI ...)</option>
+          <option value="anthropic">Anthropic Claude (Messages API)</option>
+        </select>
+      </div>
+      <div class="full">
+        <label>Base URL (网址)<span class="req">*</span></label>
+        <input type="text" id="llm-base_url" placeholder="自行填写,下方速查可用" />
+        <div class="hint" id="llm-hints" style="margin-top:4px; line-height:1.8;"></div>
+      </div>
+      <div class="full">
+        <label>API Key<span class="req">*</span></label>
+        <input type="password" id="llm-api_key" placeholder="sk-..." />
+      </div>
+      <div class="full">
+        <label>模型名 (model)<span class="req">*</span></label>
+        <input type="text" id="llm-model" placeholder="qwen-plus / gpt-4o / deepseek-chat / abab6.5s-chat / claude-3-5-sonnet-20241022 ..." />
+      </div>
+      <div>
+        <label>Temperature (可选)</label>
+        <input type="number" step="0.1" min="0" max="2" id="llm-temperature" placeholder="0.2" />
+      </div>
+      <div>
+        <label>Max Tokens (可选)</label>
+        <input type="number" step="1" min="1" id="llm-max_tokens" placeholder="2048" />
+      </div>
+    </div>
+    <div class="row-actions">
+      <button class="primary" id="btn-test-llm">🔌 测试连接</button>
+      <span class="hint">测试通过后即可保存。OpenAI 协议走 <code>/chat/completions</code> · Anthropic 协议走 <code>/v1/messages</code></span>
+    </div>
+    <div class="result" id="result-llm"></div>
+  </div>
+
+  <!-- ============ VL form ============ -->
+  <div class="panel tab-pane" id="pane-vl" style="display:none;">
+    <div class="grid">
+      <div class="full">
+        <label>协议<span class="req">*</span></label>
+        <select id="vl-protocol">
+          <option value="openai">OpenAI / OpenAI 兼容 (gpt-4o-vision / qwen-vl-max / doubao-vl ...)</option>
+          <option value="anthropic">Anthropic Claude (Messages API)</option>
+        </select>
+      </div>
+      <div class="full">
+        <label>Base URL<span class="req">*</span></label>
+        <input type="text" id="vl-base_url" placeholder="自行填写,下方速查可用" />
+        <div class="hint" id="vl-hints" style="margin-top:4px; line-height:1.8;"></div>
+      </div>
+      <div class="full">
+        <label>API Key<span class="req">*</span></label>
+        <input type="password" id="vl-api_key" placeholder="sk-..." />
+      </div>
+      <div class="full">
+        <label>模型名<span class="req">*</span></label>
+        <input type="text" id="vl-model" placeholder="qwen-vl-max / gpt-4o / claude-3-5-sonnet-20241022 ..." />
+      </div>
+      <div class="full">
+        <label>测试图片 (jpg/png, &lt; 4MB)</label>
+        <input type="file" id="vl-image" accept="image/*" />
+        <img id="vl-preview" class="img-preview" alt="预览" />
+      </div>
+      <div class="full">
+        <label>测试提示词</label>
+        <input type="text" id="vl-prompt" value="请用中文用一句话描述这张图片。" />
+      </div>
+    </div>
+    <div class="row-actions">
+      <button class="vl" id="btn-test-vl">🖼 测试发图</button>
+      <span class="hint">Anthropic 模式会走 <code>/v1/messages</code> + base64 图像块</span>
+    </div>
+    <div class="result" id="result-vl"></div>
+  </div>
+
+  <!-- ============ Save bar ============ -->
+  <div class="save-bar">
+    <input type="text" id="save-name" placeholder="为这组配置起个名字(必填)" />
+    <button class="primary" id="btn-save">💾 保存并激活</button>
+    <span class="hint" id="save-hint">提示: 保存后将立即激活,并写入 <code>.env</code></span>
+  </div>
+
+  <!-- ============ Saved configs ============ -->
+  <h2 style="margin-top:30px;">已保存的配置(点击切换)</h2>
+  <div class="configs" id="configs-list">
+    <div class="empty-tip" id="configs-empty">还没有保存的配置。先填好表单 → 测试通过 → 保存为命名配置。</div>
+  </div>
+</div>
+
+<!-- ============ Modal ============ -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <h3 id="modal-title">提示</h3>
+    <div id="modal-content" style="font-size:13px;"></div>
+    <div class="actions">
+      <button id="modal-cancel">取消</button>
+      <button class="primary" id="modal-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+ *  A5 配置中心前端
+ * ============================================================ */
+
+const API = "";
+
+// ---------- 安全 JSON 解析(防"body stream already read") ----------
+async function safeJson(resp) {
+  const text = await resp.text();
+  try { return JSON.parse(text); }
+  catch (e) {
+    throw new Error("服务端返回的不是合法 JSON (HTTP " + resp.status + ")\n原始内容前 300 字: " + text.substring(0, 300));
+  }
+}
+
+// 当前 LLM / VL 测试是否通过
+const tested = { llm: false, vl: false };
+let currentTab = "llm";
+
+// ---------- Modal ----------
+function confirmModal(title, content) {
+  return new Promise(resolve => {
+    document.getElementById("modal-title").textContent = title;
+    document.getElementById("modal-content").innerHTML = content;
+    document.getElementById("modal-bg").classList.add("show");
+    document.getElementById("modal-cancel").onclick = () => {
+      document.getElementById("modal-bg").classList.remove("show");
+      resolve(false);
+    };
+    document.getElementById("modal-ok").onclick = () => {
+      document.getElementById("modal-bg").classList.remove("show");
+      resolve(true);
+    };
+  });
+}
+function infoModal(title, content) {
+  return confirmModal(title, content).catch(() => {});
+}
+document.getElementById("modal-cancel").onclick = () => document.getElementById("modal-bg").classList.remove("show");
+
+// ---------- Result ----------
+function showResult(type, target, msg) {
+  const el = document.getElementById("result-" + target);
+  el.className = "result " + type;
+  el.style.display = "block";
+  el.textContent = msg;
+}
+function clearResult(target) {
+  const el = document.getElementById("result-" + target);
+  el.className = "result";
+  el.style.display = "none";
+  el.textContent = "";
+}
+
+// ---------- Tabs ----------
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    currentTab = tab.dataset.tab;
+    document.getElementById("pane-llm").style.display = currentTab === "llm" ? "" : "none";
+    document.getElementById("pane-vl").style.display  = currentTab === "vl"  ? "" : "none";
+  });
+});
+
+// ---------- Protocol preset URL autofill ----------
+const PROTOCOL_PRESETS = {
+  openai:    "",
+  anthropic: "https://api.anthropic.com",
+};
+async function loadProtocolPresets() {
+  try {
+    const r = await fetch(API + "/api/protocol-presets");
+    Object.assign(PROTOCOL_PRESETS, await safeJson(r));
+  } catch (e) { console.warn("加载协议预设失败", e); }
+}
+["llm", "vl"].forEach(t => {
+  const sel = document.getElementById(t + "-protocol");
+  sel.addEventListener("change", () => {
+    const url = PROTOCOL_PRESETS[sel.value];
+    if (url !== undefined) document.getElementById(t + "-base_url").value = url;
+    renderHints(t);  // 协议变了,刷新速查链接
+  });
+});
+
+// ---------- Provider hints(速查,按协议变化) ----------
+const HINTS_CACHE = {};
+async function loadHints(protocol) {
+  if (HINTS_CACHE[protocol]) return HINTS_CACHE[protocol];
+  try {
+    const r = await fetch(API + "/api/provider-hints?protocol=" + encodeURIComponent(protocol));
+    HINTS_CACHE[protocol] = await safeJson(r);
+  } catch (e) {
+    console.warn("加载厂商速查失败", e);
+    HINTS_CACHE[protocol] = {};
+  }
+  return HINTS_CACHE[protocol];
+}
+async function renderHints(which) {
+  const el = document.getElementById(which + "-hints");
+  if (!el) return;
+  const proto = document.getElementById(which + "-protocol").value || "openai";
+  const hints = await loadHints(proto);
+  let html = '<span style="color:var(--text-mute);">常用: </span>';
+  const entries = Object.entries(hints);
+  if (entries.length === 0) {
+    html += '<span style="color:var(--text-mute);">(无预设,自行填写)</span>';
+  }
+  for (const [name, url] of entries) {
+    if (url) {
+      html += `<a href="#" class="hint-link" data-url="${escapeHtml(url)}" data-target="${which}-base_url">${escapeHtml(name)}</a> `;
+    } else {
+      html += `<span style="color:var(--text-mute);">${escapeHtml(name)}</span> `;
+    }
+  }
+  el.innerHTML = html;
+  el.querySelectorAll("a.hint-link").forEach(a => {
+    a.addEventListener("click", e => {
+      e.preventDefault();
+      const target = document.getElementById(a.dataset.target);
+      if (target) { target.value = a.dataset.url; target.focus(); }
+    });
+  });
+}
+
+// ---------- Collect form data ----------
+const FORM_FIELDS = {
+  llm: ["protocol", "base_url", "api_key", "model", "temperature", "max_tokens"],
+  vl:  ["protocol", "base_url", "api_key", "model"],
+};
+function collectForm(which) {
+  const out = {};
+  for (const f of FORM_FIELDS[which]) {
+    const el = document.getElementById(which + "-" + f);
+    if (el) out[f] = (el.value || "").trim();
+  }
+  return out;
+}
+function fillForm(which, data) {
+  if (!data) return;
+  for (const f of FORM_FIELDS[which]) {
+    const el = document.getElementById(which + "-" + f);
+    if (el && data[f] !== undefined && data[f] !== null && data[f] !== "") el.value = data[f];
+  }
+}
+
+// ---------- Test LLM ----------
+document.getElementById("btn-test-llm").addEventListener("click", async () => {
+  const f = collectForm("llm");
+  if (!f.base_url || !f.api_key || !f.model) {
+    showResult("err", "llm", "❌ Base URL、API Key、模型名 三项必填");
+    tested.llm = false;
+    return;
+  }
+  clearResult("llm");
+  const btn = document.getElementById("btn-test-llm");
+  btn.disabled = true; btn.textContent = "测试中…";
+  try {
+    const r = await fetch(API + "/api/test/llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ protocol: f.protocol, base_url: f.base_url, api_key: f.api_key, model: f.model }),
+    });
+    let data;
+    try { data = await safeJson(r); }
+    catch (parseErr) {
+      showResult("err", "llm", "❌ " + parseErr.message);
+      tested.llm = false;
+      btn.disabled = false; btn.textContent = "🔌 测试连接";
+      return;
+    }
+    if (data.ok) {
+      tested.llm = true;
+      const proto = (data.protocol || f.protocol || "openai").toUpperCase();
+      showResult("ok", "llm", `✅ 连接成功! (协议 ${proto})\n模型回复: ` + (data.reply || "(空)"));
+    } else {
+      tested.llm = false;
+      showResult("err", "llm", "❌ 失败\nHTTP " + (data.status || "?") + "\n" + (data.error?.message || data.error?.raw_text || (typeof data.error === "string" ? data.error : JSON.stringify(data.error))));
+    }
+  } catch (e) {
+    tested.llm = false;
+    showResult("err", "llm", "❌ 网络错误: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "🔌 测试连接";
+  }
+});
+
+// ---------- Test VL ----------
+document.getElementById("vl-image").addEventListener("change", e => {
+  const file = e.target.files[0];
+  const preview = document.getElementById("vl-preview");
+  if (!file) { preview.classList.remove("has"); return; }
+  const fr = new FileReader();
+  fr.onload = ev => { preview.src = ev.target.result; preview.classList.add("has"); };
+  fr.readAsDataURL(file);
+});
+
+document.getElementById("btn-test-vl").addEventListener("click", async () => {
+  const f = collectForm("vl");
+  if (!f.base_url || !f.api_key || !f.model) {
+    showResult("err", "vl", "❌ Base URL、API Key、模型名 三项必填");
+    tested.vl = false;
+    return;
+  }
+  const file = document.getElementById("vl-image").files[0];
+  if (!file) {
+    showResult("err", "vl", "❌ 请先选择一张测试图片");
+    tested.vl = false;
+    return;
+  }
+  clearResult("vl");
+  const btn = document.getElementById("btn-test-vl");
+  btn.disabled = true; btn.textContent = "测试发图中…";
+  try {
+    const fd = new FormData();
+    fd.append("protocol", f.protocol || "openai");
+    fd.append("base_url", f.base_url);
+    fd.append("api_key", f.api_key);
+    fd.append("model", f.model);
+    fd.append("prompt", document.getElementById("vl-prompt").value || "");
+    fd.append("file", file);
+    const r = await fetch(API + "/api/test/vl", { method: "POST", body: fd });
+    let data;
+    try { data = await safeJson(r); }
+    catch (parseErr) {
+      showResult("err", "vl", "❌ " + parseErr.message);
+      tested.vl = false;
+      btn.disabled = false; btn.textContent = "🖼 测试发图";
+      return;
+    }
+    if (data.ok) {
+      tested.vl = true;
+      const proto = (data.protocol || f.protocol || "openai").toUpperCase();
+      showResult("ok", "vl", `✅ 发图成功! (协议 ${proto})\n模型回复: ` + (data.reply || "(空)"));
+    } else {
+      tested.vl = false;
+      showResult("err", "vl", "❌ 失败\nHTTP " + (data.status || "?") + "\n" + (data.error?.message || data.error?.raw_text || (typeof data.error === "string" ? data.error : JSON.stringify(data.error))));
+    }
+  } catch (e) {
+    tested.vl = false;
+    showResult("err", "vl", "❌ 网络错误: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "🖼 测试发图";
+  }
+});
+
+// ---------- Save ----------
+document.getElementById("btn-save").addEventListener("click", async () => {
+  const name = (document.getElementById("save-name").value || "").trim();
+  if (!name) { infoModal("请输入名称", "为这组配置起个名字(用于在下方卡片中找到它)"); return; }
+  if (!tested.llm) { infoModal("LLM 未测试通过", "请先点击『测试连接』并看到 ✅ 后再保存。"); return; }
+  if (!tested.vl)  { infoModal("VL 未测试通过", "请先在 VL 选项卡上传图片并测试通过。"); return; }
+
+  const llm = collectForm("llm");
+  const vl  = collectForm("vl");
+  try {
+    const r = await fetch(API + "/api/configs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, llm, vl }),
+    });
+    const data = await safeJson(r);
+    if (data.ok) {
+      infoModal("✅ 保存并激活", `已保存: <b>${name}</b><br>.env 已更新,LangChain 配置立刻生效`);
+      await refreshAll();
+    } else {
+      infoModal("❌ 保存失败", data.error || JSON.stringify(data));
+    }
+  } catch (e) {
+    infoModal("❌ 网络错误", e.message);
+  }
+});
+
+// ---------- Refresh ----------
+async function refreshActive() {
+  const r = await fetch(API + "/api/active");
+  const data = await safeJson(r);
+
+  // active cards
+  const llmEl = document.getElementById("active-llm-name");
+  const llmMeta = document.getElementById("active-llm-meta");
+  const vlName = document.getElementById("active-vl-name");
+  const vlMeta = document.getElementById("active-vl-meta");
+
+  if (data.llm && data.llm.model) {
+    const proto = (data.llm.protocol || "openai").toUpperCase();
+    llmEl.innerHTML = `${escapeHtml(data.llm.model)} <span class="proto-tag">${escapeHtml(proto)}</span>`;
+    llmMeta.innerHTML = `<b>URL:</b> ${escapeHtml(data.llm.base_url || "?")} · <b>key:</b> ${data.llm.api_key ? maskKey(data.llm.api_key) : "?"}`;
+  } else {
+    llmEl.textContent = "— 未设置 —";
+    llmMeta.textContent = "请在下方填写并测试";
+  }
+  if (data.vl && data.vl.model) {
+    const proto = (data.vl.protocol || "openai").toUpperCase();
+    vlName.innerHTML = `${escapeHtml(data.vl.model)} <span class="proto-tag vl-tag">${escapeHtml(proto)}</span>`;
+    vlMeta.innerHTML = `<b>URL:</b> ${escapeHtml(data.vl.base_url || "?")} · <b>key:</b> ${data.vl.api_key ? maskKey(data.vl.api_key) : "?"}`;
+  } else {
+    vlName.textContent = "— 未设置 —";
+    vlMeta.textContent = "请在下方填写并测试";
+  }
+
+  // fill forms if empty
+  if (!document.getElementById("llm-base_url").value) fillForm("llm", data.llm);
+  if (!document.getElementById("vl-base_url").value)  fillForm("vl",  data.vl);
+
+  return data;
+}
+
+async function refreshConfigs() {
+  const r = await fetch(API + "/api/configs");
+  const data = await safeJson(r);
+  const list = document.getElementById("configs-list");
+  list.innerHTML = "";
+  const names = Object.keys(data.configs || {});
+
+  if (names.length === 0) {
+    list.innerHTML = '<div class="empty-tip">还没有保存的配置。填写表单 → 测试通过 → 保存。</div>';
+    return;
+  }
+  names.forEach(name => {
+    const cfg = data.configs[name];
+    const card = document.createElement("div");
+    card.className = "cfg-card" + (data.active === name ? " active" : "");
+
+    const llmProto = (cfg.llm?.protocol || "openai").toUpperCase();
+    const vlProto  = (cfg.vl?.protocol  || "openai").toUpperCase();
+    const llmLine = cfg.llm?.model ? `<span class="proto-tag">${escapeHtml(llmProto)}</span> <b>${escapeHtml(cfg.llm.model)}</b> @ ${escapeHtml(cfg.llm.base_url || "")}` : "(空)";
+    const vlLine  = cfg.vl?.model  ? `<span class="proto-tag vl-tag">${escapeHtml(vlProto)}</span> <b>${escapeHtml(cfg.vl.model)}</b> @ ${escapeHtml(cfg.vl.base_url || "")}` : "(空)";
+
+    card.innerHTML = `
+      <div class="cfg-name">${escapeHtml(name)}${data.active === name ? '<span class="badge">ACTIVE</span>' : ""}</div>
+      <div class="cfg-meta">保存于 ${escapeHtml(cfg.saved_at || "?")}</div>
+      <div class="cfg-llm cfg-row">LLM → ${llmLine}</div>
+      <div class="cfg-vl cfg-row">VL  → ${vlLine}</div>
+      <div class="cfg-actions">
+        <button class="primary activate" data-name="${escapeHtml(name)}">⚡ 切换</button>
+        <button class="del danger" data-name="${escapeHtml(name)}">🗑 删除</button>
+      </div>
+    `;
+    card.querySelector(".activate").addEventListener("click", e => {
+      e.stopPropagation();
+      activateConfig(name);
+    });
+    card.querySelector(".del").addEventListener("click", async e => {
+      e.stopPropagation();
+      const ok = await confirmModal("删除配置", `确认删除 <b>${escapeHtml(name)}</b> ?<br><span style="color:var(--text-mute);font-size:12px;">.env 不受影响,只是从已保存列表移除。</span>`);
+      if (!ok) return;
+      await fetch(API + "/api/configs/" + encodeURIComponent(name), { method: "DELETE" });
+      await refreshAll();
+    });
+    card.addEventListener("click", () => activateConfig(name));
+    list.appendChild(card);
+  });
+}
+
+async function activateConfig(name) {
+  const r = await fetch(API + "/api/configs/" + encodeURIComponent(name) + "/activate", { method: "POST" });
+  const data = await safeJson(r);
+  if (data.ok) {
+    infoModal("✅ 已切换", `当前激活: <b>${name}</b><br>LangChain 将在下次构建 Agent 时读取新 .env`);
+    // 清空表单测试状态,重新载入激活值
+    tested.llm = false; tested.vl = false;
+    clearResult("llm"); clearResult("vl");
+    document.getElementById("llm-base_url").value = "";
+    document.getElementById("vl-base_url").value  = "";
+    await refreshAll();
+  } else {
+    infoModal("❌ 切换失败", data.error || JSON.stringify(data));
+  }
+}
+
+async function refreshAll() {
+  await refreshActive();
+  await refreshConfigs();
+}
+
+// ---------- utils ----------
+function maskKey(k) {
+  if (!k) return "";
+  if (k.length <= 8) return "***";
+  return k.slice(0, 4) + "…" + k.slice(-4);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+// ---------- 防呆: file:// 方式打开时显示警告 ----------
+if (location.protocol === "file:") {
+  document.getElementById("file-warn").style.display = "block";
+}
+
+// ---------- boot ----------
+(async function boot() {
+  await loadProtocolPresets();
+  await loadHints("openai");
+  await loadHints("anthropic");
+  renderHints("llm");
+  renderHints("vl");
+  await refreshAll();
+})();
+</script>
+</body>
+</html>
