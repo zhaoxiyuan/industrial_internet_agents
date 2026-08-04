@@ -15,7 +15,7 @@ from typing import AsyncIterator, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from demo.mock_data import (
+from 场景剧本 import (
     SENSOR_CONFIG,
     SCENARIOS_SENSORS,
     get_sensor_reading_at,

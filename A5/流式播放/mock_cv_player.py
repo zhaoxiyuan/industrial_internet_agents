@@ -13,10 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List
 
-# 添加项目根目录到 sys.path,支持从 流式播放/ 子目录导入 demo.mock_data
+# 添加项目根目录到 sys.path,支持从 流式播放/ 子目录导入 场景剧本
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from demo.mock_data import (
+from 场景剧本 import (
     SCENARIOS_CV,
     get_person_events_at,
     SCENARIO_DURATION_SEC,

@@ -36,7 +36,7 @@ async def run_scenario_with_agent(
     from 流式播放.mock_cv_player import MockCVPlayer
     from 流式播放.mock_sensor_stream import MockSensorStream
     from 流式播放.mock_positioning_stream import MockPositioningStream
-    from demo.mock_data.mock_work_permit import WORK_PERMIT
+    from 场景剧本.mock_work_permit import WORK_PERMIT
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     collector = AsyncCollector(scenario, log_dir=log_dir)
