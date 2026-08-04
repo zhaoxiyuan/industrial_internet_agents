@@ -416,8 +416,10 @@ def main():
             outputs=[detail_display, workflow_state],
         )
 
-    demo.launch()
+    # demo.launch()
 
+    # 修改为监听全部网卡，局域网可访问
+    demo.launch(server_name="0.0.0.0", server_port=7860)
 
 if __name__ == "__main__":
     main()
