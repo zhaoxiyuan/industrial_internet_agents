@@ -34,3 +34,6 @@ rich>=15.0.0
 
 # Gradio Web 前端
 gradio>=4.0.0
+
+# CLI 框架
+click>=8.0.0
