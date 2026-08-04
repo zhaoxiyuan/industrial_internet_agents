@@ -37,17 +37,15 @@ class AsyncCollector:
     def __init__(
         self,
         scenario: str = "B",
-        speed: float = 1.0,
         log_dir: Optional[str] = None,
     ):
         self.scenario = scenario
-        self.speed = speed
         self.log_dir = Path(log_dir) if log_dir else None
 
-        # 内部创建 3 个流
-        self._cv = MockCVPlayer(scenario, speed)
-        self._sensor = MockSensorStream(scenario, speed)
-        self._pos = MockPositioningStream(scenario, speed)
+        # 内部创建 3 个流(实时 1:1,wall_time == scenario_time)
+        self._cv = MockCVPlayer(scenario)
+        self._sensor = MockSensorStream(scenario)
+        self._pos = MockPositioningStream(scenario)
 
         # ============ 原始日志(流直接输出,累加)============
         self._cv_raw: List[Dict] = []
@@ -58,6 +56,8 @@ class AsyncCollector:
         self._tasks: List[asyncio.Task] = []
         self._running = False
         self._timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._start_wall: Optional[datetime] = None  # 场景开始运行的现实时间
+        self._agent_now: Optional[str] = None        # agent 当前可观测的时间上限(防未来)
 
     # ============================================================
     # 生命周期
@@ -68,6 +68,7 @@ class AsyncCollector:
         if self._running:
             return
         self._running = True
+        self._start_wall = datetime.now()
         if self.log_dir:
             self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,9 +129,12 @@ class AsyncCollector:
             await asyncio.sleep(0.005)
 
         ts = self._timestamp
-        cv_sec = self.query_raw_logs(sec, sec + 1, "cv")
-        sensor_sec = self.query_raw_logs(sec, sec + 1, "sensor")
-        position_sec = self.query_raw_logs(sec, sec + 1, "position")
+        # 内部按 sec 查询(转 wall_time)
+        sec_wall = self._sec_to_wall(sec)
+        next_wall = self._sec_to_wall(sec + 1)
+        cv_sec = self.query_raw_logs(sec_wall, next_wall, "cv")
+        sensor_sec = self.query_raw_logs(sec_wall, next_wall, "sensor")
+        position_sec = self.query_raw_logs(sec_wall, next_wall, "position")
 
         self._write_file("cv",       cv_sec,       ts, sec)
         self._write_file("sensor",   sensor_sec,   ts, sec)
@@ -140,9 +144,9 @@ class AsyncCollector:
         self._write_file("snapshot", [snap], ts, sec)
 
     def _build_single_snapshot(self, sec: int) -> Dict:
-        cv_logs = self.query_raw_logs(sec, sec + 1, "cv")
-        sensor_logs = self.query_raw_logs(sec, sec + 1, "sensor")
-        pos_logs = self.query_raw_logs(sec, sec + 1, "position")
+        cv_logs = self.query_raw_logs(self._sec_to_wall(sec), self._sec_to_wall(sec+1), "cv")
+        sensor_logs = self.query_raw_logs(self._sec_to_wall(sec), self._sec_to_wall(sec+1), "sensor")
+        pos_logs = self.query_raw_logs(self._sec_to_wall(sec), self._sec_to_wall(sec+1), "position")
 
         sensor_summary = {}
         if sensor_logs:
@@ -171,7 +175,6 @@ class AsyncCollector:
 
         payload = {
             "scenario": self.scenario,
-            "speed":    self.speed,
             "type":     source_type,
             "created_at": timestamp,
             "second":   sec,
@@ -202,14 +205,57 @@ class AsyncCollector:
             return -1.0
         return self._extract_second(logs[-1].get("scenario_time", "0s"))
 
+    def set_agent_now(self, wall_time: str):
+        """
+        主循环调用:设置 agent 当前的"可观测时间"上限。
+        之后 agent 通过 query_raw_logs / get_snapshot 查询时,
+        若请求的 end_wall 或 wall_time > agent_now,会被拒绝。
+        """
+        self._agent_now = wall_time
+
+    def _wall_to_sec(self, wall_time_str: str) -> float:
+        """
+        现实世界时间(ISO) → 场景内秒数。
+        实时 1:1 映射:scenario_sec = wall_time - start_wall
+        """
+        if self._start_wall is None:
+            return -1.0
+        try:
+            wall = datetime.fromisoformat(wall_time_str)
+        except (ValueError, TypeError):
+            return -1.0
+        return (wall - self._start_wall).total_seconds()
+
+    def _sec_to_wall(self, sec: int) -> str:
+        """场景内秒数 → 现实世界时间(ISO)"""
+        if self._start_wall is None:
+            return ""
+        from datetime import timedelta
+        return (self._start_wall + timedelta(seconds=sec)).isoformat(timespec="milliseconds")
+
     def query_raw_logs(
         self,
-        start_sec: float,
-        end_sec: float,
+        start_wall: str,
+        end_wall: str,
         source_type: Optional[str] = None,
         person_id: Optional[str] = None,
     ) -> List[Dict]:
-        """按时间范围查询原始日志"""
+        """
+        按现实世界时间范围查询原始日志。
+        start_wall/end_wall 为 ISO 格式(如 "2026-08-04T14:30:00")。
+
+        防未来:若 set_agent_now() 已设置,end_wall 超过 agent_now
+        时返回错误(模拟 agent 处理延迟,不能看未来数据)。
+        """
+        # ★ 防未来
+        if self._agent_now and end_wall > self._agent_now:
+            return [{"error": f"end_wall({end_wall}) > agent_now({self._agent_now})"}]
+
+        start_sec = self._wall_to_sec(start_wall)
+        end_sec = self._wall_to_sec(end_wall)
+        if start_sec < 0 or end_sec < 0:
+            return []
+
         types = [source_type] if source_type else ["cv", "sensor", "position"]
         results = []
         for stype in types:
@@ -221,13 +267,36 @@ class AsyncCollector:
                     results.append(log)
         return results
 
-    def get_snapshot(self, second: int) -> Dict[str, Any]:
-        """获取第 N 秒的世界快照(供智能体决策)"""
+    def get_snapshot(self, wall_time: str) -> Dict[str, Any]:
+        """
+        根据现实世界时间获取对应秒的世界快照。
+        wall_time: ISO 格式,表示"这一秒结束的时刻"。
+        实际查询该秒 [wall_time-1s, wall_time) 的数据。
+
+        防未来:若 wall_time > agent_now,自动截断到 agent_now。
+        """
+        # ★ 防未来:截断到 agent_now
+        if self._agent_now and wall_time > self._agent_now:
+            wall_time = self._agent_now
+
+        sec = self._wall_to_sec(wall_time)
+        sec_int = max(0, min(29, int(sec)))
+        # 构造该秒对应的 wall_time 范围:[sec 开始, sec 结束)
+        if self._start_wall:
+            from datetime import timedelta
+            start_wall_dt = self._start_wall + timedelta(seconds=sec_int)
+            end_wall_dt = self._start_wall + timedelta(seconds=sec_int + 1)
+            start_wall = start_wall_dt.isoformat(timespec="milliseconds")
+            end_wall = end_wall_dt.isoformat(timespec="milliseconds")
+        else:
+            start_wall = end_wall = wall_time
+
         return {
-            "scenario_time": f"{second}.0s",
-            "cv_logs":       self.query_raw_logs(second, second + 1, "cv"),
-            "sensors":       self.query_raw_logs(second, second + 1, "sensor"),
-            "positions":     self.query_raw_logs(second, second + 1, "position"),
+            "wall_time":     wall_time,
+            "scenario_time": f"{sec_int}.0s",
+            "cv_logs":       self.query_raw_logs(start_wall, end_wall, "cv"),
+            "sensors":       self.query_raw_logs(start_wall, end_wall, "sensor"),
+            "positions":     self.query_raw_logs(start_wall, end_wall, "position"),
         }
 
 
@@ -237,35 +306,35 @@ class AsyncCollector:
 
 async def run_demo(
     scenario: str = "B",
-    speed: float = 1.0,
     log_dir: Optional[str] = None,
     print_summary: bool = True,
 ) -> AsyncCollector:
-    """前端一行调用: collector = await run_demo("B", 5.0, "logs/run_01")"""
+    """前端一行调用: collector = await run_demo("B", "logs/run_01")"""
     if log_dir is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_dir = f"logs/{scenario}_speed_{speed}_{ts}"
+        log_dir = f"logs/{scenario}_{ts}"
 
-    collector = AsyncCollector(scenario, speed, log_dir)
+    collector = AsyncCollector(scenario, log_dir)
 
     if print_summary:
-        print(f"[场景={scenario} 速度={speed}x 日志={log_dir}]")
+        print(f"[场景={scenario} 日志={log_dir}]")
 
     await collector.start()
 
-    # 主循环:30 秒,每秒落盘
+    # 主循环:30 秒实时,每秒落盘
     for sec in range(30):
-        await asyncio.sleep(1.0 / speed)
-        await collector.flush_second(sec)   # ← 每秒写入 4 个文件
+        await asyncio.sleep(1.0)
+        await collector.flush_second(sec)
 
         if print_summary:
-            snap = collector.get_snapshot(sec)
+            current_wall = collector._sec_to_wall(sec + 1)
+            snap = collector.get_snapshot(current_wall)
             cv_n = len(snap["cv_logs"])
             sensor_reading = snap["sensors"][0]["readings"]["gas_detector_03"] if snap["sensors"] else None
             gas_status = sensor_reading["status"] if sensor_reading else "N/A"
             pos_data = snap["positions"][0]["positions"] if snap["positions"] else {}
             in_zone = sum(1 for p in pos_data.values() if p.get("is_in_danger_zone"))
-            print(f"  [T={sec+1:2d}s] CV={cv_n:3d}条  气体={gas_status:7s}  危险区={in_zone}人")
+            print(f"  [T={sec+1:2d}s {current_wall[11:19]}] CV={cv_n:3d}条  气体={gas_status:7s}  危险区={in_zone}人")
 
     await asyncio.sleep(1.0)
     await collector.stop()

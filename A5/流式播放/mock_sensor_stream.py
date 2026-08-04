@@ -31,16 +31,14 @@ class MockSensorStream:
     每秒产出一个 dict,内含 3 个传感器(gas/temperature/flame)的当前读数。
     """
 
-    def __init__(self, scenario: str, speed: float = 1.0):
+    def __init__(self, scenario: str):
+        """现实时间 1 秒 = 场景 1 秒,不支持倍速"""
         if scenario not in SCENARIOS_SENSORS:
             raise ValueError(
                 f"未知场景: {scenario},可选: {sorted(SCENARIOS_SENSORS.keys())}"
             )
-        if speed <= 0:
-            raise ValueError(f"speed 必须 > 0,当前: {speed}")
 
         self.scenario = scenario
-        self.speed = speed
         self.sensor_ids = sorted(SCENARIOS_SENSORS[scenario].keys())
         self._total_seconds = int(SCENARIO_DURATION_SEC * SENSOR_HZ)   # 30
 
@@ -80,12 +78,7 @@ class MockSensorStream:
         scenario_start_wall = time.time()
 
         for second in range(self._total_seconds):
-            # 速度控制
-            target_wall_time = scenario_start_wall + second / self.speed
-            sleep_sec = target_wall_time - time.time()
-            if sleep_sec > 0:
-                await asyncio.sleep(sleep_sec)
-
+            await asyncio.sleep(1.0 / SENSOR_HZ)  # 实时 1 秒
             yield self._make_reading(second)
 
 
@@ -93,12 +86,12 @@ class MockSensorStream:
 # 流式打印(独立运行入口)
 # ============================================================
 
-async def stream_print(scenario: str, speed: float, max_readings: int = None):
-    stream = MockSensorStream(scenario, speed)
+async def stream_print(scenario: str, max_readings: int = None):
+    stream = MockSensorStream(scenario)
 
     print("=" * 78)
     print(f"  MockSensorStream 流式播放")
-    print(f"  场景: {scenario}  |  速度: {speed}x  |  传感器: {stream.sensor_ids}")
+    print(f"  场景: {scenario}  |  |  传感器: {stream.sensor_ids}")
     print(f"  总读数: {stream.total_readings}")
     print("=" * 78)
 
@@ -148,17 +141,14 @@ def main():
         choices=["A", "B", "C", "D", "E"],
         help="场景 ID(默认 C)",
     )
-    parser.add_argument(
-        "--speed", type=float, default=1.0,
-        help="播放速度倍率(默认 1.0=实时)",
-    )
+
     parser.add_argument(
         "--max-readings", type=int, default=None,
         help="最大读数(测试用,默认跑完全部 30 条)",
     )
     args = parser.parse_args()
 
-    asyncio.run(stream_print(args.scenario, args.speed, args.max_readings))
+    asyncio.run(stream_print(args.scenario, args.max_readings))
 
 
 if __name__ == "__main__":

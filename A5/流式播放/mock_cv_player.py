@@ -2,8 +2,8 @@
 MockCVPlayer - 把 CVEvent 时间表展开为 25 FPS 检测流
 
 用法:
-    python mock_cv_player.py --scenario B --speed 5.0
-    python mock_cv_player.py --scenario B --speed 5.0 --max-logs 75    # 只跑前 75 条
+    python mock_cv_player.py --scenario B
+    python mock_cv_player.py --scenario B --max-logs 75    # 只跑前 75 条
 """
 import asyncio
 import sys
@@ -39,21 +39,18 @@ class MockCVPlayer:
         "protective_suit":+0.02,   # 防护服:略高(特征明显)
     }
 
-    def __init__(self, scenario: str, speed: float = 1.0):
+    def __init__(self, scenario: str):
         """
         Args:
             scenario: 场景 ID,A/B/C/D/E
-            speed:   播放速度倍率。1.0=实时,5.0=5 倍速
+            注:现实时间 1 秒 = 场景 1 秒(实时,不支持倍速)
         """
         if scenario not in SCENARIOS_CV:
             raise ValueError(
                 f"未知场景: {scenario},可选: {sorted(SCENARIOS_CV.keys())}"
             )
-        if speed <= 0:
-            raise ValueError(f"speed 必须 > 0,当前: {speed}")
 
         self.scenario = scenario
-        self.speed = speed
         self.person_ids = sorted(SCENARIOS_CV[scenario].keys())
         self._total_frames = int(SCENARIO_DURATION_SEC * CV_FPS)   # 750
 
@@ -108,20 +105,14 @@ class MockCVPlayer:
 
     async def stream(self) -> AsyncIterator[Dict[str, Any]]:
         """
-        异步生成器:按 25 FPS 持续产出检测日志。
+        异步生成器:按 25 FPS 实时产出检测日志。
 
-        每帧按人员顺序依次产出(同一帧的 3 条日志连续 yield)。
+        现实时间 1 秒 = 场景 1 秒,每帧间隔 40ms(1/25)。
         """
-        scenario_start_wall = time.time()
-
         for frame_no in range(self._total_frames):
             scenario_time = frame_no / CV_FPS
-
-            # 速度控制:计算到这帧应该出现在现实时间的时刻
-            target_wall_time = scenario_start_wall + scenario_time / self.speed
-            sleep_sec = target_wall_time - time.time()
-            if sleep_sec > 0:
-                await asyncio.sleep(sleep_sec)
+            # 实时:每帧间隔 = 1/CV_FPS 秒
+            await asyncio.sleep(1.0 / CV_FPS)
 
             # 为每个在场人员生成一条日志
             for person_id in self.person_ids:
@@ -132,7 +123,7 @@ class MockCVPlayer:
 # 流式打印(独立运行入口)
 # ============================================================
 
-async def stream_print(scenario: str, speed: float, max_logs: int = None):
+async def stream_print(scenario: str, max_logs: int = None):
     """
     流式打印场景的 CV 检测日志。
 
@@ -141,12 +132,12 @@ async def stream_print(scenario: str, speed: float, max_logs: int = None):
         speed:    播放速度
         max_logs: 最大日志数(测试用,None 表示跑完全部)
     """
-    player = MockCVPlayer(scenario, speed)
+    player = MockCVPlayer(scenario)
     persons = player.person_ids
 
     print("=" * 78)
     print(f"  MockCVPlayer 流式播放")
-    print(f"  场景: {scenario}  |  速度: {speed}x  |  人员: {persons}")
+    print(f"  场景: {scenario}  |  人员: {persons}")
     print(f"  总帧数: {player.total_frames}  |  总日志: {player.total_logs}")
     print("=" * 78)
 
@@ -202,16 +193,12 @@ def main():
         help="场景 ID(默认 B)",
     )
     parser.add_argument(
-        "--speed", type=float, default=1.0,
-        help="播放速度倍率(默认 5x,1.0=实时)",
-    )
-    parser.add_argument(
         "--max-logs", type=int, default=None,
         help="最大日志数(测试用,默认跑完全部 750 条)",
     )
     args = parser.parse_args()
 
-    asyncio.run(stream_print(args.scenario, args.speed, args.max_logs))
+    asyncio.run(stream_print(args.scenario, args.max_logs))
 
 
 if __name__ == "__main__":
