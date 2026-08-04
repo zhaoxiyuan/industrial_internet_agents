@@ -198,13 +198,20 @@ def create_vl_llm(
         or os.getenv("A5_LLM_API_KEY")
         or _get_required("A5_VL_API_KEY")
     )
+    # VL 专属值优先,否则读 LLM 值兜底
+    _vl_temp = os.getenv("A5_VL_TEMPERATURE")
+    _vl_mtok = os.getenv("A5_VL_MAX_TOKENS")
     return _build_chat_model(
         protocol=protocol,
         model=model or os.getenv("A5_VL_MODEL", "qwen-vl-max"),
         api_key=api_key,
         base_url=os.getenv("A5_VL_BASE_URL") or None,
-        temperature=temperature,
-        max_tokens=max_tokens if max_tokens is not None else _get_int("A5_LLM_MAX_TOKENS", 2048),
+        temperature=temperature if temperature is not None else (
+            float(_vl_temp) if _vl_temp else _get_float("A5_LLM_TEMPERATURE", 0.1)
+        ),
+        max_tokens=(max_tokens if max_tokens is not None else (
+            int(_vl_mtok) if _vl_mtok else _get_int("A5_LLM_MAX_TOKENS", 2048)
+        )),
         timeout=timeout,
         extra=extra or None,
     )

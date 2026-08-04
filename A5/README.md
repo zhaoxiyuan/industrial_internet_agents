@@ -1,9 +1,10 @@
 # A5 作业过程监测智能体 — Demo 开发说明
 
-> **文档版本**:v0.2(Demo 导向)
-> **编制日期**:2026-08-03
+> **文档版本**:v1.0
+> **编制日期**:2026-08-04
 > **对应项目**:`广东石化作业场景闭环管理智能体工具链项目`
 > **对应章节**:5.2 "1+8" 业务智能体体系 → A5 作业过程监测智能体
+> **状态**:核心模块全部完成(demo/mock_data + 流式播放 + 主循环 + 智能体)
 
 ---
 
@@ -932,147 +933,156 @@ class A5DecisionEngine:
 
 ---
 
-## 五、Demo 程序结构
+## 五、实际程序结构(已实现)
 
 ```
-A5/
-├── README.md                      # 本文档
+A5/                                 # 项目根目录
+├── README.md                       # 本文档(总览)
 │
-├── demo/
-│   ├── main_demo.py               # Demo 启动入口
-│   ├── scenarios/                 # 预定义剧本
-│   │   ├── scenario_a_normal.py   # 正常作业
-│   │   ├── scenario_b_helmet.py   # 工人摘头盔
-│   │   ├── scenario_c_gas.py      # 可燃气体上升
-│   │   ├── scenario_d_supervisor.py  # 监护人离岗
-│   │   └── scenario_e_combo.py    # 多重违规
-│   ├── mock_data/                 # 模拟数据源(全部假数据)
-│   │   ├── mock_cv.py             # 模拟 CV 检测
-│   │   ├── mock_sensors.py        # 模拟传感器
-│   │   ├── mock_positioning.py    # 模拟定位
-│   │   ├── mock_vl.py             # 模拟 VL 模型
-│   │   └── mock_work_permit.py    # 模拟作业票
-│   └── visualization/             # 可视化(可选)
-│       └── timeline_plot.py       # 时间线可视化
+├── demo/                           # 模拟数据与场景
+│   └── mock_data/                  # 5 个场景的剧本数据(纯数据,不含工具)
+│       ├── types.py                # 数据类型:CVEvent/SensorSchedule/PositionSchedule
+│       ├── mock_cv.py              # 场景 A-E 的 CV 检测时间表
+│       ├── mock_sensors.py         # 场景 A-E 的传感器时间表
+│       ├── mock_positioning.py     # 场景 A-E 的人员轨迹
+│       ├── mock_vl.py              # VL 预定义响应(8 条响应)
+│       └── mock_work_permit.py     # 作业票(PTW-2026-0803-动火-007)
 │
-├── src/
-│   ├── agent/
-│   │   ├── __init__.py
-│   │   ├── state_manager.py       # 人员状态聚合
-│   │   ├── decision_engine.py     # 决策引擎
-│   │   └── evidence_fusion.py     # 多源融合
-│   ├── collector/
-│   │   ├── __init__.py
-│   │   └── async_collector.py     # 多源异步采集
-│   └── __init__.py
+├── 流式播放/                       # 模拟数据源 + 固定流程
+│   ├── README.md                   # 流式播放设计说明
+│   ├── mock_cv_player.py           # MockCVPlayer(25 FPS,去掉 speed 实时)
+│   ├── mock_sensor_stream.py       # MockSensorStream(1 Hz,去掉 speed 实时)
+│   ├── mock_positioning_stream.py  # MockPositioningStream(1 Hz,去掉 speed 实时)
+│   └── async_collector.py          # AsyncCollector(集中管理 3 流 + 落盘 + 防未来)
 │
-├── tests/
-│   ├── test_state_manager.py
-│   ├── test_decision_engine.py
-│   └── test_evidence_fusion.py
+├── 主循环/                         # 主循环入口
+│   ├── README.md                   # 主循环设计说明
+│   └── main_loop.py                # 批量运行 + A5 集成(--scenario ABCDE, --no-agent)
 │
-└── docs/
-    ├── architecture.md             # 详细架构说明
-    └── scenarios.md                # 场景剧本说明
+├── 智能体/                         # A5 决策者(独立模块)
+│   ├── README.md                   # 智能体设计说明
+│   ├── __init__.py
+│   ├── tools.py                    # 4 个 LangChain @tool 声明(查询/快照/表决/VL)
+│   ├── event_deduplicator.py       # 事件去重状态机(NO_ACTIVE/NEW_EPISODE/ACTIVE/COOLDOWN)
+│   └── a5_agent.py                 # A5Agent 主类(tick 方法,每 1 秒被主循环调)
+│
+└── .gitignore                      # 排除 __pycache__/ logs/
+```
 ```
 
 ---
 
-## 六、Demo 主程序
+## 六、使用方式(已实现)
 
-```python
-# A5/demo/main_demo.py
+### 6.1 纯固定流程(无智能体)
 
-import asyncio
-import argparse
-from datetime import datetime
-from demo.mock_data.mock_cv import MockCVPlayer
-from demo.mock_data.mock_sensors import MockSensorStream
-from demo.mock_data.mock_positioning import MockPositioningStream
-from demo.mock_data.mock_vl import MockVLModel
-from demo.mock_data.mock_work_permit import WORK_PERMIT
-from src.agent.state_manager import StateManager
-from src.agent.decision_engine import A5DecisionEngine
-from src.collector.async_collector import AsyncCollector
-
-
-async def run_demo(scenario: str, speed: float = 1.0, duration_sec: int = 30):
-    """运行一次 demo"""
-    
-    print("═══════════════════════════════════════════")
-    print(f"  A5 作业过程监测智能体 - Demo")
-    print(f"  场景: {scenario}")
-    print(f"  速度: {speed}x")
-    print("═══════════════════════════════════════════\n")
-    
-    # 1. 初始化模拟数据源
-    cv_stream = MockCVPlayer(scenario, speed=speed)
-    sensor_stream = MockSensorStream(scenario)
-    position_stream = MockPositioningStream(scenario)
-    vl_model = MockVLModel()
-    
-    # 2. 加载作业票
-    work_permit = WORK_PERMIT
-    print(f"📋 作业票: {work_permit['permit_id']}")
-    print(f"   作业内容: {work_permit['work_content']}")
-    print(f"   必戴 PPE: {work_permit['required_ppe']}\n")
-    
-    # 3. 初始化智能体
-    state_mgr = StateManager(work_permit)
-    decision_engine = A5DecisionEngine(work_permit, vl_model)
-    collector = AsyncCollector(cv_stream, sensor_stream, position_stream)
-    
-    # 4. 启动后台数据采集
-    await collector.start()
-    
-    # 5. 主循环
-    start = asyncio.get_event_loop().time()
-    cycle = 0
-    while asyncio.get_event_loop().time() - start < duration_sec:
-        await asyncio.sleep(0.5)
-        cycle += 1
-        
-        # 获取本轮数据
-        cv_logs = collector.get_recent_cv_logs(window_sec=0.5)
-        sensors = collector.get_latest_sensors()
-        locations = collector.get_latest_locations()
-        
-        # 状态聚合
-        for log in cv_logs:
-            state_mgr.update(log)
-        
-        # 智能体决策
-        candidates = await decision_engine.tick(
-            cv_logs, sensors, locations
-        )
-        
-        # 输出候选事件
-        for event in candidates:
-            print(f"\n🚨 [候选风险事件 {cycle}]")
-            print(f"   类型: {event['type']}")
-            print(f"   人员: {event['person']}")
-            print(f"   风险: {event['risk_level']}")
-            print(f"   证据源: {event['supporting_sources']}")
-            print(f"   融合分数: {event['fusion_score']:.2f}\n")
-    
-    print(f"\n✅ Demo 运行完成,共 {cycle} 个决策周期")
-    await collector.stop()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", default="B",
-                        choices=["A", "B", "C", "D", "E"])
-    parser.add_argument("--speed", type=float, default=5.0)
-    parser.add_argument("--duration", type=int, default=30)
-    args = parser.parse_args()
-    
-    asyncio.run(run_demo(
-        scenario=f"scenario_{args.scenario.lower()}",
-        speed=args.speed,
-        duration_sec=args.duration
-    ))
+```bash
+python 主循环/main_loop.py --scenario B                    # 单场景
+python 主循环/main_loop.py --scenario ABCDE                 # 全部 5 场景
+python 主循环/main_loop.py --scenario AAAAA                 # A 连跑 5 遍
+python 主循环/main_loop.py --scenario ABCDEACC              # 任意组合
+python 主循环/main_loop.py --scenario B --no-agent          # 不启动 A5
+python 主循环/main_loop.py --scenario ABCDE --log-dir logs/batch
 ```
+
+### 6.2 带 A5 智能体(默认)
+
+```bash
+python 主循环/main_loop.py --scenario B                    # 默认带 A5
+```
+
+输出示例:
+```
+[A5][T= 8s] PPE缺失-头盔  | 张师傅 | video,vl_semantic,location,work_permit
+[A5][T=22s] PPE缺失-头盔  | 张师傅 | video,vl_semantic,location,work_permit
+
+[A5Agent 摘要] 共 37.4s 实际运行
+  总事件:2
+  P7: 2 个事件
+```
+
+### 6.3 场景 A-D-E 的预期输出
+
+| 场景 | 选项 | 预期输出 |
+|---|---|---|
+| A | `--scenario A` | 总事件:0 |
+| B | `--scenario B` | 总事件:2(P7 两次摘头盔) |
+| C | `--scenario C` | 传感器 alarm,事件 1+ |
+| D | `--scenario D` | P11 离岗,事件 1 |
+| E | `--scenario E` | 多重违规叠加,事件 3+ |
+
+---
+
+## 七、关键设计决策(已落地)
+
+| 决策 | 实现 |
+|---|---|
+| **固定实时 1:1** | 去掉所有 speed/speed 参数,现实 1 秒 = 场景 1 秒 |
+| **wall_time 为主时间** | 所有工具接收 ISO 格式时间,内部 scenario_time 只做辅助 |
+| **防未来** | `set_agent_now()` 设置时间上限,`query_raw_logs` 拒绝查未来 |
+| **日志只增不改** | 每秒新建文件 `{type}_{ts}_T{sec:02d}.json`,永覆盖 |
+| **Agent 不判风险** | raw_event 无 risk_level,A6 才判 |
+| **Agent 不处置** | 只输出 raw_event,不发起通知/停工 |
+| **事件去重** | `EventDeduplicator` 状态机:同一违规只发 1 次 |
+| **监护人特殊处理** | P11 只检查头盔(不检查护目镜) |
+| **不用 LangGraph** | 主循环每 1 秒调一次 `agent.tick()`,无需复杂编排 |
+
+---
+
+## 八、实现清单(全部完成)
+
+| # | 模块 | 文件 | 状态 |
+|---|---|---|---|
+| 1 | 5 场景数据 | `demo/mock_data/*.py` | ✅ |
+| 2 | CV 流(25 FPS) | `流式播放/mock_cv_player.py` | ✅ |
+| 3 | 传感器流(1 Hz) | `流式播放/mock_sensor_stream.py` | ✅ |
+| 4 | 定位流(1 Hz) | `流式播放/mock_positioning_stream.py` | ✅ |
+| 5 | 固定流程+落盘+防未来 | `流式播放/async_collector.py` | ✅ |
+| 6 | 主循环(批量运行) | `主循环/main_loop.py` | ✅ |
+| 7 | 事件去重状态机 | `智能体/event_deduplicator.py` | ✅ |
+| 8 | 4 个工具 | `智能体/tools.py` | ✅ |
+| 9 | A5 决策者 | `智能体/a5_agent.py` | ✅ |
+| 10 | .gitignore | `A5/.gitignore` | ✅ |
+
+---
+
+## 九、程序结构
+
+```
+A5/
+├── README.md                       # 本文档(总览)
+├── .gitignore
+├── demo/mock_data/                 # 5 个场景的剧本数据
+│   ├── types.py, mock_cv.py, mock_sensors.py
+│   ├── mock_positioning.py, mock_vl.py, mock_work_permit.py
+├── 流式播放/                       # 模拟数据源 + 固定流程
+│   ├── mock_cv_player.py, mock_sensor_stream.py
+│   ├── mock_positioning_stream.py, async_collector.py
+├── 主循环/                         # 主循环入口
+│   └── main_loop.py
+└── 智能体/                         # A5 决策者(独立模块)
+    ├── tools.py, event_deduplicator.py, a5_agent.py
+```
+
+---
+
+## 十、参考资源
+
+- 项目主文档:`广东石化作业场景闭环管理智能体工具链项目实施任务计划书.docx`
+- 对应章节:5.2 "1+8" 业务智能体体系、6.2 Tool 清单、6.3 Skill 清单
+- 子模块 README:
+  - `主循环/README.md` — 主循环设计
+  - `流式播放/README.md` — 流式播放设计
+  - `智能体/README.md` — 智能体设计
+- 相关技术:
+  - Python `asyncio` 异步编程
+  - `langchain_core.tools` 工具声明
+
+---
+
+**编制人**:项目工具链研发组
+**当前版本**:v1.0(核心模块全部完成)
+**下一版本**:v1.1(预计接入真实 VL 模型 + 更多测试场景)
 
 ---
 

@@ -61,7 +61,7 @@ log = logging.getLogger("a5-config")
 # 'openai' 同时覆盖 OpenAI 及所有 Chat-Completions 兼容服务(DeepSeek/DashScope/GLM/Kimi/vLLM 等)。
 
 LLM_FIELDS = ["protocol", "base_url", "api_key", "model", "temperature", "max_tokens"]
-VL_FIELDS  = ["protocol", "base_url", "api_key", "model"]
+VL_FIELDS  = ["protocol", "base_url", "api_key", "model", "temperature", "max_tokens"]
 ALL_FIELDS = sorted(set(LLM_FIELDS + VL_FIELDS))
 
 ENV_VAR_NAMES = {
@@ -112,6 +112,8 @@ PROVIDER_HINTS: Dict[str, Dict[str, str]] = {
         "OneAPI / New-API 转发":          "",
     },
 }
+
+DEFAULT_PROTOCOLS = ("openai", "anthropic")
 
 # ============================================================
 # .env 读写
@@ -510,6 +512,8 @@ def api_test_vl():
     api_key  = (request.form.get("api_key")  or "").strip()
     model    = (request.form.get("model")    or "").strip()
     prompt   = (request.form.get("prompt")   or "请用中文用一句话描述这张图片。").strip()
+    temperature = float(request.form.get("temperature") or 0) or None
+    max_tokens  = int(request.form.get("max_tokens") or 0) or None
 
     file = request.files.get("file")
     if not file:
@@ -518,15 +522,20 @@ def api_test_vl():
     b64 = base64.b64encode(file.read()).decode("ascii")
     mime = file.content_type or "image/png"
 
+    mt = max_tokens or 200
+    tmp = temperature if temperature is not None else 0.0
+
     if protocol == "anthropic":
         content_blocks = [
             {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}},
             {"type": "text",  "text": prompt},
         ]
-        body_payload = {
+        body_payload: Dict[str, Any] = {
             "messages": [{"role": "user", "content": content_blocks}],
-            "max_tokens": 200,
+            "max_tokens": mt,
         }
+        if temperature is not None:
+            body_payload["temperature"] = tmp
     else:
         image_url = f"data:{mime};base64,{b64}"
         body_payload = {
@@ -537,8 +546,8 @@ def api_test_vl():
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             }],
-            "max_tokens": 200,
-            "temperature": 0.0,
+            "max_tokens": mt,
+            "temperature": tmp,
         }
 
     status, data = _post_chat(protocol, base_url, api_key, model, body_payload, timeout=60)

@@ -293,6 +293,14 @@
         <label>模型名<span class="req">*</span></label>
         <input type="text" id="vl-model" placeholder="qwen-vl-max / gpt-4o / claude-3-5-sonnet-20241022 ..." />
       </div>
+      <div>
+        <label>Temperature (可选)</label>
+        <input type="number" step="0.1" min="0" max="2" id="vl-temperature" placeholder="0.1" />
+      </div>
+      <div>
+        <label>Max Tokens (可选)</label>
+        <input type="number" step="1" min="1" id="vl-max_tokens" placeholder="200" />
+      </div>
       <div class="full">
         <label>测试图片 (jpg/png, &lt; 4MB)</label>
         <input type="file" id="vl-image" accept="image/*" />
@@ -465,7 +473,7 @@ async function renderHints(which) {
 // ---------- Collect form data ----------
 const FORM_FIELDS = {
   llm: ["protocol", "base_url", "api_key", "model", "temperature", "max_tokens"],
-  vl:  ["protocol", "base_url", "api_key", "model"],
+  vl:  ["protocol", "base_url", "api_key", "model", "temperature", "max_tokens"],
 };
 function collectForm(which) {
   const out = {};
@@ -556,6 +564,8 @@ document.getElementById("btn-test-vl").addEventListener("click", async () => {
     fd.append("base_url", f.base_url);
     fd.append("api_key", f.api_key);
     fd.append("model", f.model);
+    if (f.temperature) fd.append("temperature", f.temperature);
+    if (f.max_tokens) fd.append("max_tokens", f.max_tokens);
     fd.append("prompt", document.getElementById("vl-prompt").value || "");
     fd.append("file", file);
     const r = await fetch(API + "/api/test/vl", { method: "POST", body: fd });

@@ -1,0 +1,9 @@
+# 密钥文件
+.env
+
+# 已保存的配置快照(含 API Key)
+saved_configs.json
+
+# Python 缓存
+__pycache__/
+*.pyc
