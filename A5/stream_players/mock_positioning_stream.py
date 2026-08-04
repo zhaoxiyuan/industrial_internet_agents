@@ -15,7 +15,7 @@ from typing import AsyncIterator, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from 场景剧本 import (
+from scenario_data import (
     AREAS,
     SCENARIOS_POSITIONING,
     get_worker_position_at,
@@ -83,7 +83,7 @@ async def stream_print(scenario: str, max_readings: int = None):
     stream = MockPositioningStream(scenario)
 
     print("=" * 78)
-    print(f"  MockPositioningStream 流式播放")
+    print(f"  MockPositioningStream stream_players")
     print(f"  场景: {scenario}  |  |  工人: {stream.worker_ids}")
     print(f"  总读数: {stream.total_readings}")
     print("=" * 78)
@@ -118,7 +118,7 @@ async def stream_print(scenario: str, max_readings: int = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MockPositioningStream 流式播放定位数据"
+        description="MockPositioningStream stream_players定位数据"
     )
     parser.add_argument(
         "--scenario", default="D",

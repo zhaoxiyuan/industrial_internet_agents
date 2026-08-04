@@ -26,9 +26,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from 流式播放.mock_cv_player import MockCVPlayer
-from 流式播放.mock_sensor_stream import MockSensorStream
-from 流式播放.mock_positioning_stream import MockPositioningStream
+from stream_players.mock_cv_player import MockCVPlayer
+from stream_players.mock_sensor_stream import MockSensorStream
+from stream_players.mock_positioning_stream import MockPositioningStream
 
 
 class AsyncCollector:
@@ -185,7 +185,7 @@ class AsyncCollector:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
     # ============================================================
-    # 查询接口(供智能体)
+    # 查询接口(供agent)
     # ============================================================
 
     def _get_raw_logs(self, source_type: str) -> List[Dict]:
@@ -207,7 +207,7 @@ class AsyncCollector:
 
     def set_agent_now(self, wall_time: str):
         """
-        主循环调用:设置 agent 当前的"可观测时间"上限。
+        main_loop调用:设置 agent 当前的"可观测时间"上限。
         之后 agent 通过 query_raw_logs / get_snapshot 查询时,
         若请求的 end_wall 或 wall_time > agent_now,会被拒绝。
         """
@@ -321,7 +321,7 @@ async def run_demo(
 
     await collector.start()
 
-    # 主循环:30 秒实时,每秒落盘
+    # main_loop:30 秒实时,每秒落盘
     for sec in range(30):
         await asyncio.sleep(1.0)
         await collector.flush_second(sec)

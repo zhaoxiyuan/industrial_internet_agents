@@ -15,7 +15,7 @@ from typing import AsyncIterator, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from 场景剧本 import (
+from scenario_data import (
     SENSOR_CONFIG,
     SCENARIOS_SENSORS,
     get_sensor_reading_at,
@@ -90,7 +90,7 @@ async def stream_print(scenario: str, max_readings: int = None):
     stream = MockSensorStream(scenario)
 
     print("=" * 78)
-    print(f"  MockSensorStream 流式播放")
+    print(f"  MockSensorStream stream_players")
     print(f"  场景: {scenario}  |  |  传感器: {stream.sensor_ids}")
     print(f"  总读数: {stream.total_readings}")
     print("=" * 78)
@@ -134,7 +134,7 @@ async def stream_print(scenario: str, max_readings: int = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MockSensorStream 流式播放传感器读数"
+        description="MockSensorStream stream_players传感器读数"
     )
     parser.add_argument(
         "--scenario", default="C",

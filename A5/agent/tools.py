@@ -1,5 +1,5 @@
 """
-A5 智能体的 LangChain 工具集
+A5 agent的 LangChain 工具集
 
 工具清单(全部用 @tool 声明):
   1. query_raw_logs         按 wall_time 范围查询原始日志
@@ -201,10 +201,10 @@ def analyze_ppe_compliance(
         }
 
         阈值默认 0.8 = 25 帧中至少 20 帧违规才算 violation。
-        智能体可在调用时覆盖 threshold(如想更严格可设 0.9)。
+        agent可在调用时覆盖 threshold(如想更严格可设 0.9)。
 
         注:此工具只做"看图说话"的事实聚合,不判断"算不算违规"
-        —— 算不算违规由 A5 智能体综合其他证据后决定。
+        —— 算不算违规由 A5 agent综合其他证据后决定。
     """
     person_logs = [l for l in cv_logs if l.get("person_id") == person_id]
     total = len(person_logs)
@@ -274,7 +274,7 @@ def call_vl_expert(
     咨询 VL 视觉语言专家,获取对当前画面/上下文的语义判断。
 
     Args:
-        question: A5 智能体的提问(自然语言),如 "P7 当前 PPE 状态如何?"
+        question: A5 agent的提问(自然语言),如 "P7 当前 PPE 状态如何?"
         history:  CV 检测的统计摘要,如
                   {"helmet_ratio": 0.88, "frame_count": 22, "violations": ["helmet"]}
         context:  上下文信息,如
@@ -293,11 +293,11 @@ def call_vl_expert(
           "reasoning":      "动火作业中未佩戴安全帽是严重违章..."
         }
 
-        占位(VL 不可用,_placeholder=True,智能体降级处理):
+        占位(VL 不可用,_placeholder=True,agent降级处理):
         {
           "is_violation":   null,
           "violation_type": "unknown",
-          "evidence_text":  "VL 模型未注入,智能体需基于其他证据判断",
+          "evidence_text":  "VL 模型未注入,agent需基于其他证据判断",
           "confidence":     0.0,
           "reasoning":      "VL 调用失败或不可用",
           "_placeholder":   true
@@ -316,7 +316,7 @@ def call_vl_expert(
         return {
             "is_violation": None,
             "violation_type": "unknown",
-            "evidence_text": "VL 模型未注入,智能体需基于其他证据判断",
+            "evidence_text": "VL 模型未注入,agent需基于其他证据判断",
             "confidence": 0.0,
             "reasoning": "VL 调用失败或不可用",
             "_placeholder": True,
@@ -340,5 +340,5 @@ ALL_TOOLS = [
     query_raw_logs,
     get_current_snapshot,
     analyze_ppe_compliance,
-    # call_vl_expert,
+    call_vl_expert,
 ]

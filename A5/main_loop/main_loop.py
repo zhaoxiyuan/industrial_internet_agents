@@ -1,13 +1,13 @@
 """
-主循环入口 — 支持任意场景组合的批量运行 + A5 智能体集成
+main_loop入口 — 支持任意场景组合的批量运行 + A5 agent集成
 
 用法:
-  python 主循环/main_loop.py --scenario B          # 单个场景
-  python 主循环/main_loop.py --scenario AAAAA       # A 连跑 5 遍
-  python 主循环/main_loop.py --scenario ABCDE       # 5 个场景各一遍
-  python 主循环/main_loop.py --scenario ABCDEACC    # 任意组合
-  python 主循环/main_loop.py --scenario ABCDE --log-dir logs/batch
-  python 主循环/main_loop.py --scenario B --no-agent  # 不启动 A5 智能体
+  python main_loop/main_loop.py --scenario B          # 单个场景
+  python main_loop/main_loop.py --scenario AAAAA       # A 连跑 5 遍
+  python main_loop/main_loop.py --scenario ABCDE       # 5 个场景各一遍
+  python main_loop/main_loop.py --scenario ABCDEACC    # 任意组合
+  python main_loop/main_loop.py --scenario ABCDE --log-dir logs/batch
+  python main_loop/main_loop.py --scenario B --no-agent  # 不启动 A5 agent
 
 注:实时 1:1(现实时间 = 场景时间),不支持倍速。
 """
@@ -19,7 +19,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from 流式播放.async_collector import run_demo
+from stream_players.async_collector import run_demo
 
 
 async def run_scenario_with_agent(
@@ -27,16 +27,16 @@ async def run_scenario_with_agent(
     log_dir: str,
     use_agent: bool,
 ):
-    """运行单个场景(可选是否启动 A5 智能体)"""
+    """运行单个场景(可选是否启动 A5 agent)"""
     import asyncio
     from datetime import datetime
     from pathlib import Path
 
-    from 流式播放.async_collector import AsyncCollector
-    from 流式播放.mock_cv_player import MockCVPlayer
-    from 流式播放.mock_sensor_stream import MockSensorStream
-    from 流式播放.mock_positioning_stream import MockPositioningStream
-    from 场景剧本.mock_work_permit import WORK_PERMIT
+    from stream_players.async_collector import AsyncCollector
+    from stream_players.mock_cv_player import MockCVPlayer
+    from stream_players.mock_sensor_stream import MockSensorStream
+    from stream_players.mock_positioning_stream import MockPositioningStream
+    from scenario_data.mock_work_permit import WORK_PERMIT
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     collector = AsyncCollector(scenario, log_dir=log_dir)
@@ -44,7 +44,7 @@ async def run_scenario_with_agent(
     if use_agent:
         # 延迟导入
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from 智能体.a5_agent import A5Agent
+        from agent.a5_agent import A5Agent
         agent_raw_dir = f"{log_dir}/raw_events"
         agent = A5Agent(
             collector=collector,
@@ -59,7 +59,7 @@ async def run_scenario_with_agent(
     print(f"[已启动 3 个流,实时 30 秒]")
     start_real = asyncio.get_event_loop().time()
 
-    # 主循环:30 秒实时,每秒 agent.tick
+    # main_loop:30 秒实时,每秒 agent.tick
     for sec in range(30):
         await asyncio.sleep(1.0)
         await collector.flush_second(sec)
@@ -97,14 +97,14 @@ async def run_scenario_with_agent(
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="A5 主循环 + 智能体")
+    parser = argparse.ArgumentParser(description="A5 main_loop + agent")
     parser.add_argument(
         "--scenario", default="B",
         help="场景串,每字符一个场景。例如: B / AAAAA / ABCDE / ABCDEACC"
     )
     parser.add_argument("--log-dir", default=None, help="日志根目录")
     parser.add_argument("--no-agent", action="store_true",
-                        help="不启动 A5 智能体(纯固定流程)")
+                        help="不启动 A5 agent(纯固定流程)")
     args = parser.parse_args()
 
     scenario_str = args.scenario.upper()
@@ -116,7 +116,7 @@ async def main():
 
     n = len(scenario_str)
     use_agent = not args.no_agent
-    agent_label = "智能体" if use_agent else "纯固定流程"
+    agent_label = "agent" if use_agent else "纯固定流程"
     print(f"批量运行: {n} 个场景 [{scenario_str}] ({agent_label},实时 1:1,每场景 30 秒)")
 
     batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")

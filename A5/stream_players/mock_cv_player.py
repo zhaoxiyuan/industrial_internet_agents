@@ -13,10 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List
 
-# 添加项目根目录到 sys.path,支持从 流式播放/ 子目录导入 场景剧本
+# 添加项目根目录到 sys.path,支持从 stream_players/ 子目录导入 scenario_data
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from 场景剧本 import (
+from scenario_data import (
     SCENARIOS_CV,
     get_person_events_at,
     SCENARIO_DURATION_SEC,
@@ -136,7 +136,7 @@ async def stream_print(scenario: str, max_logs: int = None):
     persons = player.person_ids
 
     print("=" * 78)
-    print(f"  MockCVPlayer 流式播放")
+    print(f"  MockCVPlayer stream_players")
     print(f"  场景: {scenario}  |  人员: {persons}")
     print(f"  总帧数: {player.total_frames}  |  总日志: {player.total_logs}")
     print("=" * 78)
@@ -185,7 +185,7 @@ async def stream_print(scenario: str, max_logs: int = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MockCVPlayer 流式播放 CV 检测日志"
+        description="MockCVPlayer stream_players CV 检测日志"
     )
     parser.add_argument(
         "--scenario", default="B",

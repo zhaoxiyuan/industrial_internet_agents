@@ -1,5 +1,5 @@
 """
-EventDeduplicator — A5 智能体的事件去重状态机
+EventDeduplicator — A5 agent的事件去重状态机
 
 每个作业人员维护一个状态:
   NO_ACTIVE   → 初始,无活跃事件
@@ -26,7 +26,7 @@ import time
 class EventDeduplicator:
     """
     每个 person_id 独立的状态机。
-    主循环每秒调一次 check(),根据 is_violating 推进。
+    main_loop每秒调一次 check(),根据 is_violating 推进。
     返回 "new_episode" 表示需要输出新事件。
     """
 

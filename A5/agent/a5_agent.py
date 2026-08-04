@@ -1,7 +1,7 @@
 """
-A5Agent — 作业过程监测智能体
+A5Agent — 作业过程监测agent
 
-调用模式:主循环每 1 秒调一次 tick(wall_time, snapshot)。
+调用模式:main_loop每 1 秒调一次 tick(wall_time, snapshot)。
 
 核心逻辑(每个 person):
   1. 多数表决 (analyze_ppe_compliance)
@@ -37,7 +37,7 @@ from .event_deduplicator import EventDeduplicator
 
 
 class A5Agent:
-    """A5 作业过程监测智能体(主循环每 1 秒调一次 tick)"""
+    """A5 作业过程监测agent(main_loop每 1 秒调一次 tick)"""
 
     # 多数表决阈值(1 秒 25 帧中 ≥ 80% 帧违规)
     MAJORITY_THRESHOLD = 0.8
@@ -75,7 +75,7 @@ class A5Agent:
         self._raw_events: List[Dict] = []
 
     # ============================================================
-    # 主入口:主循环每 1 秒调一次
+    # 主入口:main_loop每 1 秒调一次
     # ============================================================
 
     async def tick(
@@ -88,7 +88,7 @@ class A5Agent:
 
         Args:
             wall_time: 当前现实时间(ISO),如 "2026-08-04T14:32:12.000"
-            snapshot:  当前秒的世界快照(主循环传入)
+            snapshot:  当前秒的世界快照(main_loop传入)
                        {"wall_time", "scenario_time", "cv_logs", "sensors", "positions"}
 
         Returns:
@@ -362,7 +362,7 @@ class A5Agent:
 
     def _explain(self, person_id: str, evidence: Dict) -> str:
         """
-        A5 智能体对这次违规的自然语言解释。
+        A5 agent对这次违规的自然语言解释。
         输出格式: "依据 + 结论"
         """
         parts = []
