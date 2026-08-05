@@ -18,17 +18,9 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agent.tools import (
     ALL_TOOLS, set_dependencies, set_raw_event_dir,
-    analyze_ppe_compliance, query_past_events,
-)
+    )
 from agent.system_prompt import get_system_prompt
 from agent.work_permit_rules import get_rules
-
-class MockChatModel(BaseChatModel):
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="{}"))])
-    def _llm_type(self) -> str: return "mock"
-    @property
-    def _identifying_params(self) -> Dict[str, Any]: return {"model": "mock"}
 
 class A5Agent:
     def __init__(self, collector, work_permit, raw_event_dir=None):
@@ -50,18 +42,38 @@ class A5Agent:
         self._last_tick_ms = 0.0
 
     def _build_llm(self):
-        p = os.getenv("LLM_PROVIDER", "").lower()
-        if p == "openai":
+        # 从 智能体配置/.env 读取(前端配置界面写入)
+        from dotenv import dotenv_values
+        env_path = Path(__file__).resolve().parent.parent / "智能体配置" / ".env"
+        env = {}
+        if env_path.exists():
+            env = dotenv_values(env_path)
+        # 也读取 OS 环境变量(兜底)
+        env.update({k: v for k, v in os.environ.items() if v})
+
+        protocol = env.get("A5_LLM_PROTOCOL", "").lower()
+        if not protocol:
+            raise RuntimeError(
+                "LLM 未配置! 请先启动智能体配置前端(端口5000)并选择模型,"
+                "或设置环境变量 A5_LLM_PROTOCOL/A5_LLM_API_KEY 等"
+            )
+
+        if protocol == "openai":
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model=os.getenv("LLM_MODEL","gpt-4o"),
-                              api_key=os.getenv("OPENAI_API_KEY"),
-                              base_url=os.getenv("OPENAI_BASE_URL",None), temperature=0)
-        if p == "ollama":
+            return ChatOpenAI(
+                model=env.get("A5_LLM_MODEL", "gpt-4o"),
+                api_key=env.get("A5_LLM_API_KEY", ""),
+                base_url=env.get("A5_LLM_BASE_URL", None),
+                temperature=float(env.get("A5_LLM_TEMPERATURE", "0")),
+            )
+        if protocol == "ollama":
             from langchain_community.chat_models import ChatOllama
-            return ChatOllama(model=os.getenv("LLM_MODEL","qwen2.5:7b"),
-                              base_url=os.getenv("OLLAMA_BASE_URL","http://localhost:11434"),
-                              temperature=0)
-        return MockChatModel()
+            return ChatOllama(
+                model=env.get("A5_LLM_MODEL", "qwen2.5:7b"),
+                base_url=env.get("A5_LLM_BASE_URL", "http://localhost:11434"),
+                temperature=float(env.get("A5_LLM_TEMPERATURE", "0")),
+            )
+        raise RuntimeError(f"不支持的 LLM 协议: {protocol}")
 
     # ============================================================
     # tick
@@ -76,27 +88,15 @@ class A5Agent:
         self.collector.set_agent_now(agent_now)
         agent_input = self._build_input(wall_time, snapshot)
 
-        if isinstance(self.llm, MockChatModel):
-            raw_output = self._rule_fallback(wall_time, snapshot)
+        try:
+            msgs = [SystemMessage(content=self._system_prompt), HumanMessage(content=agent_input)]
+            res = await self._agent.ainvoke({"messages": msgs})
+            ai = [m for m in res.get("messages", []) if isinstance(m, AIMessage)]
+            raw_output = ai[-1].content if ai else "{}"
             intermediate = []
-        else:
-            try:
-                if self._use_v1:
-                    msgs = [SystemMessage(content=self._system_prompt), HumanMessage(content=agent_input)]
-                    res = await self._agent.ainvoke({"messages": msgs})
-                    ai = [m for m in res.get("messages",[]) if isinstance(m, AIMessage)]
-                    raw_output = ai[-1].content if ai else "{}"
-                    intermediate = []
-                else:
-                    res = await self._agent.ainvoke({"input": json.dumps(agent_input, ensure_ascii=False)})
-                    raw_output = res.get("output","{}")
-                    intermediate = res.get("intermediate_steps",[])
-            except Exception as e:
-                raw_output = json.dumps({"is_event":False, "explanation":f"Agent error:{e}"})
-                intermediate = []
-            if not raw_output or raw_output.strip() in ("","{}"):
-                raw_output = self._rule_fallback(wall_time, snapshot)
-                intermediate = []
+        except Exception as e:
+            raw_output = json.dumps({"is_event": False, "explanation": f"Agent error: {e}"})
+            intermediate = []
 
         raw_events = self._parse_output(raw_output, wall_time, snapshot)
         for ev in raw_events:
@@ -176,117 +176,6 @@ class A5Agent:
                      "status":p.get("status","ongoing"),"evidence":p.get("evidence",{}),
                      "explanation":p.get("explanation",""),"note":"A5不判定risk_level,由A6完成"})
         return results
-
-    # ============================================================
-    # rule_fallback (Mock LLM)
-    # ============================================================
-    def _rule_fallback(self, wall_time: str, snapshot: Dict) -> str:
-        """降级规则: Mock LLM 时使用,模拟 Agent 推理。支持 PPE/传感器/监护人三维检测 + 去重。"""
-        events = []
-        cv_logs = snapshot.get("cv_logs", [])
-        sensor_data = snapshot.get("sensors", [{}])
-        pos_data = snapshot.get("positions", [{}])
-
-        # ── 辅助: 检查是否有 ongoing 事件 ──
-        def _has_ongoing(person_id=None, event_type_hint=None):
-            """只看最新匹配事件:若最新的是 ongoing 则返回 True"""
-            past = query_past_events.invoke({
-                "start_wall": "2026-08-01T00:00:00",
-                "end_wall": wall_time,
-                "person_id": person_id,
-            })
-            latest = None
-            for e in past:
-                if not isinstance(e, dict): continue
-                if person_id and e.get("person",{}).get("id") != person_id: continue
-                # event_type_hint 匹配: 对人员找 type 包含; 对 SYS 找 evidence.sensor 键包含
-                if event_type_hint:
-                    if person_id == "SYS":
-                        ev_sensor = e.get("evidence",{}).get("sensor",{})
-                        if event_type_hint not in str(ev_sensor.keys()):
-                            continue
-                    elif event_type_hint not in e.get("type",""):
-                        continue
-                if latest is None or e.get("wall_time","") > latest.get("wall_time",""):
-                    latest = e
-            return latest is not None and latest.get("status") == "ongoing"
-
-        # ── 1. PPE 检测 ──
-        for pid, info in self.work_permit.get("workers", {}).items():
-            stats = analyze_ppe_compliance.invoke({
-                "cv_logs": cv_logs, "person_id": pid,
-                "threshold": 0.8,
-                "required_ppe": self.work_permit.get("required_ppe"),
-            })
-            is_v = stats.get("is_violating", False)
-            ongoing = _has_ongoing(pid, "PPE缺失")
-
-            if is_v and not ongoing:
-                events.append({"is_event":True,"type":"PPE缺失-头盔",
-                    "person":{"id":pid,"name":info.get("name",pid),"role":info.get("role","")},
-                    "explanation":f"CV多数表决: {stats.get('helmet_violation',0)}/{stats['total_frames']}帧({stats['helmet_ratio']:.0%})",
-                    "evidence":{"cv_ratio":stats['helmet_ratio']},"status":"ongoing"})
-            elif is_v and ongoing:
-                # 持续违规: 写更新(覆盖 same event_id 的 last_seen)
-                events.append({"is_event":True,"type":"PPE缺失-头盔",
-                    "person":{"id":pid,"name":info.get("name",pid),"role":info.get("role","")},
-                    "explanation":f"CV多数表决: {stats.get('helmet_violation',0)}/{stats['total_frames']}帧({stats['helmet_ratio']:.0%})",
-                    "evidence":{"cv_ratio":stats['helmet_ratio']},"status":"ongoing_update"})
-            elif not is_v and ongoing:
-                events.append({"is_event":True,"type":"PPE缺失-头盔",
-                    "person":{"id":pid,"name":info.get("name",pid),"role":info.get("role","")},
-                    "explanation":"违规已结束,事件关闭","evidence":{},"status":"closed"})
-
-        # ── 2. 传感器告警 ──
-        if sensor_data and sensor_data[0].get("readings"):
-            for sid, r in sensor_data[0]["readings"].items():
-                is_alarm = r.get("status") == "alarm"
-                # 限定同一传感器: 只在 ongoing 事件证据中包含此 sid 才算
-                ongoing = _has_ongoing("SYS", sid)
-                if is_alarm and not ongoing:
-                    events.append({"is_event":True,"type":"环境异常-传感器告警",
-                        "person":{"id":"SYS","name":"传感器系统","role":"设备"},
-                        "explanation":f"{r.get('type',sid)}: {r['value']}{r.get('unit','')} 超过报警线({r.get('threshold_alarm','?')})",
-                        "evidence":{"sensor":{sid:r}},"status":"ongoing"})
-                elif is_alarm and ongoing:
-                    events.append({"is_event":True,"type":"环境异常-传感器告警",
-                        "person":{"id":"SYS","name":"传感器系统","role":"设备"},
-                        "explanation":f"{r.get('type',sid)}: 持续告警 {r['value']}{r.get('unit','')}",
-                        "evidence":{"sensor":{sid:r}},"status":"ongoing_update"})
-                elif not is_alarm and ongoing:
-                    events.append({"is_event":True,"type":"环境异常-传感器告警",
-                        "person":{"id":"SYS","name":"传感器系统","role":"设备"},
-                        "explanation":"传感器已恢复正常,事件关闭","evidence":{},"status":"closed"})
-
-        # ── 3. 监护人离岗 ──
-        if pos_data and pos_data[0].get("positions"):
-            for wid, p in pos_data[0]["positions"].items():
-                w = self.work_permit.get("workers", {}).get(wid, {})
-                if w.get("role") != "监护人": continue
-                is_absent = not p.get("is_in_danger_zone", True)
-                ongoing = _has_ongoing(wid, "脱岗")
-                if is_absent and not ongoing:
-                    events.append({"is_event":True,"type":"监护人脱岗",
-                        "person":{"id":wid,"name":w.get("name",wid),"role":"监护人"},
-                        "explanation":f"监护人 {w.get('name',wid)} 离开动火区,当前在 {p.get('area_id','?')}",
-                        "evidence":{"position":p},"status":"ongoing"})
-                elif is_absent and ongoing:
-                    events.append({"is_event":True,"type":"监护人脱岗",
-                        "person":{"id":wid,"name":w.get("name",wid),"role":"监护人"},
-                        "explanation":f"监护人持续离岗,当前在 {p.get('area_id','?')}",
-                        "evidence":{"position":p},"status":"ongoing_update"})
-                elif not is_absent and ongoing:
-                    events.append({"is_event":True,"type":"监护人脱岗",
-                        "person":{"id":wid,"name":w.get("name",wid),"role":"监护人"},
-                        "explanation":"监护人已返回动火区,事件关闭","evidence":{},"status":"closed"})
-
-        # 场景 E 可能同时有多个事件,全部返回
-        if not events:
-            return json.dumps({"is_event":False,"explanation":"无异常"}, ensure_ascii=False)
-        # 单个事件直接返回,多个事件包装成列表(JSON 数组)
-        if len(events) == 1:
-            return json.dumps(events[0], ensure_ascii=False)
-        return json.dumps(events, ensure_ascii=False)
 
     # ============================================================
     # save
