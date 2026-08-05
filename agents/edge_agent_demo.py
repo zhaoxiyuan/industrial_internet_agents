@@ -1,8 +1,6 @@
 """
 边缘智能 Agent 核心模块
 """
-from typing import Any
-
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
@@ -54,7 +52,7 @@ def agent_demo(message: str, history: list) -> str:
 
 
 if __name__ == "__main__":
-    resp = chat("请介绍下边缘智能的技术框架")
+    resp = agent_demo("请介绍下边缘智能的技术框架")
     rprint(resp)
     last_msg = extract_output(resp)
     print(f'最后返回的消息:{last_msg}')

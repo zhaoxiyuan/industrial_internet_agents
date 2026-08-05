@@ -1,12 +1,14 @@
 """
 P1-P10 顺序编排工作流
 使用 LangGraph StateGraph 实现 P1→P2→...→P10 流水线
+支持 HumanInTheLoop 确认机制
 """
 from typing import TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage
 
-from .p1_permit_agent import permit_submit, permit_generate_draft
+from .p1_permit_agent import permit_submit, permit_generate_draft, jsa_analyze
 from .p2_task_agent import task_instance_create
 from .p3_context_agent import context_build
 from .p4_binding_agent import binding_match, binding_confirm
@@ -16,6 +18,7 @@ from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import disposition_create, disposition_confirm
 from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
 from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
+from .human_in_the_loop import get_hitl_manager
 
 
 # ============================================================
@@ -70,16 +73,49 @@ class WorkflowState(TypedDict, total=False):
     # ===== 工作流控制 =====
     current_stage: str                # 当前阶段 P1-P10
     error: Optional[str]              # 错误信息
-    requires_human_confirm: bool      # 是否需要人工确认
-    human_confirm_action: Optional[str]  # 待确认的操作类型
-    human_confirm_stage: Optional[str]     # 需要确认的阶段
+    confirmed_stages: dict           # 已确认的阶段 {"P1": True, "P5": True, ...}
+    pending_confirmations: list       # 等待确认的阶段列表 ["P1", "P5", ...]
+
+
+# ============================================================
+# 确认状态管理
+# ============================================================
+
+def is_stage_confirmed(state: WorkflowState, stage: str) -> bool:
+    """检查阶段是否已确认"""
+    return state.get("confirmed_stages", {}).get(stage, False)
+
+
+def confirm_stage(state: WorkflowState, stage: str) -> None:
+    """标记阶段已确认"""
+    if "confirmed_stages" not in state:
+        state["confirmed_stages"] = {}
+    state["confirmed_stages"][stage] = True
+
+
+def check_and_request_confirmation(state: WorkflowState, stage: str, action: str) -> Any:
+    """检查是否需要确认，如果需要则记录（不中断）
+
+    返回: None（继续执行）
+    """
+    # 如果已确认，继续
+    if is_stage_confirmed(state, stage):
+        return None
+
+    # 尚未确认，添加到待确认列表
+    if "pending_confirmations" not in state:
+        state["pending_confirmations"] = []
+    if stage not in state["pending_confirmations"]:
+        state["pending_confirmations"].append(stage)
+    state["error"] = f"[PENDING_CONFIRMATION] {stage}: {action}"
+    return None
 
 
 # ============================================================
 # 各阶段节点函数
 # ============================================================
 
-def p1_permit(state: WorkflowState) -> WorkflowState:
+def p1_permit(state: WorkflowState) -> Any:
     """P1: 作业预约、JSA分析与作业票"""
     application = state.get("application", {})
     if not application:
@@ -87,7 +123,6 @@ def p1_permit(state: WorkflowState) -> WorkflowState:
         state["current_stage"] = "P1"
         return state
 
-    # 调用 permit_submit 工具
     import json
     app_str = json.dumps(application, ensure_ascii=False)
     result_str = permit_submit.invoke(app_str)
@@ -103,7 +138,7 @@ def p1_permit(state: WorkflowState) -> WorkflowState:
     state["permit_draft_id"] = res.get("permit_draft_id", "")
     state["current_stage"] = "P1"
 
-    # 模拟 JSA 分析
+    # JSA 分析
     jsa_str = jsa_analyze.invoke(state["task_id"])
     jsa_result = json.loads(jsa_str)
     state["jsa_result"] = jsa_result.get("result", {})
@@ -113,13 +148,14 @@ def p1_permit(state: WorkflowState) -> WorkflowState:
     draft_result = json.loads(draft_str)
     state["permit_draft_id"] = draft_result.get("result", {}).get("permit_draft_id", state["permit_draft_id"])
 
-    state["requires_human_confirm"] = True
-    state["human_confirm_action"] = "approve_permit"
-    state["human_confirm_stage"] = "P1"
-    return state
+    state["current_stage"] = "P1"
+
+    # P1: 需要人工确认作业申请
+    result = check_and_request_confirmation(state, "P1", "approve_permit")
+    return result if result else state
 
 
-def p2_task(state: WorkflowState) -> WorkflowState:
+def p2_task(state: WorkflowState) -> Any:
     """P2: 作业任务获取与实例化"""
     permit_draft_id = state.get("permit_draft_id")
     if not permit_draft_id:
@@ -139,10 +175,13 @@ def p2_task(state: WorkflowState) -> WorkflowState:
     state["task_instance"] = result.get("result", {})
     state["task_id"] = result.get("result", {}).get("task_id", state.get("task_id", ""))
     state["current_stage"] = "P2"
-    return state
+
+    # P2: 需要人工确认是否纳入监测
+    result = check_and_request_confirmation(state, "P2", "monitor_decide")
+    return result if result else state
 
 
-def p3_context(state: WorkflowState) -> WorkflowState:
+def p3_context(state: WorkflowState) -> Any:
     """P3: 作业上下文理解"""
     task_id = state.get("task_id")
     if not task_id:
@@ -159,12 +198,22 @@ def p3_context(state: WorkflowState) -> WorkflowState:
         state["current_stage"] = "P3"
         return state
 
-    state["work_context"] = result.get("result", {}).get("context", {})
+    context_data = result.get("result", {})
+    state["work_context"] = context_data.get("context", {})
     state["current_stage"] = "P3"
+
+    # P3: 检测信息缺失，需要人工确认
+    missing_fields = context_data.get("missing_fields", [])
+    if missing_fields:
+        state["error"] = f"P3: 信息缺失确认，缺失字段: {missing_fields}"
+        result = check_and_request_confirmation(state, "P3", "context_confirm")
+        if result:
+            return result
+
     return state
 
 
-def p4_binding(state: WorkflowState) -> WorkflowState:
+def p4_binding(state: WorkflowState) -> Any:
     """P4: 监测资源绑定"""
     task_id = state.get("task_id")
     if not task_id:
@@ -185,14 +234,12 @@ def p4_binding(state: WorkflowState) -> WorkflowState:
     state["binding_confirmed"] = False
     state["current_stage"] = "P4"
 
-    # 自动确认绑定（实际场景需人工确认）
-    confirm_str = binding_confirm.invoke(task_id)
-    confirm_result = json.loads(confirm_str)
-    state["binding_confirmed"] = confirm_result.get("result", {}).get("confirmed", False)
-    return state
+    # P4: 需要人工确认资源绑定
+    result = check_and_request_confirmation(state, "P4", "binding_confirm")
+    return result if result else state
 
 
-def p5_verify(state: WorkflowState) -> WorkflowState:
+def p5_verify(state: WorkflowState) -> Any:
     """P5: 作业前条件核验"""
     task_id = state.get("task_id")
     if not task_id:
@@ -221,18 +268,18 @@ def p5_verify(state: WorkflowState) -> WorkflowState:
     recommendation = state["startup_recommendation"].get("decision", "")
     if "整改" in recommendation:
         state["verification_approved"] = False
-        state["requires_human_confirm"] = True
-        state["human_confirm_action"] = "approve_verification"
-        state["human_confirm_stage"] = "P5"
     else:
         state["verification_approved"] = True
 
     state["current_stage"] = "P5"
-    return state
+
+    # P5: 需要人工确认
+    result = check_and_request_confirmation(state, "P5", "approve_verification")
+    return result if result else state
 
 
 def p6_monitor(state: WorkflowState) -> WorkflowState:
-    """P6: 作业过程动态监测"""
+    """P6: 作业过程动态监测（不需要人工确认）"""
     task_id = state.get("task_id")
     if not task_id:
         state["error"] = "P6: task_id is required"
@@ -267,7 +314,7 @@ def p6_monitor(state: WorkflowState) -> WorkflowState:
     return state
 
 
-def p7_risk(state: WorkflowState) -> WorkflowState:
+def p7_risk(state: WorkflowState) -> Any:
     """P7: 风险研判与分级"""
     task_id = state.get("task_id")
     candidate_events = state.get("candidate_events", [])
@@ -296,10 +343,19 @@ def p7_risk(state: WorkflowState) -> WorkflowState:
 
     state["risk_events"] = risk_events
     state["current_stage"] = "P7"
+
+    # P7: 高风险事件需要人工确认
+    high_risk_events = [e for e in risk_events if e.get("level") in ("HIGH", "CRITICAL")]
+    if high_risk_events:
+        state["error"] = f"P7: 检测到 {len(high_risk_events)} 个高风险事件，需要人工确认"
+        result = check_and_request_confirmation(state, "P7", "risk_confirm")
+        if result:
+            return result
+
     return state
 
 
-def p8_disposition(state: WorkflowState) -> WorkflowState:
+def p8_disposition(state: WorkflowState) -> Any:
     """P8: 人机协同处置"""
     risk_events = state.get("risk_events", [])
 
@@ -321,10 +377,17 @@ def p8_disposition(state: WorkflowState) -> WorkflowState:
     state["disposition_tasks"] = disposition_tasks
     state["disposition_confirmed"] = len(disposition_tasks) > 0
     state["current_stage"] = "P8"
+
+    # P8: 需要人工确认
+    if disposition_tasks:
+        result = check_and_request_confirmation(state, "P8", "disposition_confirm")
+        if result:
+            return result
+
     return state
 
 
-def p9_closure(state: WorkflowState) -> WorkflowState:
+def p9_closure(state: WorkflowState) -> Any:
     """P9: 闭环跟踪与报告"""
     task_id = state.get("task_id")
     if not task_id:
@@ -351,17 +414,17 @@ def p9_closure(state: WorkflowState) -> WorkflowState:
     # 完整性检查未通过，需要人工介入
     if not is_complete:
         blocked_by = verify_result.get("result", {}).get("blocked_by", [])
-        state["requires_human_confirm"] = True
-        state["human_confirm_action"] = "approve_closure"
-        state["human_confirm_stage"] = "P9"
         state["error"] = f"P9: 闭环完整性检查未通过，阻塞项: {blocked_by}"
 
     state["closure_approved"] = is_complete
     state["current_stage"] = "P9"
-    return state
+
+    # P9: 需要人工确认
+    result = check_and_request_confirmation(state, "P9", "approve_closure")
+    return result if result else state
 
 
-def p10_archive(state: WorkflowState) -> WorkflowState:
+def p10_archive(state: WorkflowState) -> Any:
     """P10: 归档与复盘"""
     task_id = state.get("task_id")
     if not task_id:
@@ -391,41 +454,92 @@ def p10_archive(state: WorkflowState) -> WorkflowState:
     state["suggestions"] = suggestions_result.get("result", [])
 
     state["current_stage"] = "P10"
-    return state
+
+    # P10: 报告需要人工确认
+    result = check_and_request_confirmation(state, "P10", "report_confirm")
+    return result if result else state
 
 
 # ============================================================
-# 人工确认节点
+# 路由函数 - 检查是否需要人工确认后结束
 # ============================================================
 
-def human_confirm_node(state: WorkflowState) -> WorkflowState:
-    """人工确认节点——暂停等待人工确认"""
-    stage = state.get("human_confirm_stage", "unknown")
-    action = state.get("human_confirm_action", "unknown")
-    state["error"] = f"[HUMAN_CONFIRM_REQUIRED] Stage={stage}, Action={action}"
-    return state
-
-
-# ============================================================
-# 路由函数
-# ============================================================
-
-def should_human_confirm(state: WorkflowState) -> str:
-    """判断是否需要人工确认"""
-    if state.get("requires_human_confirm", False):
-        return "human_confirm"
+def route_to_next_or_end(state: WorkflowState) -> str:
+    """通用路由：如果有待确认阶段则结束，否则继续到下一阶段"""
+    pending = state.get("pending_confirmations", [])
+    if pending:
+        # 有待确认阶段，工作流结束等待用户确认
+        return END
     return "continue"
 
 
-def after_human_confirm(state: WorkflowState) -> str:
-    """人工确认后的路由"""
-    stage = state.get("human_confirm_stage", "")
-    # 根据阶段决定下一步
-    stage_order = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]
-    if stage in stage_order:
-        idx = stage_order.index(stage)
-        if idx < len(stage_order) - 1:
-            return stage_order[idx + 1]
+def route_after_p1(state: WorkflowState) -> str:
+    """P1 之后路由"""
+    if "P1" in state.get("pending_confirmations", []):
+        return END
+    return "P2"
+
+
+def route_after_p2(state: WorkflowState) -> str:
+    """P2 之后路由"""
+    if "P2" in state.get("pending_confirmations", []):
+        return END
+    return "P3"
+
+
+def route_after_p3(state: WorkflowState) -> str:
+    """P3 之后路由"""
+    if "P3" in state.get("pending_confirmations", []):
+        return END
+    return "P4"
+
+
+def route_after_p4(state: WorkflowState) -> str:
+    """P4 之后路由"""
+    if "P4" in state.get("pending_confirmations", []):
+        return END
+    return "P5"
+
+
+def route_after_p5(state: WorkflowState) -> str:
+    """P5 之后路由"""
+    if "P5" in state.get("pending_confirmations", []):
+        return END
+    return "P6"
+
+
+def route_after_p6(state: WorkflowState) -> str:
+    """P6 之后路由"""
+    if "P6" in state.get("pending_confirmations", []):
+        return END
+    return "P7"
+
+
+def route_after_p7(state: WorkflowState) -> str:
+    """P7 之后路由"""
+    if "P7" in state.get("pending_confirmations", []):
+        return END
+    return "P8"
+
+
+def route_after_p8(state: WorkflowState) -> str:
+    """P8 之后路由"""
+    if "P8" in state.get("pending_confirmations", []):
+        return END
+    return "P9"
+
+
+def route_after_p9(state: WorkflowState) -> str:
+    """P9 之后路由"""
+    if "P9" in state.get("pending_confirmations", []):
+        return END
+    return "P10"
+
+
+def route_after_p10(state: WorkflowState) -> str:
+    """P10 之后路由"""
+    if "P10" in state.get("pending_confirmations", []):
+        return END
     return END
 
 
@@ -434,7 +548,7 @@ def after_human_confirm(state: WorkflowState) -> str:
 # ============================================================
 
 def build_workflow() -> StateGraph:
-    """构建 P1-P10 顺序编排工作流"""
+    """构建 P1-P10 顺序编排工作流（支持人工确认中断）"""
     workflow = StateGraph(WorkflowState)
 
     # 添加所有阶段节点
@@ -448,43 +562,18 @@ def build_workflow() -> StateGraph:
     workflow.add_node("P8", p8_disposition)
     workflow.add_node("P9", p9_closure)
     workflow.add_node("P10", p10_archive)
-    workflow.add_node("human_confirm", human_confirm_node)
 
-    # 顺序连接（普通边）
-    workflow.add_edge("P1", "P2")
-    workflow.add_edge("P2", "P3")
-    workflow.add_edge("P3", "P4")
-    workflow.add_edge("P4", "P5")
-    workflow.add_edge("P5", "P6")
+    # 使用条件边 - 当有待确认时结束工作流，等待用户确认后重新运行
+    workflow.add_conditional_edges("P1", route_after_p1)
+    workflow.add_conditional_edges("P2", route_after_p2)
+    workflow.add_conditional_edges("P3", route_after_p3)
+    workflow.add_conditional_edges("P4", route_after_p4)
+    workflow.add_conditional_edges("P5", route_after_p5)
     workflow.add_edge("P6", "P7")
-    workflow.add_edge("P7", "P8")
-    workflow.add_edge("P8", "P9")
-    workflow.add_edge("P9", "P10")
-    workflow.add_edge("P10", END)
-
-    # 人工确认条件边（从需要确认的节点到人工确认节点）
-    workflow.add_conditional_edges(
-        "P1",
-        should_human_confirm,
-        {"human_confirm": "human_confirm", "continue": "P2"}
-    )
-    workflow.add_conditional_edges(
-        "P5",
-        should_human_confirm,
-        {"human_confirm": "human_confirm", "continue": "P6"}
-    )
-    workflow.add_conditional_edges(
-        "P9",
-        should_human_confirm,
-        {"human_confirm": "human_confirm", "continue": "P10"}
-    )
-
-    # 人工确认后返回
-    workflow.add_conditional_edges(
-        "human_confirm",
-        after_human_confirm,
-        {"P2": "P2", "P6": "P6", "P10": "P10", END: END}
-    )
+    workflow.add_conditional_edges("P7", route_after_p7)
+    workflow.add_conditional_edges("P8", route_after_p8)
+    workflow.add_conditional_edges("P9", route_after_p9)
+    workflow.add_conditional_edges("P10", route_after_p10)
 
     # 设置入口
     workflow.set_entry_point("P1")
@@ -497,6 +586,7 @@ def build_workflow() -> StateGraph:
 # ============================================================
 
 _workflow_graph = None
+_checkpointer = MemorySaver()
 
 
 def get_workflow():
@@ -504,62 +594,117 @@ def get_workflow():
     global _workflow_graph
     if _workflow_graph is None:
         builder = build_workflow()
-        _workflow_graph = builder.compile()
+        _workflow_graph = builder.compile(checkpointer=_checkpointer)
     return _workflow_graph
 
 
-def run_workflow(application: dict, human_confirm: bool = False,
-                 confirm_action: str = None) -> dict:
+def run_workflow(application: dict, thread_id: str = "default") -> dict:
     """
-    运行 P1-P10 完整工作流
+    运行 P1-P10 完整工作流（支持 checkpointing）
 
     参数:
         application: 作业申请字典
-        human_confirm: 是否已有人的确认（绕过人工确认节点）
-        confirm_action: 确认操作类型
+        thread_id: 线程ID（用于 checkpoint）
     返回:
         最终状态字典
     """
-    initial_state: WorkflowState = {
-        "application": application,
-        "current_stage": "P1",
-        "requires_human_confirm": False,
-        "human_confirm_action": None,
-        "human_confirm_stage": None,
-    }
-
-    # 如果已有人工确认，直接设置标志
-    if human_confirm and confirm_action:
-        # 找到对应阶段并跳过人工确认
-        action_to_stage = {
-            "approve_permit": "P1",
-            "approve_verification": "P5",
-            "approve_closure": "P9",
-        }
-        stage = action_to_stage.get(confirm_action, None)
-        if stage:
-            initial_state["requires_human_confirm"] = False
-            # 直接从下一阶段开始
-            stage_order = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]
-            if stage in stage_order:
-                idx = stage_order.index(stage)
-                start_node = stage_order[idx + 1] if idx < len(stage_order) - 1 else "P10"
-                # 简化处理，直接运行完整工作流
-                pass
+    config = {"configurable": {"thread_id": thread_id}}
 
     graph = get_workflow()
-    result = graph.invoke(initial_state)
+
+    # 检查是否有暂停点可以恢复
+    try:
+        existing = graph.get_state(config)
+        if existing and existing.next:
+            # 有暂停点，恢复执行
+            result = graph.invoke(None, config)
+        else:
+            # 没有暂停点，重新开始
+            initial_state: WorkflowState = {
+                "application": application,
+                "current_stage": "P1",
+                "confirmed_stages": {},
+                "pending_confirmations": [],
+            }
+            result = graph.invoke(initial_state, config)
+    except Exception:
+        # 首次运行
+        initial_state: WorkflowState = {
+            "application": application,
+            "current_stage": "P1",
+            "confirmed_stages": {},
+            "pending_confirmations": [],
+        }
+        result = graph.invoke(initial_state, config)
+
     return result
 
 
-def run_workflow_stream(application: dict):
-    """流式运行工作流，逐步返回每个阶段的输出"""
-    initial_state: WorkflowState = {
-        "application": application,
-        "current_stage": "P1",
-        "requires_human_confirm": False,
+def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve") -> dict:
+    """
+    确认阶段并继续工作流
+
+    参数:
+        thread_id: 线程ID
+        stage: 阶段名称
+        decision: 决定（approve/reject）
+    返回:
+        更新后的状态
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    graph = get_workflow()
+
+    # 获取当前状态
+    current_state = graph.get_state(config)
+    if not current_state:
+        return {"error": "No workflow state found"}
+
+    # 更新状态，标记阶段已确认
+    confirmed_stages = dict(current_state.values.get("confirmed_stages", {}))
+    confirmed_stages[stage] = True
+
+    pending_confirmations = list(current_state.values.get("pending_confirmations", []))
+    if stage in pending_confirmations:
+        pending_confirmations.remove(stage)
+
+    update = {
+        "confirmed_stages": confirmed_stages,
+        "pending_confirmations": pending_confirmations
     }
 
+    # 如果 reject，可能需要设置 error 或其他处理
+    if decision == "reject":
+        update["error"] = f"{stage} rejected by user"
+
+    # 更新状态并继续
+    graph.update_state(config, update)
+
+    # 继续执行
+    result = graph.invoke(None, config)
+    return result
+
+
+def get_workflow_state(thread_id: str = "default") -> dict:
+    """获取工作流当前状态"""
+    config = {"configurable": {"thread_id": thread_id}}
     graph = get_workflow()
-    for state in graph.stream(initial_state):
-        yield state
+    try:
+        state = graph.get_state(config)
+        return dict(state) if state else {}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def list_pending_confirmations(thread_id: str = "default") -> list:
+    """列出待确认的阶段"""
+    config = {"configurable": {"thread_id": thread_id}}
+    graph = get_workflow()
+    try:
+        state = graph.get_state(config)
+        if state:
+            pending_list = state.values.get("pending_confirmations", [])
+            task_id = state.values.get("task_id", "")
+            return [{"stage": p, "task_id": task_id} for p in pending_list]
+    except Exception:
+        pass
+    return []

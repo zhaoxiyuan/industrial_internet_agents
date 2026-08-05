@@ -1,15 +1,27 @@
 """
 P1: 作业预约、JSA分析与作业票
 Permit Agent - 处理作业申请、JSA分析和作业票生成
+支持 HumanInTheLoop - Agent 层级中断
 """
-from typing import Any
+from typing import Any, TypedDict
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent State Schema
+# ============================================================
+
+class PermitAgentState(TypedDict, total=False):
+    """P1 Agent 内部状态"""
+    messages: list
 
 
 # ============================================================
@@ -219,14 +231,78 @@ def permit_check(permit_id: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+_permit_checkpointer = MemorySaver()
+
+
 def create_permit_agent():
-    """创建 P1 作业许可 Agent"""
+    """创建 P1 作业许可 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_permit_agent_with_hitl():
+    """创建 P1 作业许可 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
+
+    # 创建 HITL Middleware - 所有工具都需要人工确认
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "permit_submit": True,      # 作业申请需要确认
+            "jsa_analyze": True,       # JSA分析需要确认
+            "permit_generate_draft": True,  # 生成作业票需要确认
+            "permit_check": False,      # 查询状态自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_permit_checkpointer,
+    )
+
+
+def run_permit_agent_with_hitl(message: str, thread_id: str = "default") -> dict:
+    """运行 P1 作业许可 Agent（支持 HITL 中断）
+
+    Args:
+        message: 输入消息
+        thread_id: 线程ID（用于 checkpoint 恢复）
+
+    Returns:
+        包含 {"result": ..., "interrupted": bool, "next": list}
+    """
+    agent = create_permit_agent_with_hitl()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # 检查是否有中断点可恢复
+    state = agent.get_state(config)
+    if state and state.next:
+        # 有暂停点，恢复执行
+        result = agent.invoke(None, config)
+    else:
+        # 正常执行
+        result = agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+
+    # 检查是否中断
+    final_state = agent.get_state(config)
+    interrupted = bool(final_state.next)
+
+    return {
+        "result": extract_output(result) if not interrupted else None,
+        "interrupted": interrupted,
+        "next": list(final_state.next) if final_state.next else []
+    }
 
 
 def run_permit_agent(message: str) -> str:

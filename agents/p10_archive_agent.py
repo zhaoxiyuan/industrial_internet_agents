@@ -6,10 +6,18 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_archive_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -214,10 +222,37 @@ def archive_suggestions(task_id: str) -> str:
 # ============================================================
 
 def create_archive_agent():
-    """创建 P10 归档复盘 Agent"""
+    """创建 P10 归档复盘 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [archive_task, archive_cases, archive_performance, archive_suggestions]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_archive_agent_with_hitl():
+    """创建 P10 归档复盘 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [archive_task, archive_cases, archive_performance, archive_suggestions]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "archive_task": True,                # 归档任务需要确认
+            "archive_cases": False,              # 挖掘案例自动批准
+            "archive_performance": False,        # 分析性能自动批准
+            "archive_suggestions": True,         # 生成建议需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_archive_checkpointer,
+    )
 
 
 def run_archive_agent(message: str) -> str:

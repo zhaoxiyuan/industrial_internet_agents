@@ -6,10 +6,18 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_disposition_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -214,10 +222,37 @@ def disposition_list(task_id: str) -> str:
 # ============================================================
 
 def create_disposition_agent():
-    """创建 P8 人机协同处置 Agent"""
+    """创建 P8 人机协同处置 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [disposition_create, disposition_confirm, disposition_status, disposition_list]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_disposition_agent_with_hitl():
+    """创建 P8 人机协同处置 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [disposition_create, disposition_confirm, disposition_status, disposition_list]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "disposition_create": True,         # 创建处置任务需要确认
+            "disposition_confirm": True,        # 确认处置需要确认
+            "disposition_status": False,        # 查询状态自动批准
+            "disposition_list": False,          # 查询列表自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_disposition_checkpointer,
+    )
 
 
 def run_disposition_agent(message: str) -> str:
