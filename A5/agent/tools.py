@@ -472,6 +472,87 @@ def query_timeline(
 
 
 # ============================================================
+# 工具 7: check_sensor_alarm
+# ============================================================
+
+@tool
+def check_sensor_alarm(sensors: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    检查传感器读数是否有告警(alarm/warning)。
+
+    Args:
+        sensors: snapshot 中的 sensors 字段(每秒 1 条)
+
+    Returns:
+        {
+          "has_alarm": True,
+          "alarms": [
+            {"sensor_id": "gas_detector_03", "type": "可燃气体浓度",
+             "value": 1.0, "threshold": 1.0, "status": "alarm"}
+          ]
+        }
+    """
+    alarms = []
+    if not sensors or not sensors[0].get("readings"):
+        return {"has_alarm": False, "alarms": []}
+    for sid, r in sensors[0]["readings"].items():
+        if r.get("status") in ("alarm", "warning"):
+            alarms.append({
+                "sensor_id": sid,
+                "type":      r.get("type", sid),
+                "value":     r.get("value"),
+                "threshold": r.get("threshold_alarm"),
+                "status":    r.get("status"),
+            })
+    return {"has_alarm": len(alarms) > 0, "alarms": alarms}
+
+
+# ============================================================
+# 工具 8: check_supervisor_absence
+# ============================================================
+
+@tool
+def check_supervisor_absence(
+    positions: List[Dict[str, Any]],
+    required: bool = True,
+) -> Dict[str, Any]:
+    """
+    检查监护人是否在危险作业区内。
+
+    Args:
+        positions: snapshot 中的 positions 字段
+        required:  是否要求监护人在场(从作业票读取)
+
+    Returns:
+        {
+          "supervisor_absent": True,
+          "supervisor_id": "P11",
+          "area": "休息室",
+          "is_supervisor_required": True
+        }
+    """
+    if not required:
+        return {"supervisor_absent": False, "reason": "监护人非必须"}
+    if not positions or not positions[0].get("positions"):
+        return {"supervisor_absent": False, "reason": "无定位数据"}
+
+    for wid, p in positions[0]["positions"].items():
+        # 通过角色判断：work_permit 中 role=="监护人" 的才算
+        if _work_permit:
+            worker = _work_permit.get("workers", {}).get(wid, {})
+            if worker.get("role") != "监护人":
+                continue
+        if not p.get("is_in_danger_zone", True):
+            return {
+                "supervisor_absent":        True,
+                "supervisor_id":            wid,
+                "area":                     p.get("area_id", "未知"),
+                "is_supervisor_required":   True,
+            }
+    return {"supervisor_absent": False, "reason": "监护人在岗"}
+
+
+# ============================================================
 # 工具清单(供 agent 调用)
 # ============================================================
 
@@ -482,4 +563,6 @@ ALL_TOOLS = [
     call_vl_expert,
     query_past_events,
     query_timeline,
+    check_sensor_alarm,
+    check_supervisor_absence,
 ]

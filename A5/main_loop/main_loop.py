@@ -14,6 +14,7 @@ main_loop入口 — 支持任意场景组合的批量运行 + A5 agent集成
 import sys
 import argparse
 import asyncio
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -61,14 +62,25 @@ async def run_scenario_with_agent(
         await collector.flush_second(sec)
 
         wall_time = collector._sec_to_wall(sec + 1)
+        # agent_now 比 wall_time 多 1 秒,允许查询当前秒数据
+        # (end_wall = wall_time + 1秒,需要 agent_now > end_wall)
+        agent_now = collector._sec_to_wall(sec + 2)
         snapshot = collector.get_snapshot(wall_time)
 
         if use_agent:
-            events = await agent.tick(wall_time, snapshot)
+            events = await agent.tick(wall_time, snapshot, agent_now=agent_now)
             if events:
                 for ev in events:
-                    print(f"  [A5][T={ev['second']:2d}s] {ev['type'][:20]:20s} | "
-                          f"{ev['person']['name']:6s} | {','.join(ev['supporting_sources'])}")
+                    person_name = ev.get("person", {}).get("name", "?")
+                    sources = ",".join(ev.get("evidence", {}).keys()) or "n/a"
+                    tick_ms = ev.pop("_tick_ms", None)
+                    tick_str = f"  (tick={tick_ms:.1f}ms)" if tick_ms is not None else ""
+                    print(f"  [A5][T={ev.get('second',0):2d}s] {ev.get('type','?'):20s} | "
+                          f"{person_name:6s} | {sources}{tick_str}")
+            elif sec % 10 == 0:  # 每 10 秒打印一次"无事件"耗时
+                tick_ms = getattr(agent, "_last_tick_ms", None)
+                tick_str = f"  (tick={tick_ms:.1f}ms)" if tick_ms else ""
+                print(f"  [A5] T={sec+1}s 无事件{tick_str}")
         else:
             # 无 agent 模式:简单打印
             cv_n = len(snapshot["cv_logs"])

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A5 作业过程监测 Demo</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:system-ui,monospace; background:#0f172a; color:#e2e8f0; padding:20px; }
+h1 { font-size:20px; margin-bottom:16px; }
+.controls { display:flex; gap:12px; align-items:center; margin-bottom:20px; }
+select,button { padding:8px 16px; font-size:14px; border-radius:6px; border:none; }
+select { background:#1e293b; color:#e2e8f0; }
+button { background:#3b82f6; color:#fff; cursor:pointer; font-weight:bold; }
+button:disabled { background:#475569; cursor:not-allowed; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.card { background:#1e293b; border-radius:8px; padding:16px; }
+.card h3 { font-size:14px; color:#94a3b8; margin-bottom:10px; border-bottom:1px solid #334155; padding-bottom:6px; }
+.row { display:flex; justify-content:space-between; padding:4px 0; font-size:13px; }
+.violation { color:#f87171; font-weight:bold; }
+.normal { color:#4ade80; }
+.warning { color:#fbbf24; }
+.alarm { color:#ef4444; font-weight:bold; }
+.progress { width:100%; height:8px; background:#334155; border-radius:4px; margin-bottom:12px; overflow:hidden; }
+.progress-bar { height:100%; background:#3b82f6; transition:width 0.3s; }
+.events { background:#1e293b; border-radius:8px; padding:16px; margin-bottom:16px; min-height:40px; }
+.event { background:#7f1d1d; border-left:3px solid #ef4444; padding:10px; margin:8px 0; border-radius:4px; font-size:13px; }
+.event .time { color:#f87171; font-weight:bold; }
+.stats { display:flex; gap:20px; font-size:12px; color:#94a3b8; margin-top:10px; }
+.summary { background:#1e293b; border-radius:8px; padding:16px; margin-top:16px; display:none; }
+.summary h3 { color:#4ade80; margin-bottom:10px; }
+</style>
+</head>
+<body>
+
+<h1>A5 作业过程监测智能体 Demo</h1>
+
+<div class="controls">
+  <select id="scenario">
+    <option value="B">场景 B - 工人摘头盔</option>
+    <option value="A">场景 A - 正常作业</option>
+    <option value="C">场景 C - 可燃气体上升</option>
+    <option value="D">场景 D - 监护人离岗</option>
+    <option value="E">场景 E - 多重违规</option>
+  </select>
+  <button id="btnStart" onclick="start()">开始模拟</button>
+  <span id="status" style="font-size:13px;color:#94a3b8;"></span>
+</div>
+
+<div class="progress"><div id="bar" class="progress-bar" style="width:0%"></div></div>
+
+<div class="grid">
+  <div class="card">
+    <h3>PPE 检测</h3><div id="ppe"></div>
+  </div>
+  <div class="card">
+    <h3>传感器</h3><div id="sensor"></div>
+  </div>
+  <div class="card">
+    <h3>人员位置</h3><div id="position"></div>
+  </div>
+  <div class="card">
+    <h3>Agent 信息</h3>
+    <div id="agent_info">等待开始...</div>
+  </div>
+</div>
+
+<div id="events" class="events"></div>
+
+<div id="summary" class="summary"></div>
+
+<script>
+let ws = null;
+
+const WORKERS = {
+  P7:  { name:"张师傅", role:"焊工" },
+  P8:  { name:"王师傅", role:"焊工" },
+  P11: { name:"赵师傅", role:"监护人" },
+};
+
+function start() {
+  const sc = document.getElementById("scenario").value;
+  document.getElementById("btnStart").disabled = true;
+  document.getElementById("status").innerText = "运行中...";
+  document.getElementById("events").innerHTML = "";
+  document.getElementById("summary").style.display = "none";
+  document.getElementById("bar").style.width = "0%";
+
+  // 连接 WebSocket
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/${sc}`);
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "start") {
+      document.getElementById("status").innerText =
+        `已启动 ${msg.scenario} (${msg.duration_sec}s)`;
+    } else if (msg.type === "tick") {
+      updateTick(msg);
+    } else if (msg.type === "done") {
+      updateDone(msg);
+    }
+  };
+
+  ws.onclose = () => {
+    document.getElementById("btnStart").disabled = false;
+    document.getElementById("status").innerText = "已结束";
+  };
+
+  ws.onerror = () => {
+    document.getElementById("status").innerText = "连接错误";
+    document.getElementById("btnStart").disabled = false;
+  };
+}
+
+function updateTick(msg) {
+  const s = msg.second;
+  const pct = (s / 30 * 100).toFixed(1);
+  document.getElementById("bar").style.width = pct + "%";
+  document.getElementById("status").innerText =
+    `T=${s}s/30s | tick=${msg.tick_ms}ms | CV=${msg.cv_n}条`;
+
+  // PPE
+  let ppe = "";
+  for (const [pid, info] of Object.entries(WORKERS)) {
+    ppe += `<div class="row">${pid}(${info.name},${info.role}): <span class="normal">正常</span></div>`;
+  }
+  document.getElementById("ppe").innerHTML = ppe;
+  document.getElementById("ppe").style.opacity = "0.5";
+  setTimeout(() => document.getElementById("ppe").style.opacity = "1", 50);
+
+  // 传感器
+  let sen = "";
+  for (const [sid, r] of Object.entries(msg.sensors || {})) {
+    const cls = r.status === "alarm" ? "alarm" :
+                r.status === "warning" ? "warning" : "normal";
+    sen += `<div class="row">${r.type}: ${r.value}${r.unit} <span class="${cls}">${r.status}</span></div>`;
+  }
+  document.getElementById("sensor").innerHTML = sen || "无数据";
+
+  // 位置
+  let pos = "";
+  for (const [wid, p] of Object.entries(msg.positions || {})) {
+    const zone = p.in_danger_zone ? "危险区" : "普通区";
+    pos += `<div class="row">${wid}: ${p.area_id}(${zone})</div>`;
+  }
+  document.getElementById("position").innerHTML = pos || "无数据";
+
+  // Agent
+  document.getElementById("agent_info").innerHTML =
+    `tick: ${msg.tick_ms}ms | CV: ${msg.cv_n}条 | 事件: ${msg.agent_events.length}`;
+
+  // 事件
+  if (msg.agent_events.length > 0) {
+    for (const ev of msg.agent_events) {
+      const el = document.createElement("div");
+      el.className = "event";
+      el.innerHTML = `<span class="time">T=${s}s</span> | ${ev.type} | ${ev.person.name}(${ev.person.role})<br>
+                      <span style="color:#fca5a5">${ev.explanation || ""}</span>`;
+      document.getElementById("events").appendChild(el);
+    }
+  }
+}
+
+function updateDone(msg) {
+  document.getElementById("status").innerText =
+    `完成! 耗时 ${msg.total_time_s.toFixed(1)}s`;
+  document.getElementById("btnStart").disabled = false;
+  document.getElementById("bar").style.width = "100%";
+
+  const s = msg.summary;
+  const lines = [`总事件: ${s.total_events}`];
+  for (const [pid, cnt] of Object.entries(s.by_person)) {
+    const info = WORKERS[pid] || { name: pid };
+    lines.push(`${info.name}: ${cnt} 次`);
+  }
+  const div = document.getElementById("summary");
+  div.style.display = "block";
+  div.innerHTML = `<h3>运行完成</h3>${lines.map(l => `<div>${l}</div>`).join("")}
+    <div class="stats">日志: ${msg.log_dir}</div>`;
+  ws.close();
+}
+</script>
+</body>
+</html>
