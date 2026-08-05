@@ -333,6 +333,145 @@ def call_vl_expert(
 
 
 # ============================================================
+# 工具 5:query_past_events(查已落盘 raw_event)
+# ============================================================
+
+_raw_event_dir: Optional[str] = None
+
+
+def set_raw_event_dir(path: Optional[str]):
+    """注入 raw_event 目录路径(供 query_past_events 使用)"""
+    global _raw_event_dir
+    _raw_event_dir = path
+
+
+def _should_inject_raw_event_dir(path: Optional[str]):
+    """由 agent.__init__ 调用"""
+    global _raw_event_dir
+    _raw_event_dir = path
+
+
+@tool
+def query_past_events(
+    start_wall: str,
+    end_wall: str,
+    person_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    查询此前已落盘的 raw_event,用于去重和事件延续判断。
+
+    Args:
+        start_wall: 起始时间(ISO)
+        end_wall:   结束时间(ISO)
+        person_id:  人员 ID 过滤(可选)
+
+    Returns:
+        [
+          {"event_id": "A5-P7-...", "type": "PPE缺失-头盔",
+           "person": {"id": "P7", ...}, "status": "ongoing",
+           "first_seen": "...", "last_seen": "..."},
+          ...
+        ]
+        若无匹配返回 []
+
+    实现:遍历 raw_event_dir 下所有 raw_event_*.json,
+    按 wall_time + person_id + status 过滤。
+    """
+    import json
+    import glob
+    if not _raw_event_dir:
+        return []
+    results = []
+    try:
+        for f in sorted(glob.glob(f"{_raw_event_dir}/raw_event_*.json")):
+            data = json.load(open(f, encoding="utf-8"))
+            for ev in data.get("events", []):
+                ev_wall = ev.get("wall_time") or ev.get("first_seen", "")
+                if start_wall <= ev_wall < end_wall:
+                    if person_id and ev.get("person", {}).get("id") != person_id:
+                        continue
+                    results.append(ev)
+    except Exception:
+        pass
+    return results
+
+
+# ============================================================
+# 工具 6:query_timeline(查违规趋势)
+# ============================================================
+
+@tool
+def query_timeline(
+    person_id: str,
+    lookback_seconds: int = 10,
+) -> Dict[str, Any]:
+    """
+    查询某人在最近 N 秒内的 PPE 违规趋势,供 Agent 判断"新事件或延续"。
+
+    Args:
+        person_id:        目标人员 ID
+        lookback_seconds: 回看秒数,默认 10
+
+    Returns:
+        {
+          "person_id": "P7",
+          "lookback_seconds": 10,
+          "timeline": [
+            {"second": 8,  "helmet_ratio": 0.88, "is_violating": true},
+            {"second": 9,  "helmet_ratio": 0.92, "is_violating": true},
+            ...
+          ],
+          "summary": "P7 从 T=8 开始违规,持续 5 秒,现已恢复"
+        }
+
+    实现:从 collector 的内存中按 person_id 过滤最近 N 秒的 CV 日志,
+    调用 analyze_ppe_compliance 做聚合。
+    """
+    import time
+    if _collector is None:
+        return {"error": "collector 未注入", "timeline": [], "summary": ""}
+
+    # 从 collector 读最近 N 秒的 CV 日志
+    now = time.time()
+    timeline = []
+    # 简化:通过 get_current_snapshot 逐个秒获取
+    for sec_offset in range(lookback_seconds):
+        # 这一秒的场景时间
+        try:
+            start = _collector._sec_to_wall(sec_offset)
+            end = _collector._sec_to_wall(sec_offset + 1)
+            logs = _collector.query_raw_logs(start, end, "cv", person_id)
+        except Exception:
+            continue
+        if not logs:
+            continue
+        stats = analyze_ppe_compliance.invoke({
+            "cv_logs": logs, "person_id": person_id, "threshold": 0.8
+        })
+        if isinstance(stats, dict) and stats.get("total_frames", 0) > 0:
+            timeline.append({
+                "second": sec_offset,
+                "helmet_ratio": stats.get("helmet_ratio", 0),
+                "is_violating": stats.get("is_violating", False),
+                "violations": stats.get("violations", []),
+            })
+
+    # 生成自然语言摘要
+    violating_seconds = [t["second"] for t in timeline if t["is_violating"]]
+    summary = f"{person_id}: 最近 {lookback_seconds} 秒无违规"
+    if violating_seconds:
+        summary = (f"{person_id}: 从 T={min(violating_seconds)} 开始违规,"
+                   f"持续 {len(violating_seconds)} 秒")
+
+    return {
+        "person_id": person_id,
+        "lookback_seconds": lookback_seconds,
+        "timeline": timeline,
+        "summary": summary,
+    }
+
+
+# ============================================================
 # 工具清单(供 agent 调用)
 # ============================================================
 
@@ -341,4 +480,6 @@ ALL_TOOLS = [
     get_current_snapshot,
     analyze_ppe_compliance,
     call_vl_expert,
+    query_past_events,
+    query_timeline,
 ]

@@ -1,442 +1,391 @@
 """
-A5Agent — 作业过程监测agent
+A5Agent -- 作业过程监测智能体
 
-调用模式:main_loop每 1 秒调一次 tick(wall_time, snapshot)。
+调用模式: 主循环每 1 秒调一次 tick(wall_time, snapshot)。
+设计: LangChain create_agent + 6 工具 + 无状态(磁盘驱动)。
 
-核心逻辑(每个 person):
-  1. 多数表决 (analyze_ppe_compliance)
-  2. 事件去重 (EventDeduplicator)
-  3. 调 VL    (call_vl_expert)
-  4. 收集证据
-  5. A5 终判  (不判 risk_level,A6 才判)
-  6. 输出 raw_event
-
-约束:
-  - 接收 wall_time 后,只能查 wall_time 之前的数据(防未来)
-  - 不判 risk_level,不发起处置
-
-输出 raw_event 字段:
-  source, event_id, type, person, second, evidence,
-  supporting_sources, wall_time, timestamp
+LangChain 版本兼容:
+  LangChain >= 1.0: 使用 create_agent(返回 CompiledStateGraph)
+  LangChain < 0.2: 使用 create_react_agent + AgentExecutor
 """
-import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from .tools import (
-    set_dependencies,
-    analyze_ppe_compliance,
-    call_vl_expert,
-    query_raw_logs,
-    get_current_snapshot,
-    ALL_TOOLS,
-)
-from .event_deduplicator import EventDeduplicator
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
+from agent.tools import (
+    ALL_TOOLS,
+    set_dependencies,
+    set_raw_event_dir,
+    analyze_ppe_compliance,
+)
+from agent.system_prompt import get_system_prompt
+
+
+# ============================================================
+# Mock LLM(Demo 用,无 .env 配置时自动生效)
+# ============================================================
+
+class MockChatModel(BaseChatModel):
+    """
+    Demo 用模拟 LLM。返回空 -> Agent 走 _rule_fallback。
+    生产环境替换为 ChatOpenAI / ChatOllama。
+    """
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="{}"))])
+
+    def _llm_type(self) -> str:
+        return "mock"
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model": "mock"}
+
+
+# ============================================================
+# A5 Agent
+# ============================================================
 
 class A5Agent:
-    """A5 作业过程监测agent(main_loop每 1 秒调一次 tick)"""
-
-    # 多数表决阈值(1 秒 25 帧中 ≥ 80% 帧违规)
-    MAJORITY_THRESHOLD = 0.8
+    """A5 作业过程监测 Agent(无状态磁盘驱动)"""
 
     def __init__(
         self,
         collector,
         work_permit: Dict[str, Any],
-        vl_model=None,
-        cooldown_sec: float = 2.0,
         raw_event_dir: Optional[str] = None,
     ):
-        """
-        Args:
-            collector:    AsyncCollector 实例(供工具读取数据)
-            work_permit:  作业票字典(必填)
-            vl_model:     VL 模型(Mock 或真实),可选
-            cooldown_sec: 事件去重冷却期(秒)
-            raw_event_dir: raw_event 输出目录,None 则不落盘
-        """
         self.collector = collector
         self.work_permit = work_permit
-        self.vl_model = vl_model
-        self.deduplicator = EventDeduplicator(cooldown_sec=cooldown_sec)
-        self.raw_event_dir = Path(raw_event_dir) if raw_event_dir else None
 
-        # 注入依赖到 tools(避免循环引用)
-        set_dependencies(collector=collector, vl_model=vl_model, work_permit=work_permit)
+        # 注入依赖到工具层
+        set_dependencies(collector=collector, vl_model=None, work_permit=work_permit)
 
+        # raw_event 落盘目录
+        self.raw_event_dir = raw_event_dir
+        set_raw_event_dir(raw_event_dir)
         if self.raw_event_dir:
-            self.raw_event_dir.mkdir(parents=True, exist_ok=True)
+            Path(self.raw_event_dir).mkdir(parents=True, exist_ok=True)
 
-        # 输出文件路径
-        self._timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self._raw_events: List[Dict] = []
+        # LLM
+        self.llm = self._build_llm()
+
+        # system prompt
+        self._system_prompt = get_system_prompt()
+
+        # 构建 Agent
+        try:
+            # LangChain >= 1.0
+            from langchain.agents import create_agent
+            self._agent = create_agent(
+                model=self.llm,
+                tools=ALL_TOOLS,
+                system_prompt=self._system_prompt,
+            )
+            self._use_v1 = True
+        except (ImportError, AttributeError):
+            # LangChain < 1.0 fallback
+            from langchain.agents import create_react_agent, AgentExecutor
+            from langchain_core.prompts import PromptTemplate
+            self._react_prompt = PromptTemplate.from_template(
+                "{system_prompt}\n\n" +
+                "你有以下工具:\n{tools}\n工具名称: {tool_names}\n\n" +
+                "{input}"
+            )
+            self._agent = AgentExecutor(
+                agent=create_react_agent(
+                    llm=self.llm, tools=ALL_TOOLS, prompt=self._react_prompt),
+                tools=ALL_TOOLS, verbose=False, handle_parsing_errors=True, max_iterations=6,
+            )
+            self._use_v1 = False
 
     # ============================================================
-    # 主入口:main_loop每 1 秒调一次
+    # LLM 构建
     # ============================================================
 
-    async def tick(
-        self,
-        wall_time: str,
-        snapshot: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """
-        处理当前秒的世界快照,返回 0~N 个 raw_event。
+    def _build_llm(self) -> BaseChatModel:
+        provider = os.getenv("LLM_PROVIDER", "").lower()
+        if provider == "openai":
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=os.getenv("LLM_MODEL", "gpt-4o"),
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_BASE_URL", None),
+                temperature=0,
+            )
+        if provider == "ollama":
+            from langchain_community.chat_models import ChatOllama
+            return ChatOllama(
+                model=os.getenv("LLM_MODEL", "qwen2.5:7b"),
+                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                temperature=0,
+            )
+        return MockChatModel()
 
-        Args:
-            wall_time: 当前现实时间(ISO),如 "2026-08-04T14:32:12.000"
-            snapshot:  当前秒的世界快照(main_loop传入)
-                       {"wall_time", "scenario_time", "cv_logs", "sensors", "positions"}
+    # ============================================================
+    # 主入口(每 1 秒被主循环调用)
+    # ============================================================
 
-        Returns:
-            List[raw_event],每条:
-            {
-              "source": "A5",
-              "event_id": "A5-P7-1734567890",
-              "type": "PPE缺失-头盔",
-              "person": {"id": "P7", "name": "张师傅", "role": "焊工"},
-              "second": 12,
-              "wall_time": "2026-08-04T14:32:12.000",
-              "evidence": {
-                "video":       {"ratio": 0.88, "frame_count": 22},
-                "vl_semantic": {...},
-                "sensors":     {...},
-                "location":    {...},
-                "work_permit": {...},
-              },
-              "supporting_sources": ["video", "vl_semantic", "location", "work_permit"],
-              "explanation": "工人 P7 摘头盔 5 秒,处于动火作业区..."
-              "timestamp": "...",
-            }
-        """
-        # ★ 设置 agent 当前时间上限(防止查未来)
+    async def tick(self, wall_time: str, snapshot: Dict) -> List[Dict]:
+        """处理当前秒的快照,返回 0~N 个 raw_event"""
         self.collector.set_agent_now(wall_time)
 
-        raw_events: List[Dict] = []
-        workers = self.work_permit.get("workers", {})
+        agent_input = self._build_input(wall_time, snapshot)
 
-        for person_id, worker_info in workers.items():
-            # ---------- 1. 多数表决 ----------
-            # 根据角色决定必检 PPE(监护人不戴护目镜)
-            worker_role = worker_info.get("role", "")
-            if worker_role == "监护人":
-                required_ppe = ["helmet"]   # 监护人只检查头盔
-            else:
-                required_ppe = self.work_permit.get("required_ppe", None)
+        # Mock LLM(无 bind_tools)直接走规则,跳过 create_agent
+        if isinstance(self.llm, MockChatModel):
+            raw_output = self._rule_fallback(wall_time, snapshot)
+            intermediate = []
+        else:
+            try:
+                if self._use_v1:
+                    messages = [
+                        SystemMessage(content=self._system_prompt),
+                        HumanMessage(content=agent_input),
+                    ]
+                    result = await self._agent.ainvoke({"messages": messages})
+                    ai_messages = [m for m in result.get("messages", [])
+                                   if isinstance(m, AIMessage)]
+                    raw_output = ai_messages[-1].content if ai_messages else "{}"
+                    intermediate = []
+                else:
+                    result = await self._agent.ainvoke({
+                        "input": json.dumps(agent_input, ensure_ascii=False)
+                    })
+                    raw_output = result.get("output", "{}")
+                    intermediate = result.get("intermediate_steps", [])
+            except Exception as e:
+                raw_output = json.dumps(
+                    {"is_event": False, "explanation": f"Agent error: {e}"})
+                intermediate = []
 
-            stats = analyze_ppe_compliance.invoke({
-                "cv_logs":      snapshot.get("cv_logs", []),
-                "person_id":    person_id,
-                "threshold":    self.MAJORITY_THRESHOLD,
-                "required_ppe": required_ppe,
-            })
+            # LLM 返回空 -> 降级
+            if not raw_output or raw_output.strip() in ("", "{}"):
+                raw_output = self._rule_fallback(wall_time, snapshot)
+                intermediate = []
 
-            is_violating = stats.get("is_violating", False)
-
-            # 监护人特殊判定:位置离开动火区也算违规
-            if person_id == "P11":
-                pos_data = snapshot.get("positions", [{}])
-                if pos_data:
-                    p11_pos = pos_data[0].get("positions", {}).get("P11", {})
-                    if not p11_pos.get("is_in_danger_zone", True):
-                        is_violating = True
-
-            # ---------- 2. 事件去重 ----------
-            episode_status = self.deduplicator.check(person_id, is_violating)
-            if episode_status != EventDeduplicator.NEW_EPISODE:
-                continue
-
-            # ---------- 3. 调 VL(按需)----------
-            vl_evidence = await self._call_vl(person_id, stats, snapshot)
-
-            # ---------- 4. 收集证据 ----------
-            evidence = self._collect_evidence(person_id, stats, vl_evidence, snapshot)
-
-            # ---------- 5. A5 终判 ----------
-            if not self._is_real_violation(evidence):
-                continue
-
-            # ---------- 6. 输出 raw_event ----------
-            event = self._build_raw_event(
-                person_id, worker_info, snapshot, evidence,
-                wall_time=wall_time,
-            )
-            raw_events.append(event)
-            self._raw_events.append(event)
-
-        # 落盘(每 tick 落一份累计)
-        if self.raw_event_dir and raw_events:
-            self._save_raw_events(raw_events, wall_time)
-
+        raw_events = self._parse_output(raw_output, wall_time, snapshot)
+        for ev in raw_events:
+            self._save_raw_event(ev, intermediate)
         return raw_events
 
     # ============================================================
-    # 内部:调 VL
+    # 输入组装(自然语言)
     # ============================================================
 
-    async def _call_vl(
-        self,
-        person_id: str,
-        stats: Dict,
-        snapshot: Dict,
-    ) -> Dict[str, Any]:
-        """调 VL 专家(1 轮,够用)"""
-        context = self._build_vl_context(person_id, snapshot)
-        question = (
-            f"图中作业人员 {person_id} 是否有 PPE 违规或危险行为?"
-        )
+    def _build_input(self, wall_time: str, snapshot: Dict) -> str:
+        cv_logs = snapshot.get("cv_logs", [])
+        sensors = snapshot.get("sensors", [{}])
+        positions = snapshot.get("positions", [{}])
 
-        # 调 VL
-        try:
-            result = call_vl_expert.invoke({
-                "question": question,
-                "history":  stats,
-                "context":  context,
-            })
-            return result
-        except Exception as e:
-            return {
-                "is_violation": None,
-                "violation_type": "unknown",
-                "confidence": 0.0,
-                "reasoning": f"VL 调用失败: {e}",
-                "_placeholder": True,
-            }
+        # PPE 摘要
+        cv_parts = ["PPE检测摘要(CV模型,每秒25帧,>=80%帧缺失即违规):"]
+        for pid, winfo in self.work_permit.get("workers", {}).items():
+            person_logs = [l for l in cv_logs if l.get("person_id") == pid]
+            role = winfo.get("role", "")
+            name = winfo.get("name", pid)
+            if not person_logs:
+                cv_parts.append(f"  {pid}({name},{role}): 无数据")
+                continue
+            n_bad = sum(1 for l in person_logs
+                        if not next((d["value"] for d in l["detections"]
+                                     if d["class_name"] == "helmet"), True))
+            ratio = n_bad / len(person_logs)
+            mark = "*** 头盔缺失 ***" if ratio >= 0.8 else "正常"
+            cv_parts.append(
+                f"  {pid}({name},{role}): {len(person_logs)}帧,"
+                f"{n_bad}帧未戴头盔({ratio:.0%}) -> {mark}"
+            )
 
-    def _build_vl_context(self, person_id: str, snapshot: Dict) -> Dict:
-        """构造 VL 上下文"""
-        pos_data = snapshot.get("positions", [{}])
-        person_pos = {}
-        if pos_data:
-            person_pos = pos_data[0].get("positions", {}).get(person_id, {})
-
-        sensor_data = snapshot.get("sensors", [{}])
-        gas_status = "normal"
-        if sensor_data:
-            gas_reading = sensor_data[0].get("readings", {}).get("gas_detector_03", {})
-            gas_status = gas_reading.get("status", "normal")
-
-        return {
-            "person_id":      person_id,
-            "work_type":      "动火作业",
-            "in_danger_zone": person_pos.get("is_in_danger_zone", False),
-            "area_id":        person_pos.get("area_id", "unknown"),
-            "gas_status":     gas_status,
-            "required_ppe":   self.work_permit.get("required_ppe", []),
-        }
-
-    # ============================================================
-    # 内部:收集证据
-    # ============================================================
-
-    def _collect_evidence(
-        self,
-        person_id: str,
-        stats: Dict,
-        vl_evidence: Dict,
-        snapshot: Dict,
-    ) -> Dict[str, Any]:
-        """收集多源证据"""
-        pos_data = snapshot.get("positions", [{}])
-        person_pos = {}
-        if pos_data:
-            person_pos = pos_data[0].get("positions", {}).get(person_id, {})
-
-        sensor_data = snapshot.get("sensors", [{}])
-        sensor_alarm = False
-        if sensor_data:
-            for r in sensor_data[0].get("readings", {}).values():
-                if r.get("status") == "alarm":
-                    sensor_alarm = True
-                    break
-
-        evidence = {
-            "video":       stats,
-            "vl_semantic": vl_evidence,
-            "sensors": {
-                "alarm": sensor_alarm,
-                "raw":   sensor_data[0] if sensor_data else {},
-            },
-            "location":    person_pos,
-            "work_permit": {
-                "required_ppe": self.work_permit.get("required_ppe", []),
-                "supervisor_required": self.work_permit.get("supervisor_required", False),
-            },
-        }
-        return evidence
-
-    # ============================================================
-    # 内部:A5 终判(不判 risk_level)
-    # ============================================================
-
-    def _is_real_violation(self, evidence: Dict) -> bool:
-        """
-        A5 终判规则(只判"是不是违规",不判"多严重"):
-        1. CV 多数表决违规 + 至少 1 个其他证据源支持 → 违规
-        2. 至少 3 个证据源独立支持 → 违规
-        """
-        video = evidence["video"]
-        vl = evidence["vl_semantic"]
-        loc = evidence["location"]
-        sensor = evidence["sensors"]
-
-        # 规则 1:VL 确认 + CV 异常
-        if vl.get("is_violation") is True and video.get("is_violating"):
-            return True
-
-        # 规则 2:CV 异常 + 在危险区 + VL 没否认
-        if (video.get("is_violating") and
-            loc.get("is_in_danger_zone") and
-            vl.get("is_violation") is not False):
-            return True
-
-        # 规则 3:CV 异常 + 传感器告警(VL 不可用时降级)
-        if (video.get("is_violating") and
-            sensor.get("alarm") and
-            vl.get("is_violation") is not False):
-            return True
-
-        # 规则 4:监护人位置异常(离开危险区)
-        worker_info_check = video.get("person_id")
-        if worker_info_check and not loc.get("is_in_danger_zone"):
-            # 这条已被 tick 阶段处理
-            if video.get("is_violating"):
-                return True
-
-        return False
-
-    # ============================================================
-    # 内部:组装 raw_event
-    # ============================================================
-
-    def _build_raw_event(
-        self,
-        person_id: str,
-        worker_info: Dict,
-        snapshot: Dict,
-        evidence: Dict,
-        wall_time: str,
-    ) -> Dict[str, Any]:
-        """组装 raw_event(A5 输出物,无 risk_level)"""
-        sec = self._extract_second(snapshot.get("scenario_time", "0s"))
-
-        # 收集支持证据源
-        supporting_sources = []
-        if evidence["video"].get("is_violating"):
-            supporting_sources.append("video")
-        if evidence["vl_semantic"].get("is_violation"):
-            supporting_sources.append("vl_semantic")
-        if evidence["sensors"].get("alarm"):
-            supporting_sources.append("sensor")
-        if evidence["location"].get("is_in_danger_zone"):
-            supporting_sources.append("location")
-        if evidence["work_permit"].get("required_ppe"):
-            supporting_sources.append("work_permit")
-
-        # A5 的自然语言解释
-        explanation = self._explain(person_id, evidence)
-
-        return {
-            "source":      "A5",
-            "event_id":    f"A5-{person_id}-{int(time.time()*1000)}",
-            "type":        evidence["vl_semantic"].get(
-                              "violation_type",
-                              "未分类违规"
-                          ),
-            "person": {
-                "id":   person_id,
-                "name": worker_info.get("name", person_id),
-                "role": worker_info.get("role", "作业人员"),
-            },
-            "second":  sec,
-            "wall_time": wall_time,
-            "evidence": evidence,
-            "supporting_sources": supporting_sources,
-            "explanation": explanation,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "note": "A5 不判定 risk_level,由 A6 完成",
-        }
-
-    def _explain(self, person_id: str, evidence: Dict) -> str:
-        """
-        A5 agent对这次违规的自然语言解释。
-        输出格式: "依据 + 结论"
-        """
-        parts = []
-        v = evidence["video"]
-        if v.get("is_violating"):
-            violations = v.get("violations", [])
-            if violations:
-                parts.append(
-                    f"CV 多数表决显示 {person_id} 在 {v['total_frames']} 帧中"
-                    f"有 {int(v['total_frames']*v.get(violations[0]+'_ratio', 0))}"
-                    f"帧({v.get(violations[0]+'_ratio', 0):.0%})"
-                    f"缺失 {','.join(violations)}"
+        # 传感器
+        sensor_parts = ["传感器读数(动火区-A):"]
+        if sensors and sensors[0].get("readings"):
+            for r in sensors[0]["readings"].values():
+                tw = r.get("threshold_warning")
+                ta = r.get("threshold_alarm")
+                th = f"(警戒线{tw},报警线{ta})" if ta else ""
+                mark = ("***异常***" if r["status"] == "alarm"
+                        else "**接近警戒**" if r["status"] == "warning"
+                        else "正常")
+                sensor_parts.append(
+                    f"  {r['type']}: {r['value']}{r['unit']} -> {r['status']} {mark} {th}"
                 )
 
-        vl = evidence["vl_semantic"]
-        if vl.get("reasoning"):
-            parts.append(f"VL 判断:{vl['reasoning']}")
+        # 位置
+        pos_parts = ["人员位置(UWB定位):"]
+        if positions and positions[0].get("positions"):
+            for wid, p in positions[0]["positions"].items():
+                zone = "危险区" if p.get("is_in_danger_zone") else "普通区"
+                mark = "***不在作业区***" if not p.get("is_in_danger_zone") else ""
+                pos_parts.append(f"  {wid}: {p['area_id']}({zone}) {mark}")
 
-        loc = evidence["location"]
-        if not loc.get("is_in_danger_zone", True):
-            parts.append(f"{person_id} 不在危险作业区({loc.get('area_id', '未知')})")
-        elif loc.get("is_in_danger_zone"):
-            parts.append(f"{person_id} 在危险区({loc.get('area_id', '未知')})")
+        # 作业票
+        permit_parts = [
+            f"作业票: {self.work_permit['permit_id']}({self.work_permit['level']})",
+            f"必戴PPE: {', '.join(self.work_permit['required_ppe'])}",
+        ]
 
-        sensor = evidence["sensors"]
-        if sensor.get("alarm"):
-            parts.append("现场传感器触发告警")
-
-        return " | ".join(parts) if parts else "综合多源证据判定违规"
-
-    def _extract_second(self, scenario_time_str: str) -> int:
+        # 趋势(最近 5 秒)
+        trend_parts = ["最近5秒违规趋势:"]
         try:
-            return int(float(scenario_time_str.rstrip("s")))
-        except (ValueError, AttributeError):
-            return 0
+            cur_sec = int(self.collector._wall_to_sec(wall_time))
+            for pid in self.work_permit.get("workers", {}):
+                segs = []
+                for off in range(min(4, cur_sec - 1), -1, -1):
+                    s = cur_sec - off
+                    start = self.collector._sec_to_wall(s)
+                    end = self.collector._sec_to_wall(s + 1)
+                    logs = self.collector.query_raw_logs(start, end, "cv", pid)
+                    if not logs:
+                        continue
+                    n_bad = sum(1 for l in logs
+                                if not next((d["value"] for d in l["detections"]
+                                             if d["class_name"] == "helmet"), True))
+                    r = n_bad / len(logs)
+                    cur = "*" if off == 0 else ""
+                    segs.append(f"T-{off}:{r:.0%}{cur}")
+                if segs:
+                    trend_parts.append(f"  {pid}: {' | '.join(reversed(segs))}")
+                else:
+                    trend_parts.append(f"  {pid}: 无历史")
+        except Exception:
+            pass
+
+        # 组装
+        return (
+            f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            f"!!! 注意: 当前现实时间是 {wall_time} !!!\n"
+            f"!!! 你只能查询 <= 这个时间点的日志,不能看未来 !!!\n"
+            f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            f"\n"
+            f"{chr(10).join(permit_parts)}\n"
+            f"\n"
+            f"{chr(10).join(trend_parts)}\n"
+            f"\n"
+            f"{chr(10).join(cv_parts)}\n"
+            f"\n"
+            f"{chr(10).join(sensor_parts)}\n"
+            f"\n"
+            f"{chr(10).join(pos_parts)}\n"
+            f"\n"
+            f"以上是当前现场数据。请判断是否存在需报告的候选安全事件。\n"
+            f"如有,输出JSON格式化的事件;如无,输出 {{\"is_event\":false}}。\n"
+            f"注意: 先调用 query_past_events 检查是否已报告过,避免重复。"
+        )
+
+    # ============================================================
+    # 输出解析
+    # ============================================================
+
+    def _parse_output(self, raw: str, wall_time: str, snapshot: Dict) -> List[Dict]:
+        if not raw:
+            return []
+        try:
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0]
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0]
+            raw = raw.strip()
+            if raw.startswith("{") and raw.endswith("}"):
+                parsed = json.loads(raw)
+            else:
+                return []
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(parsed, dict) or not parsed.get("is_event"):
+            return []
+
+        sec = int(float(snapshot.get("scenario_time", "0s").rstrip("s")))
+        person_info = parsed.get("person", {})
+        person_id = person_info.get("id", "?")
+
+        return [{
+            "source":      "A5",
+            "event_id":    f"A5-{person_id}-{int(time.time() * 1000)}",
+            "type":        parsed.get("type", "未分类"),
+            "person":      person_info,
+            "second":      sec,
+            "wall_time":   wall_time,
+            "first_seen":  wall_time,
+            "last_seen":   wall_time,
+            "status":      "ongoing",
+            "evidence":    parsed.get("evidence", {}),
+            "explanation": parsed.get("explanation", ""),
+            "note":        "A5不判定risk_level,由A6完成",
+        }]
+
+    # ============================================================
+    # 降级规则
+    # ============================================================
+
+    def _rule_fallback(self, wall_time: str, snapshot: Dict) -> str:
+        events = []
+        cv_logs = snapshot.get("cv_logs", [])
+        for pid, info in self.work_permit.get("workers", {}).items():
+            req = ["helmet"] if info.get("role") == "监护人" else None
+            stats = analyze_ppe_compliance.invoke({
+                "cv_logs": cv_logs, "person_id": pid,
+                "threshold": 0.8, "required_ppe": req,
+            })
+            if not stats.get("is_violating"):
+                continue
+            events.append({
+                "is_event": True,
+                "type": "PPE缺失-头盔",
+                "person": {"id": pid, "name": info.get("name", pid), "role": info.get("role", "")},
+                "explanation": (
+                    f"CV多数表决: {stats.get('helmet_violation',0)}/"
+                    f"{stats['total_frames']}帧未戴头盔({stats['helmet_ratio']:.0%})"
+                ),
+                "evidence": {"cv_ratio": stats["helmet_ratio"]},
+            })
+        return json.dumps(
+            events[0] if events else {"is_event": False, "explanation": "无异常"},
+            ensure_ascii=False
+        )
 
     # ============================================================
     # 落盘
     # ============================================================
 
-    def _save_raw_events(self, events: List[Dict], wall_time: str):
-        """把当前 tick 输出的 raw_event 落盘(增量)"""
+    def _save_raw_event(self, event: Dict, intermediate: List):
         if not self.raw_event_dir:
             return
-
-        filename = f"raw_event_{self._timestamp}_{wall_time.replace(':', '').replace('-', '').replace('.', '_')}.json"
-        filepath = self.raw_event_dir / filename
-
+        safe_ts = event["wall_time"].replace(":", "").replace("-", "").replace(".", "_")
+        filepath = Path(self.raw_event_dir) / f"raw_event_{safe_ts}.json"
         payload = {
-            "agent":   "A5",
-            "wall_time": wall_time,
-            "new_events_count": len(events),
-            "events":  events,
+            "wall_time": event["wall_time"],
+            "events": [event],
+            "intermediate_steps": [
+                {"action": str(a), "observation": str(o)[:200]}
+                for a, o in (intermediate or [])
+            ],
         }
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
     # ============================================================
-    # 辅助方法
+    # 辅助
     # ============================================================
 
-    def all_events(self) -> List[Dict]:
-        """返回本次运行所有 raw_event"""
-        return self._raw_events.copy()
-
     def summary(self) -> Dict[str, Any]:
-        """本次运行的统计摘要"""
+        import glob
+        events = []
+        if self.raw_event_dir:
+            for f in sorted(glob.glob(f"{self.raw_event_dir}/raw_event_*.json")):
+                data = json.load(open(f, encoding="utf-8"))
+                events.extend(data.get("events", []))
         by_person = {}
-        by_type = {}
-        for ev in self._raw_events:
-            by_person[ev["person"]["id"]] = by_person.get(ev["person"]["id"], 0) + 1
-            by_type[ev["type"]] = by_type.get(ev["type"], 0) + 1
-        return {
-            "total_events": len(self._raw_events),
-            "by_person":   by_person,
-            "by_type":     by_type,
-        }
+        for ev in events:
+            pid = ev.get("person", {}).get("id", "?")
+            by_person[pid] = by_person.get(pid, 0) + 1
+        return {"total_events": len(events), "by_person": by_person}

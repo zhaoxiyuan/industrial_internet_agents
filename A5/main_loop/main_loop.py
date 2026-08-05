@@ -33,9 +33,6 @@ async def run_scenario_with_agent(
     from pathlib import Path
 
     from stream_players.async_collector import AsyncCollector
-    from stream_players.mock_cv_player import MockCVPlayer
-    from stream_players.mock_sensor_stream import MockSensorStream
-    from stream_players.mock_positioning_stream import MockPositioningStream
     from scenario_data.mock_work_permit import WORK_PERMIT
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -49,7 +46,6 @@ async def run_scenario_with_agent(
         agent = A5Agent(
             collector=collector,
             work_permit=WORK_PERMIT,
-            vl_model=None,
             raw_event_dir=agent_raw_dir,
         )
     else:
