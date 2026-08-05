@@ -1,0 +1,36 @@
+{
+  "wall_time": "2026-08-05T13:51:05.838",
+  "events": [
+    {
+      "source": "A5",
+      "event_id": "A5-SYS-1785909060821",
+      "type": "环境异常-传感器告警",
+      "person": {
+        "id": "SYS",
+        "name": "传感器系统",
+        "role": "设备"
+      },
+      "second": 20,
+      "wall_time": "2026-08-05T13:50:56.838",
+      "first_seen": "2026-08-05T13:50:56.838",
+      "last_seen": "2026-08-05T13:51:05.838",
+      "status": "ongoing",
+      "evidence": {
+        "sensor": {
+          "flame_detector_03": {
+            "type": "火焰探测",
+            "value": true,
+            "unit": "bool",
+            "status": "alarm",
+            "threshold_warning": null,
+            "threshold_alarm": null,
+            "location": "动火区-A 北侧"
+          }
+        }
+      },
+      "explanation": "可燃气体浓度: 1.1%LEL 超过报警线(1.0)",
+      "note": "A5不判定risk_level,由A6完成",
+      "duration_sec": 9.0
+    }
+  ]
+}

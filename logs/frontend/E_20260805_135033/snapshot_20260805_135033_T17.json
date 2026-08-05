@@ -1,0 +1,71 @@
+{
+  "scenario": "E",
+  "type": "snapshot",
+  "created_at": "20260805_135033",
+  "second": 17,
+  "log_count": 1,
+  "snapshots": [
+    {
+      "second": 17,
+      "time_range": [
+        17.0,
+        18.0
+      ],
+      "cv_log_count": 75,
+      "cv_summary": {
+        "P11": {
+          "total_frames": 25,
+          "helmet_missing_count": 0,
+          "helmet_missing_ratio": 0.0,
+          "goggles_missing_count": 25,
+          "suit_missing_count": 0,
+          "is_violating": true
+        },
+        "P7": {
+          "total_frames": 25,
+          "helmet_missing_count": 25,
+          "helmet_missing_ratio": 1.0,
+          "goggles_missing_count": 0,
+          "suit_missing_count": 0,
+          "is_violating": true
+        },
+        "P8": {
+          "total_frames": 25,
+          "helmet_missing_count": 0,
+          "helmet_missing_ratio": 0.0,
+          "goggles_missing_count": 0,
+          "suit_missing_count": 0,
+          "is_violating": false
+        }
+      },
+      "sensor_summary": {
+        "flame_detector_03": {
+          "value": false,
+          "status": "normal"
+        },
+        "gas_detector_03": {
+          "value": 0.8,
+          "status": "warning"
+        },
+        "temperature_03": {
+          "value": 32.0,
+          "status": "normal"
+        }
+      },
+      "position_summary": {
+        "P11": {
+          "area_id": "休息室",
+          "in_danger_zone": false
+        },
+        "P7": {
+          "area_id": "动火区-A",
+          "in_danger_zone": true
+        },
+        "P8": {
+          "area_id": "动火区-A",
+          "in_danger_zone": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "wall_time": "2026-08-05T13:51:05.838",
+  "events": [
+    {
+      "source": "A5",
+      "event_id": "A5-P11-1785909050892",
+      "type": "监护人脱岗",
+      "person": {
+        "id": "P11",
+        "name": "赵师傅",
+        "role": "监护人"
+      },
+      "second": 12,
+      "wall_time": "2026-08-05T13:50:48.838",
+      "first_seen": "2026-08-05T13:50:48.838",
+      "last_seen": "2026-08-05T13:51:05.838",
+      "status": "ongoing",
+      "evidence": {
+        "position": {
+          "position": [
+            150.0,
+            120.0
+          ],
+          "area_id": "休息室",
+          "area_type": "辅助设施",
+          "speed": 1.4,
+          "is_in_danger_zone": false
+        }
+      },
+      "explanation": "监护人持续离岗,当前在 休息室",
+      "note": "A5不判定risk_level,由A6完成",
+      "duration_sec": 17.0
+    }
+  ]
+}

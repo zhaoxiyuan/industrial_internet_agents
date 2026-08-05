@@ -1,0 +1,45 @@
+{
+  "scenario": "E",
+  "type": "position",
+  "created_at": "20260805_135033",
+  "second": 22,
+  "log_count": 1,
+  "logs": [
+    {
+      "scenario_time": "22.5s",
+      "wall_time": "2026-08-05T13:50:58.919",
+      "positions": {
+        "P11": {
+          "position": [
+            150.0,
+            120.0
+          ],
+          "area_id": "休息室",
+          "area_type": "辅助设施",
+          "speed": 0.0,
+          "is_in_danger_zone": false
+        },
+        "P7": {
+          "position": [
+            102.45,
+            88.3
+          ],
+          "area_id": "动火区-A",
+          "area_type": "危险作业区",
+          "speed": 0.0,
+          "is_in_danger_zone": true
+        },
+        "P8": {
+          "position": [
+            105.2,
+            88.1
+          ],
+          "area_id": "动火区-A",
+          "area_type": "危险作业区",
+          "speed": 0.0,
+          "is_in_danger_zone": true
+        }
+      }
+    }
+  ]
+}
