@@ -196,6 +196,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        elif path == "/data/input/mock_work_content.json":
+            mock_file = os.path.join(os.path.dirname(WEB_DIR), "data", "input", "mock_work_content.json")
+            if os.path.exists(mock_file):
+                with open(mock_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                body = content.encode("utf-8")
+                self.send_header("Content-Length", len(body))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            else:
+                self.send_error(404)
+
         elif path == "/api/workflow/state":
             thread_id = parse_qs(parsed.query).get("thread_id", [None])[0]
             if thread_id:

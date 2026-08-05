@@ -98,6 +98,42 @@ class HumanInTheLoop:
                 {"value": "reject", "label": "驳回申请", "color": "red"},
             ]
         },
+        "P1_permit_submit": {
+            "title": "作业申请提交",
+            "description": "请确认提交的作业申请信息",
+            "next_action": "continue",
+            "options": [
+                {"value": "approve", "label": "确认申请", "color": "green"},
+                {"value": "reject", "label": "取消", "color": "red"},
+            ]
+        },
+        "P1_jsa_analyze": {
+            "title": "JSA分析",
+            "description": "请确认JSA分析结果",
+            "next_action": "continue",
+            "options": [
+                {"value": "approve", "label": "确认分析结果", "color": "green"},
+                {"value": "reject", "label": "重新分析", "color": "orange"},
+            ]
+        },
+        "P1_generate_draft": {
+            "title": "生成作业票草稿",
+            "description": "请确认作业票草稿内容",
+            "next_action": "continue",
+            "options": [
+                {"value": "approve", "label": "确认草稿", "color": "green"},
+                {"value": "reject", "label": "重新生成", "color": "orange"},
+            ]
+        },
+        "P1_approve_permit": {
+            "title": "作业票审批",
+            "description": "请最终确认作业票，审批通过后将生成正式作业票",
+            "next_action": "continue",
+            "options": [
+                {"value": "approve", "label": "批准作业票", "color": "green"},
+                {"value": "reject", "label": "驳回", "color": "red"},
+            ]
+        },
         "P2": {
             "title": "是否纳入监测",
             "description": "请确认是否将此作业纳入智能监测",

@@ -1047,32 +1047,28 @@
                     <!-- 左侧：作业申请 -->
                     <div class="execute-left">
                         <div class="application-form" style="margin-top: 0; padding: 15px;">
-                            <div class="section-title">📋 作业申请</div>
-                            <div class="form-row">
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="form-label">作业类型</label>
-                                    <select class="form-input" id="app-work-type">
-                                        <option value="受限空间作业">受限空间作业</option>
-                                        <option value="高空作业">高空作业</option>
-                                        <option value="动火作业">动火作业</option>
-                                        <option value="吊装作业">吊装作业</option>
-                                        <option value="临时用电作业">临时用电作业</option>
-                                    </select>
-                                </div>
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="form-label">作业区域</label>
-                                    <input type="text" class="form-input" id="app-region" value="炼油厂区01">
-                                </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <div class="section-title" style="margin: 0; padding: 0; border: none;">📋 作业申请</div>
+                                <button class="btn btn-secondary" onclick="fillMockData()" style="padding: 6px 12px; font-size: 12px;">🔄 生成mock数据</button>
                             </div>
-                            <div class="form-row">
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="form-label">介质</label>
-                                    <input type="text" class="form-input" id="app-medium" value="原油">
-                                </div>
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="form-label">设备</label>
-                                    <input type="text" class="form-input" id="app-equipment" value="反应器R-101">
-                                </div>
+                            <div class="form-group">
+                                <label class="form-label">作业内容</label>
+                                <textarea class="form-input" id="app-work-type" rows="3" placeholder="请输入作业内容" style="height: 60px !important; min-height: 60px !important;"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">作业区域</label>
+                                <select class="form-input" id="app-region">
+                                    <option value="炼油厂区01">炼油厂区01</option>
+                                    <option value="炼油厂区02">炼油厂区02</option>
+                                    <option value="催化裂化装置">催化裂化装置</option>
+                                    <option value="加氢处理装置">加氢处理装置</option>
+                                    <option value="储罐区A">储罐区A</option>
+                                    <option value="储罐区B">储罐区B</option>
+                                    <option value="管廊架区域">管廊架区域</option>
+                                    <option value="火炬系统区">火炬系统区</option>
+                                    <option value="污水处理区">污水处理区</option>
+                                    <option value="中心控制室">中心控制室</option>
+                                </select>
                             </div>
                             <div class="section-title">👤 作业人员</div>
                             <div class="form-row">
@@ -1084,10 +1080,6 @@
                                     <label class="form-label">工牌号</label>
                                     <input type="text" class="form-input" id="app-person-badge" value="P-101">
                                 </div>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">资质(逗号分隔)</label>
-                                <input type="text" class="form-input" id="app-person-quals" value="受限空间作业证,易燃易爆作业证">
                             </div>
                             <div class="section-title">⏰ 计划时间</div>
                             <div class="form-row">
@@ -1102,7 +1094,6 @@
                             </div>
                             <div class="btn-group">
                                 <button class="btn btn-primary" onclick="startWorkflow()">🚀 启动</button>
-                                <button class="btn btn-secondary" onclick="refreshWorkflow()">🔄 刷新</button>
                                 <button class="btn btn-secondary" onclick="resetWorkflow()">🗑️ 重置</button>
                             </div>
                         </div>
@@ -1114,7 +1105,7 @@
                             <div class="log-entry"><span class="log-time">[--:--:--]</span> 就绪</div>
                         </div>
                         <div class="execute-right-bottom">
-                            <div class="detail-panel" style="padding: 15px;">
+                            <div id="detail-panel" class="detail-panel" style="padding: 15px;">
                                 <div class="detail-section-title">⚙️ 控制面板</div>
                                 <div id="control-panel" style="color: #666;">启动工作流后显示状态</div>
                             </div>
@@ -1265,6 +1256,7 @@
             loadModelConfig();
             loadAllPrompts();
             renderWorkflowDiagram();
+            fillMockData();
         });
 
         // ========== 标签页切换 ==========
@@ -1385,7 +1377,8 @@
                 const info = STAGE_INFO[stage];
                 const isCompleted = confirmed.includes(stage);
                 const isCurrent = stage === currentStage;
-                const isPending = pending.includes(stage);
+                // 检查是否待确认（包括子步骤）
+                const isPending = pending.includes(stage) || pending.some(p => p.startsWith(stage + '_'));
 
                 let nodeClass = '';
                 let statusIcon = '<span class="status-dot"></span><span class="status-text">待执行</span>';
@@ -1495,18 +1488,29 @@
         }
 
         // ========== 工作流执行 ==========
+        function fillMockData() {
+            fetch('/data/input/mock_work_content.json')
+                .then(r => r.json())
+                .then(data => {
+                    const randomIndex = Math.floor(Math.random() * data.length);
+                    const item = data[randomIndex];
+                    document.getElementById('app-work-type').value = item.work_type || '';
+                    document.getElementById('app-region').value = item.region || '';
+                    document.getElementById('app-person-name').value = item.person_name || '';
+                    document.getElementById('app-person-badge').value = item.person_badge || '';
+                    document.getElementById('app-start').value = item.start || '';
+                    document.getElementById('app-end').value = item.end || '';
+                })
+                .catch(() => {});
+        }
+
         function buildApplicationJson() {
-            const equipment = document.getElementById('app-equipment').value.split(',').map(e => e.trim()).filter(e => e);
-            const quals = document.getElementById('app-person-quals').value.split(',').map(e => e.trim()).filter(e => e);
             return {
                 work_type: document.getElementById('app-work-type').value,
                 region: document.getElementById('app-region').value,
-                equipment: equipment,
-                medium: document.getElementById('app-medium').value,
                 personnel: [{
                     name: document.getElementById('app-person-name').value,
-                    badge_id: document.getElementById('app-person-badge').value,
-                    qualifications: quals
+                    badge_id: document.getElementById('app-person-badge').value
                 }],
                 planned_start: document.getElementById('app-start').value,
                 planned_end: document.getElementById('app-end').value
@@ -1566,14 +1570,15 @@
                 threadId: null
             };
             state.selectedWorkflowNode = null;
-            document.getElementById('detail-panel').innerHTML = `
-                <div style="color: #999; text-align: center; padding: 40px;">
-                    👈 点击左侧工作流节点查看详情
-                </div>
-            `;
             renderWorkflowDiagram();
             updateControlPanel();
             document.getElementById('log-container').innerHTML = '<div class="log-entry"><span class="log-time">[--:--:--]</span> 已重置</div>';
+            document.getElementById('app-work-type').value = '';
+            document.getElementById('app-region').value = '';
+            document.getElementById('app-person-name').value = '';
+            document.getElementById('app-person-badge').value = '';
+            document.getElementById('app-start').value = '';
+            document.getElementById('app-end').value = '';
         }
 
         function updateControlPanel() {
@@ -1604,7 +1609,9 @@
 
         // ========== HITL 弹窗 ==========
         function showHitlModal(stage, data) {
-            const info = STAGE_INFO[stage];
+            // 提取基础阶段名称（如从"P1_permit_submit"提取"P1"）
+            const baseStage = stage.split('_')[0];
+            const info = STAGE_INFO[baseStage] || STAGE_INFO[stage];
             document.getElementById('modal-icon').textContent = info.icon;
             document.getElementById('modal-title').textContent = stage + ' - ' + info.name;
             document.getElementById('modal-subtitle').textContent = info.humanConfirm || '人工确认';
