@@ -44,6 +44,12 @@ button:disabled { background:#475569; cursor:not-allowed; }
     <option value="D">场景 D - 监护人离岗</option>
     <option value="E">场景 E - 多重违规</option>
   </select>
+  <select id="interval" style="width:140px;">
+    <option value="5">Agent: 每5秒</option>
+    <option value="10" selected>Agent: 每10秒</option>
+    <option value="15">Agent: 每15秒</option>
+    <option value="30">Agent: 仅T=30秒</option>
+  </select>
   <button id="btnStart" onclick="start()">开始模拟</button>
   <span id="status" style="font-size:13px;color:#94a3b8;"></span>
 </div>
@@ -88,23 +94,27 @@ const WORKERS = {
 
 function start() {
   const sc = document.getElementById("scenario").value;
+  const interval = document.getElementById("interval").value;
   document.getElementById("btnStart").disabled = true;
   document.getElementById("status").innerText = "运行中...";
   document.getElementById("events").innerHTML = "";
   document.getElementById("summary").style.display = "none";
   document.getElementById("bar").style.width = "0%";
 
-  // 连接 WebSocket
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/${sc}`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/${sc}?interval=${interval}`);
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "start") {
       document.getElementById("status").innerText =
-        `已启动 ${msg.scenario} (${msg.duration_sec}s)`;
+        `已启动 ${msg.scenario} (${msg.duration_sec}s) | Agent间隔=${msg.agent_interval_sec}s`;
     } else if (msg.type === "tick") {
       updateTick(msg);
+    } else if (msg.type === "agent_events") {
+      updateAgentEvents(msg);
+    } else if (msg.type === "agent_waiting") {
+      document.getElementById("agent_info").innerHTML = msg.msg;
     } else if (msg.type === "done") {
       updateDone(msg);
     }
@@ -161,31 +171,33 @@ function updateTick(msg) {
 
   // Agent
   document.getElementById("agent_info").innerHTML =
-    `tick: ${msg.tick_ms}ms | CV: ${msg.cv_n}条 | 事件: ${msg.agent_events.length}`;
+    `CV: ${msg.cv_n}条 | Agent队列: ${msg.agent_pending||0}个`;
 
-  // 事件处理:ongoing 更新同一卡片,closed 关闭
-  if (msg.agent_events.length > 0) {
-    for (const ev of msg.agent_events) {
-      // 用 first_seen 区分同一人的多次同类违规
-      const eid = (ev.person.id + "-" + ev.type + "-" + (ev.first_seen||"")).replace(/[^a-zA-Z0-9]/g, "");
-      const existing = document.getElementById("ev-" + eid);
+  // 事件已移至 updateAgentEvents 异步处理
+}
 
-      if (existing && ev.status !== "closed") {
-        // 持续中:更新同一卡片
-      } else if (existing && ev.status === "closed") {
-        // 已结束:标记关闭
-        existing.style.borderLeftColor = "#4ade80";
-        existing.style.background = "#14532d";
-      } else {
-        // 新事件:创建卡片
-        const el = document.createElement("div");
-        el.id = "ev-" + eid;
-        el.className = "event";
-        el.style.animation = "pulse 1s infinite";
-        el.innerHTML = '<span class="time">T=' + s + 's</span> | ' + ev.type + ' | ' + ev.person.name + '(' + ev.person.role + ')<br>'
-          + '<span style="color:#fca5a5">' + (ev.explanation || '') + '</span>';
-        document.getElementById("events").appendChild(el);
-      }
+function updateAgentEvents(msg) {
+  const s = msg.second || 0;
+  const tick_ms = msg.tick_ms || 0;
+  document.getElementById("agent_info").innerHTML =
+    `Agent响应: ${tick_ms}ms | 事件: ${msg.events.length}`;
+
+  for (const ev of msg.events) {
+    const eid = (ev.person.id + "-" + ev.type + "-" + (ev.first_seen||"")).replace(/[^a-zA-Z0-9]/g, "");
+    const existing = document.getElementById("ev-" + eid);
+    if (existing && ev.status !== "closed") {
+      // 持续中
+    } else if (existing && ev.status === "closed") {
+      existing.style.borderLeftColor = "#4ade80";
+      existing.style.background = "#14532d";
+    } else {
+      const el = document.createElement("div");
+      el.id = "ev-" + eid;
+      el.className = "event";
+      el.style.animation = "pulse 1s infinite";
+      el.innerHTML = '<span class="time">T=' + s + 's</span> | ' + ev.type + ' | ' + ev.person.name + '(' + ev.person.role + ')<br>'
+        + '<span style="color:#fca5a5">' + (ev.explanation || '') + '</span>';
+      document.getElementById("events").appendChild(el);
     }
   }
 }
@@ -195,6 +207,7 @@ function updateDone(msg) {
     `完成! 耗时 ${msg.total_time_s.toFixed(1)}s`;
   document.getElementById("btnStart").disabled = false;
   document.getElementById("bar").style.width = "100%";
+  document.getElementById("agent_info").innerHTML = "Agent已结束";
 
   const s = msg.summary;
   const lines = [`总事件: ${s.total_events}`];

@@ -557,12 +557,11 @@ def check_supervisor_absence(
 # ============================================================
 
 ALL_TOOLS = [
-    query_raw_logs,
-    get_current_snapshot,
-    analyze_ppe_compliance,
-    call_vl_expert,
-    query_past_events,
-    query_timeline,
-    check_sensor_alarm,
-    check_supervisor_absence,
+    get_current_snapshot,    # 核心: 每秒世界快照(含PPE/传感器/位置全部原始数据)
+    query_past_events,       # 查已落盘 raw_event(去重用)
+    query_raw_logs,          # 按时间范围查询原始日志(CV/传感器/定位)
+    check_sensor_alarm,      # 检查传感器是否有 alarm/warning
+    check_supervisor_absence,# 检查监护人是否在危险区内
+    query_timeline,          # 查违规趋势
+    call_vl_expert,          # VL 专家(占位)
 ]

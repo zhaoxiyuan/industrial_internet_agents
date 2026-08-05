@@ -4,6 +4,7 @@ A5Agent -- 作业过程监测智能体
 调用模式: 主循环每 1 秒调一次 tick(wall_time, snapshot)。
 设计: LangChain create_agent + 8 工具 + 无状态(磁盘驱动)。
 """
+import asyncio
 import json
 import os
 import time
@@ -82,10 +83,12 @@ class A5Agent:
     async def tick(self, wall_time: str, snapshot: Dict, agent_now: str = None) -> List[Dict]:
         import time as _time
         t0 = _time.perf_counter()
-        if agent_now is None:
-            from datetime import datetime as _dt, timedelta as _td
-            agent_now = (_dt.fromisoformat(wall_time) + _td(seconds=1)).isoformat(timespec="milliseconds")
-        self.collector.set_agent_now(agent_now)
+        # ★ 将 _agent_now 设为评估窗口的结束时间(即 _query_end),
+        #   而不是 wall_time+1s。这样 _build_input 扫描窗口时
+        #   query_raw_logs 不会被误拦截。
+        #   注意: get_snapshot 已改为默认不检查 _agent_now(仅前端用)。
+        query_end = snapshot.get("_query_end", wall_time)
+        self.collector.set_agent_now(query_end)
         agent_input = self._build_input(wall_time, snapshot)
 
         try:
@@ -113,21 +116,69 @@ class A5Agent:
         cv_logs = snapshot.get("cv_logs", [])
         sensors = snapshot.get("sensors", [{}])
         positions = snapshot.get("positions", [{}])
-        cv = ["PPE检测摘要(CV模型,>=80%帧缺失即违规):"]
+
+        # ── 如果评估窗口 > 1 秒,扫描整个窗口找出所有异常秒 ──
+        q_start = snapshot.get("_query_start")
+        q_end   = snapshot.get("_query_end")
+        window_violations = []      # PPE 违规秒
+        window_sensor_alarms = []   # 传感器 alarm 秒
+        window_supervisor_absent = []  # 监护人离岗秒
+        if q_start and q_end and self.collector:
+            try:
+                from datetime import datetime as _dt, timedelta as _td
+                t0 = _dt.fromisoformat(q_start)
+                t1 = _dt.fromisoformat(q_end)
+                total_win_sec = max(1, int((t1 - t0).total_seconds()))
+                for offset in range(total_win_sec):
+                    s_wall = (t0 + _td(seconds=offset)).isoformat(timespec="milliseconds")
+                    e_wall = (t0 + _td(seconds=offset + 1)).isoformat(timespec="milliseconds")
+
+                    # 1) PPE 扫描(CV 日志)
+                    sec_logs = self.collector.query_raw_logs(s_wall, e_wall, "cv")
+                    for pid in self.work_permit.get("workers", {}):
+                        pl = [l for l in sec_logs if l.get("person_id") == pid]
+                        if not pl: continue
+                        n_h = sum(1 for l in pl if not next(
+                            (d["value"] for d in l["detections"] if d["class_name"]=="helmet"), True))
+                        if n_h / len(pl) >= 0.8:
+                            st = pl[0].get("scenario_time", "?s").rstrip("s")
+                            window_violations.append(
+                                f"  ** T≈{st}s: {pid} 头盔缺失({n_h}/{len(pl)}帧) **")
+
+                    # 2) 传感器扫描
+                    sec_sensors = self.collector.query_raw_logs(s_wall, e_wall, "sensor")
+                    if sec_sensors:
+                        for r in sec_sensors[0].get("readings", {}).values():
+                            if r.get("status") in ("alarm", "warning"):
+                                window_sensor_alarms.append(
+                                    f"  ** T≈{offset}s: {r['type']} {r['value']}{r.get('unit','')} -> {r['status']} **")
+
+                    # 3) 监护人位置扫描
+                    sec_pos = self.collector.query_raw_logs(s_wall, e_wall, "position")
+                    if sec_pos:
+                        for wid, p in sec_pos[0].get("positions", {}).items():
+                            worker = self.work_permit.get("workers", {}).get(wid, {})
+                            if worker.get("role") == "监护人" and not p.get("is_in_danger_zone"):
+                                window_supervisor_absent.append(
+                                    f"  ** T≈{offset}s: {wid}({worker.get('name',wid)}) 在 {p.get('area_id','?')}(不在危险区) **")
+            except Exception:
+                pass
+
+        cv = ["PPE检测摘要(当前秒,CV模型,>=80%帧缺失即违规):"]
         for pid, w in self.work_permit.get("workers", {}).items():
             pl = [l for l in cv_logs if l.get("person_id") == pid]
             if not pl: cv.append(f"  {pid}({w.get('name',pid)},{w.get('role','')}): 无数据"); continue
             n = sum(1 for l in pl if not next((d["value"] for d in l["detections"] if d["class_name"]=="helmet"), True))
             r = n/len(pl); m = "*** 头盔缺失 ***" if r>=0.8 else "正常"
             cv.append(f"  {pid}({w.get('name',pid)},{w.get('role','')}): {len(pl)}帧,{n}帧未戴头盔({r:.0%}) -> {m}")
-        se = ["传感器读数(动火区-A):"]
+        se = ["传感器读数(当前秒,动火区-A):"]
         if sensors and sensors[0].get("readings"):
             for r in sensors[0]["readings"].values():
                 tw = r.get("threshold_warning"); ta = r.get("threshold_alarm")
                 th = f"(警戒线{tw},报警线{ta})" if ta else ""
                 m = "***异常***" if r["status"]=="alarm" else ("**接近警戒**" if r["status"]=="warning" else "正常")
                 se.append(f"  {r['type']}: {r['value']}{r['unit']} -> {r['status']} {m} {th}")
-        po = ["人员位置(UWB定位):"]
+        po = ["人员位置(当前秒,UWB定位):"]
         if positions and positions[0].get("positions"):
             for wid, p in positions[0]["positions"].items():
                 z = "危险区" if p.get("is_in_danger_zone") else "普通区"
@@ -136,17 +187,49 @@ class A5Agent:
         pe = [f"作业票: {self.work_permit['permit_id']}({self.work_permit['level']})",
               f"必戴PPE: {', '.join(self.work_permit['required_ppe'])}",
               f"\n业务规则:\n{get_rules()}"]
+
+        # 窗口违规扫描结果(最重要:agent 必须先看这个)
+        win_sec = ""
+        if q_start and q_end:
+            total_anomalies = len(window_violations) + len(window_sensor_alarms) + len(window_supervisor_absent)
+            lines = []
+            if window_violations:
+                lines.append(f"  [PPE缺失] {len(window_violations)}秒:")
+                lines.extend(window_violations)
+            if window_sensor_alarms:
+                # 去重
+                seen = set(); uniq = []
+                for a in window_sensor_alarms:
+                    if a not in seen: seen.add(a); uniq.append(a)
+                lines.append(f"  [传感器告警] {len(uniq)}条:")
+                lines.extend(uniq)
+            if window_supervisor_absent:
+                seen = set(); uniq = []
+                for a in window_supervisor_absent:
+                    if a not in seen: seen.add(a); uniq.append(a)
+                lines.append(f"  [监护人离岗] {len(uniq)}条:")
+                lines.extend(uniq)
+            win_sec = (
+                f"\n=====================================================\n"
+                f"!!! 评估窗口扫描({q_start[11:19]}~{q_end[11:19]},共{total_anomalies}个异常):\n"
+                + ("\n".join(lines) if lines else "  未发现任何异常")
+                + f"\n=====================================================\n"
+            )
+
         return (
             f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
             f"!!! 注意: 当前现实时间是 {wall_time} !!!\n"
             f"!!! 你只能查询 <= 这个时间点的日志,不能看未来 !!!\n"
             f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
-            + "\n".join(pe) + "\n\n"
+            + "\n".join(pe) + "\n"
+            + win_sec + "\n"
             + "\n".join(cv) + "\n\n"
             + "\n".join(se) + "\n\n"
             + "\n".join(po) + "\n\n"
-            + "以上是当前现场数据。请判断是否存在需报告的候选安全事件。"
+            + "以上是当前现场数据 + 评估窗口内的异常扫描。请判断是否存在需报告的候选安全事件。"
             + "先调用 query_past_events 检查是否已报告过,避免重复。"
+            + (f"\n本次评估覆盖时间窗口: {q_start or '?'} ~ {q_end or '?'} "
+               f"(可用 query_raw_logs 查此区间任意秒的趋势)" if q_start else "")
         )
 
     # ============================================================
@@ -154,14 +237,64 @@ class A5Agent:
     # ============================================================
     def _parse_output(self, raw: str, wall_time: str, snapshot: Dict) -> List[Dict]:
         if not raw: return []
+        original_raw = raw  # 保存原始输出用于调试
         try:
-            if "```json" in raw: raw = raw.split("```json")[1].split("```")[0]
-            elif "```" in raw: raw = raw.split("```")[1].split("```")[0]
+            # 提取 ``` 代码块中的 JSON
+            if "```json" in raw:
+                parts = raw.split("```json")
+                # 取最后一段 ```json ... ``` (最可能是模型输出)
+                raw = parts[-1].split("```")[0]
+            elif "```" in raw:
+                parts = raw.split("```")
+                raw = parts[1].split("```")[0] if len(parts) > 1 else raw
             raw = raw.strip()
-            if raw.startswith("["): parsed = json.loads(raw)       # 数组(多事件)
-            elif raw.startswith("{") and raw.endswith("}"): parsed = json.loads(raw)
-            else: return []
-        except json.JSONDecodeError: return []
+
+            # 尝试解析 JSON 数组
+            if raw.startswith("["):
+                # 找到匹配的 ]
+                bracket_count = 0
+                end_idx = -1
+                for i, ch in enumerate(raw):
+                    if ch == '[': bracket_count += 1
+                    elif ch == ']':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            end_idx = i
+                            break
+                if end_idx > 0:
+                    raw = raw[:end_idx + 1]
+                parsed = json.loads(raw)
+            elif raw.startswith("{"):
+                # 可能多个独立 JSON 对象(非数组格式)
+                # 尝试找到所有顶层 {...} 对象
+                objects = []
+                depth = 0; start = -1
+                for i, ch in enumerate(raw):
+                    if ch == '{':
+                        if depth == 0: start = i
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0 and start >= 0:
+                            objects.append(raw[start:i+1])
+                if len(objects) > 1:
+                    # 多个独立对象 → 合并为数组
+                    parsed = [json.loads(obj) for obj in objects]
+                else:
+                    parsed = json.loads(raw)
+            else:
+                return []
+        except json.JSONDecodeError:
+            # 最后一次尝试: 正则提取所有 {...} 对象
+            import re
+            objects = re.findall(r'\{[^{}]*\}', raw)
+            if objects:
+                try:
+                    parsed = [json.loads(obj) for obj in objects]
+                except json.JSONDecodeError:
+                    return []
+            else:
+                return []
 
         # 支持数组和单个 dict
         items = parsed if isinstance(parsed, list) else [parsed]
@@ -237,3 +370,56 @@ class A5Agent:
         bp = {}
         for ev in evs: bp[ev.get("person",{}).get("id","?")] = bp.get(ev.get("person",{}).get("id","?"),0)+1
         return {"total_events":len(evs),"by_person":bp}
+
+
+# ============================================================
+# AgentQueue: 主循环不阻塞,Agent 后台串行
+# ============================================================
+
+class AgentQueue:
+    """
+    Agent 任务串行队列。主循环 fire-and-forget,Agent 排队执行。
+    约束: 同一时刻只跑一个 tick,下一个等上一个完成。
+    """
+
+    def __init__(self, agent: A5Agent):
+        self.agent = agent
+        self._queue = asyncio.Queue()
+        self._running = False
+        self._task = None
+
+    def submit(self, start_wall: str, end_wall: str, snapshot: Dict, callback=None):
+        """主循环调用: 丢任务到队列,立即返回。
+           start_wall/end_wall: agent 可查询的累积时间段"""
+        self._queue.put_nowait((start_wall, end_wall, snapshot, callback))
+        if not self._running:
+            self._task = asyncio.create_task(self._worker())
+
+    async def _worker(self):
+        self._running = True
+        try:
+            while not self._queue.empty():
+                start_wall, end_wall, snapshot, callback = await self._queue.get()
+                # 追加趋势: 不替换当前秒 snapshot,而是额外提供累积趋势数据
+                # (agent 用 query_raw_logs 工具按需查趋势,不稀释当前秒精度)
+                snapshot["_query_start"] = start_wall
+                snapshot["_query_end"]   = end_wall
+                try:
+                    import time
+                    t0 = time.perf_counter()
+                    events = await self.agent.tick(end_wall, snapshot)
+                    tick_ms = (time.perf_counter() - t0) * 1000
+                    if events:
+                        events[-1]["_tick_ms"] = round(tick_ms, 2)
+                    if callback:
+                        await callback(events, tick_ms, None)
+                except Exception as e:
+                    import traceback
+                    if callback:
+                        await callback([], 0, traceback.format_exc())
+        finally:
+            self._running = False
+
+    @property
+    def pending_count(self) -> int:
+        return self._queue.qsize()

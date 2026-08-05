@@ -78,8 +78,9 @@ async def index():
 # ============================================================
 
 @app.websocket("/ws/{scenario}")
-async def ws_run(ws: WebSocket, scenario: str):
-    """前端连接此 WebSocket,自动开始运行场景并推送每秒数据"""
+async def ws_run(ws: WebSocket, scenario: str, interval: int = 10):
+    """前端连接此 WebSocket,自动开始运行场景并推送每秒数据。
+       interval: 每 N 秒调用一次 agent.tick(默认 10s)"""
     scenario = scenario.upper()
     if scenario not in "ABCDE":
         await ws.accept()
@@ -94,19 +95,41 @@ async def ws_run(ws: WebSocket, scenario: str):
     log_dir = f"logs/frontend/{scenario}_{ts}"
     collector = AsyncCollector(scenario, log_dir=log_dir)
 
-    # 延迟导入 Agent,避免 Mock LLM 报错
-    try:
-        from agent.a5_agent import A5Agent
-        agent = A5Agent(collector, WORK_PERMIT, f"{log_dir}/raw_events")
-    except Exception:
-        agent = None
+    # 延迟导入 Agent
+    from agent.a5_agent import A5Agent, AgentQueue
+    agent = A5Agent(collector, WORK_PERMIT, f"{log_dir}/raw_events")
+    agent_queue = AgentQueue(agent)
 
     await collector.start()
     await ws.send_json({"type": "start", "scenario": scenario,
-                        "log_dir": log_dir, "duration_sec": 30})
+                        "log_dir": log_dir, "duration_sec": 30,
+                        "agent_interval_sec": interval})
 
-    # 30 秒主循环
-    active_events = []
+    # Agent 完成时回调: 通过 WS 单独推送
+    async def on_agent_done(events, tick_ms, error=None):
+        if error:
+            await ws.send_json({"type": "agent_error", "error": error})
+            return
+        agent_events = []
+        for ev in events:
+            agent_events.append({
+                "type":       ev.get("type", "?"),
+                "person":     ev.get("person", {}),
+                "status":     ev.get("status", "ongoing"),
+                "duration_sec": ev.get("duration_sec", 0),
+                "first_seen": ev.get("first_seen", ""),
+                "last_seen":  ev.get("last_seen", ""),
+                "explanation": ev.get("explanation", ""),
+            })
+        await ws.send_json({
+            "type":     "agent_events",
+            "second":   events[0].get("second", 0) if events else 0,
+            "events":   agent_events,
+            "tick_ms":  round(tick_ms, 1),
+        })
+
+    # 主循环: 每秒采集+推送数据, agent 间隔 fire
+    last_tick_wall = collector._sec_to_wall(0)  # 上次 tick 的时间
     for sec in range(30):
         await asyncio.sleep(1.0)
         await collector.flush_second(sec)
@@ -115,31 +138,20 @@ async def ws_run(ws: WebSocket, scenario: str):
         agent_now = collector._sec_to_wall(sec + 2)
         snapshot = collector.get_snapshot(wall_time)
 
-        # Agent tick
-        agent_events = []
-        tick_ms = 0
-        if agent:
-            events = await agent.tick(wall_time, snapshot, agent_now=agent_now)
-            tick_ms_raw = events[-1].pop("_tick_ms", 0) if events else 0
-            tick_ms = round(tick_ms_raw, 1)
-            for ev in events:
-                agent_events.append({
-                    "type":       ev.get("type", "?"),
-                    "person":     ev.get("person", {}),
-                    "status":     ev.get("status", "ongoing"),
-                    "duration_sec": ev.get("duration_sec", 0),
-                    "first_seen": ev.get("first_seen", ""),
-                    "last_seen":  ev.get("last_seen", ""),
-                    "explanation": ev.get("explanation", ""),
-                })
+        # Agent: fire-and-forget(不阻塞), 只在 interval 整数倍时 fire
+        call_agent = ((sec + 1) % interval == 0)
+        if call_agent:
+            # 传入累积时间段: [上次tick时间, 当前时间]
+            agent_queue.submit(last_tick_wall, wall_time, snapshot, on_agent_done)
+            last_tick_wall = wall_time
 
         # 提取 snapshot 摘要
         cv_logs = snapshot.get("cv_logs", [])
         sensor_data = snapshot.get("sensors", [{}])
         pos_data = snapshot.get("positions", [{}])
 
-        # 推送
-        payload = {
+        # 推送(不含 agent_events — agent 结果异步推送)
+        await ws.send_json({
             "type":      "tick",
             "second":     sec + 1,
             "wall_time":  wall_time,
@@ -147,30 +159,34 @@ async def ws_run(ws: WebSocket, scenario: str):
             "ppe":        _extract_ppe(cv_logs),
             "sensors":    _extract_sensor(sensor_data),
             "positions":  _extract_positions(pos_data),
-            "agent_events": agent_events,
-            "tick_ms":    tick_ms,
-        }
-        await ws.send_json(payload)
+            "agent_pending": agent_queue.pending_count,
+        })
 
-        if agent_events:
-            active_events.extend(agent_events)
+    # 等 Agent 队列排空(给足时间,每个 tick 最多 120s)
+    await asyncio.sleep(1)
+    max_wait = 120
+    waited = 0
+    while agent_queue.pending_count > 0 or agent_queue._running:
+        if waited >= max_wait:
+            break
+        await asyncio.sleep(3)
+        waited += 3
+        # 通知前端等待中
+        try:
+            await ws.send_json({"type": "agent_waiting",
+                "msg": f"等待Agent完成... {waited}s/{max_wait}s",
+                "pending": agent_queue.pending_count})
+        except Exception:
+            break
 
     await collector.stop()
 
-    # 完成
-    total_time = 30.0  # 实时 30 秒
-    if agent:
-        summary = agent.summary()
-    else:
-        summary = {"total_events": 0, "by_person": {}}
+    # Agent 完成汇总
+    summary = agent.summary()
+    await ws.send_json({"type": "done", "summary": summary,
+                        "total_time_s": 30, "log_dir": log_dir})
 
-    await ws.send_json({
-        "type":    "done",
-        "summary": summary,
-        "total_time_s": total_time,
-        "log_dir": log_dir,
-    })
-
+    
 
 # ============================================================
 # 辅助函数

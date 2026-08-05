@@ -305,21 +305,23 @@ class AsyncCollector:
                     results.append(log)
         return results
 
-    def get_snapshot(self, wall_time: str) -> Dict[str, Any]:
+    def get_snapshot(self, wall_time: str, respect_agent_now: bool = False) -> Dict[str, Any]:
         """
         根据现实世界时间获取对应秒的世界快照。
         wall_time: ISO 格式,表示"这一秒结束的时刻"。
         实际查询该秒 [wall_time-1s, wall_time) 的数据。
 
-        防未来:若 wall_time > agent_now,自动截断到 agent_now。
+        注意:前端每秒调用此方法获取当前秒数据,不应被 _agent_now 截断。
+        _agent_now 只在 query_raw_logs(agent 工具调用)中生效。
+        respect_agent_now=True 仅用于 agent 内部需要防未来的场景。
         """
-        # ★ 防未来:截断到 agent_now
-        if self._agent_now and wall_time > self._agent_now:
+        if respect_agent_now and self._agent_now and wall_time > self._agent_now:
             wall_time = self._agent_now
 
         sec = self._wall_to_sec(wall_time)
-        sec_int = max(0, min(29, int(sec)))
-        # 构造该秒对应的 wall_time 范围:[sec 开始, sec 结束)
+        # wall_time 表示"这一秒结束",所以查询范围是 [sec-1, sec)
+        # round() 修复浮点精度: _wall_to_sec 可能返回 8.999 而非 9.0
+        sec_int = max(0, min(29, round(sec) - 1))
         if self._start_wall:
             from datetime import timedelta
             start_wall_dt = self._start_wall + timedelta(seconds=sec_int)
@@ -329,13 +331,21 @@ class AsyncCollector:
         else:
             start_wall = end_wall = wall_time
 
-        return {
-            "wall_time":     wall_time,
-            "scenario_time": f"{sec_int}.0s",
-            "cv_logs":       self.query_raw_logs(start_wall, end_wall, "cv"),
-            "sensors":       self.query_raw_logs(start_wall, end_wall, "sensor"),
-            "positions":     self.query_raw_logs(start_wall, end_wall, "position"),
-        }
+        # ★ 临时清除 _agent_now:get_snapshot 是前端/主循环调用的,
+        #    不是 agent 工具调用,不应被防未来机制拦截。
+        #    query_raw_logs 的 _agent_now 检查只针对 agent 的 tool 调用。
+        saved_now = self._agent_now
+        self._agent_now = None
+        try:
+            return {
+                "wall_time":     wall_time,
+                "scenario_time": f"{sec_int}.0s",
+                "cv_logs":       self.query_raw_logs(start_wall, end_wall, "cv"),
+                "sensors":       self.query_raw_logs(start_wall, end_wall, "sensor"),
+                "positions":     self.query_raw_logs(start_wall, end_wall, "position"),
+            }
+        finally:
+            self._agent_now = saved_now
 
 
 # ============================================================
