@@ -1027,7 +1027,58 @@ Agent 每轮的 ReAct 中间步骤会记录到 `raw_event_*.json`:
 
 ---
 
-## 十三、实施步骤
+## 十三、存盘体系(三类日志)
+
+### 完整存盘链
+
+```
+原始数据流(CV 25FPS / Sensor 1Hz / Position 1Hz)
+          │
+          ▼
+┌─────────────────────────────────────┐
+│ 第一类: 原始日志(per frame)          │
+│ 存盘: AsyncCollector.flush_second()  │
+│ 命名: {type}_{ts}_T{sec:02d}.json   │
+│ 示例: cv_20260805_1000_T08.json     │
+│ 内容: 原始 CV 检测(每帧 3 人 PPE)    │
+│ 数量: 3 类 × 30 秒 = 90 文件/场景   │
+└─────────────────────────────────────┘
+          │
+          │ AsyncCollector._build_single_snapshot()
+          ▼
+┌─────────────────────────────────────┐
+│ 第二类: 加工快照(per second)         │
+│ 存盘: 同上 _write_file               │
+│ 命名: snapshot_{ts}_T{sec:02d}.json │
+│ 内容: 该秒的 CV/sensor/position 聚合│
+│  ★ 含每人 PPE 多数表决结果           │
+│  ★ 含传感器状态 + 位置区域            │
+│ 数量: 30 文件/场景                   │
+└─────────────────────────────────────┘
+          │
+          │ A5Agent.tick(wall_time, snapshot)
+          ▼
+┌─────────────────────────────────────┐
+│ 第三类: Agent 输出(raw_event)       │
+│ 存盘: A5Agent._save_raw_event()      │
+│ 命名: raw_event_{wall_time}.json    │
+│ 内容: 候选事件 + 证据 + 解释         │
+│ 数量: 0~N(仅当有事件时)             │
+└─────────────────────────────────────┘
+```
+
+### 三类对比
+
+| | 原始日志 | 加工快照 | Agent 输出 |
+|---|---|---|---|
+| **粒度** | 每帧(~75条/秒) | 每秒 1 条 | 按需(仅事件) |
+| **CV 内容** | `detections[{helmet:false,...}]` | `cv_summary{P7:{helmet_ratio:0.88,...}}` | `evidence{cv_ratio:0.88}` |
+| **谁写** | AsyncCollector | AsyncCollector | A5Agent |
+| **可覆盖** | 否(新增文件) | 否(新增文件) | 否(新增文件) |
+
+---
+
+## 十四、实施步骤
 
 1. 确认上述设计(LLM 选型、去重策略、记忆方案)
 2. 写 `agent/prompts.py`(System Prompt + ReAct 模板)

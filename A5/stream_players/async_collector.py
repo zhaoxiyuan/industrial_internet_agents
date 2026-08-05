@@ -148,21 +148,59 @@ class AsyncCollector:
         sensor_logs = self.query_raw_logs(self._sec_to_wall(sec), self._sec_to_wall(sec+1), "sensor")
         pos_logs = self.query_raw_logs(self._sec_to_wall(sec), self._sec_to_wall(sec+1), "position")
 
+        # ── 传感器摘要 ──
         sensor_summary = {}
         if sensor_logs:
             for sid, r in sensor_logs[0].get("readings", {}).items():
                 sensor_summary[sid] = {"value": r["value"], "status": r["status"]}
 
+        # ── 位置摘要 ──
         pos_summary = {}
         if pos_logs:
             for wid, p in pos_logs[0].get("positions", {}).items():
                 pos_summary[wid] = {"area_id": p["area_id"],
                                     "in_danger_zone": p["is_in_danger_zone"]}
 
+        # ── CV 聚合(每人数,多数表决) ──
+        # 把这一秒的原始 CV 日志按 person_id 分组,每人统计置信度
+        cv_summary = {}
+        if cv_logs:
+            # 收集所有 person_id
+            person_ids = sorted(set(log.get("person_id", "") for log in cv_logs))
+            for pid in person_ids:
+                if not pid:
+                    continue
+                person_logs = [log for log in cv_logs if log.get("person_id") == pid]
+                total = len(person_logs)
+                if total == 0:
+                    continue
+                # 统计每类 PPE 缺失帧数
+                def _count_missing(class_name):
+                    return sum(
+                        1 for log in person_logs
+                        if not next((d["value"] for d in log.get("detections", [])
+                                     if d["class_name"] == class_name), True)
+                    )
+                n_helmet = _count_missing("helmet")
+                n_goggles = _count_missing("goggles")
+                n_suit = _count_missing("protective_suit")
+
+                cv_summary[pid] = {
+                    "total_frames":         total,
+                    "helmet_missing_count": n_helmet,
+                    "helmet_missing_ratio": round(n_helmet / total, 3),
+                    "goggles_missing_count": n_goggles,
+                    "suit_missing_count":   n_suit,
+                    "is_violating": (n_helmet / total >= 0.8 or
+                                     n_goggles / total >= 0.8 or
+                                     n_suit / total >= 0.8),
+                }
+
         return {
             "second": sec,
-            "time_range": [float(sec), float(sec + 1)],
-            "cv_log_count": len(cv_logs),
+            "time_range":    [float(sec), float(sec + 1)],
+            "cv_log_count":  len(cv_logs),
+            "cv_summary":    cv_summary,          # ★ 新增:每人 PPE 聚合
             "sensor_summary": sensor_summary,
             "position_summary": pos_summary,
         }
