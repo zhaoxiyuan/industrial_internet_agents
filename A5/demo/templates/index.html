@@ -124,11 +124,16 @@ function updateTick(msg) {
   // PPE
   let ppe = "";
   for (const [pid, info] of Object.entries(WORKERS)) {
-    ppe += `<div class="row">${pid}(${info.name},${info.role}): <span class="normal">正常</span></div>`;
+    const d = (msg.ppe || {})[pid];
+    if (!d) { ppe += '<div class="row">' + pid + '(' + info.name + ',' + info.role + '): 无数据</div>'; continue; }
+    const h = d.helmet, g = d.goggles, s = d.protective_suit;
+    ppe += '<div class="row">' + pid + '(' + info.name + ',' + info.role + '):';
+    ppe += ' 头盔:<span class="' + (h.ok ? 'normal' : 'violation') + '">' + (h.ok ? 'OK' : 'NO(' + Math.round(h.ratio*100) + '%)') + '</span>';
+    ppe += ' 护目镜:<span class="' + (g.ok ? 'normal' : 'violation') + '">' + (g.ok ? 'OK' : 'NO(' + Math.round(g.ratio*100) + '%)') + '</span>';
+    ppe += ' 防护服:<span class="' + (s.ok ? 'normal' : 'violation') + '">' + (s.ok ? 'OK' : 'NO(' + Math.round(s.ratio*100) + '%)') + '</span>';
+    ppe += '</div>';
   }
   document.getElementById("ppe").innerHTML = ppe;
-  document.getElementById("ppe").style.opacity = "0.5";
-  setTimeout(() => document.getElementById("ppe").style.opacity = "1", 50);
 
   // 传感器
   let sen = "";
@@ -160,23 +165,18 @@ function updateTick(msg) {
 
       if (existing && ev.status !== "closed") {
         // 持续中:更新同一卡片
-        existing.querySelector(".dur").innerText =
-          `持续: ${ev.duration_sec || 0}s | last: ${(ev.last_seen||"").slice(-12)}`;
       } else if (existing && ev.status === "closed") {
         // 已结束:标记关闭
         existing.style.borderLeftColor = "#4ade80";
         existing.style.background = "#14532d";
-        existing.querySelector(".dur").innerText =
-          `已结束 | 持续: ${ev.duration_sec || 0}s`;
       } else {
         // 新事件:创建卡片
         const el = document.createElement("div");
         el.id = "ev-" + eid;
         el.className = "event";
         el.style.animation = "pulse 1s infinite";
-        el.innerHTML = `<span class="time">T=${s}s</span> | ${ev.type} | ${ev.person.name}(${ev.person.role})
-          <span class="dur">持续中...</span><br>
-          <span style="color:#fca5a5">${ev.explanation || ""}</span>`;
+        el.innerHTML = '<span class="time">T=' + s + 's</span> | ' + ev.type + ' | ' + ev.person.name + '(' + ev.person.role + ')<br>'
+          + '<span style="color:#fca5a5">' + (ev.explanation || '') + '</span>';
         document.getElementById("events").appendChild(el);
       }
     }

@@ -110,6 +110,7 @@ async def ws_run(ws: WebSocket, scenario: str):
                 })
 
         # 提取 snapshot 摘要
+        cv_logs = snapshot.get("cv_logs", [])
         sensor_data = snapshot.get("sensors", [{}])
         pos_data = snapshot.get("positions", [{}])
 
@@ -118,7 +119,8 @@ async def ws_run(ws: WebSocket, scenario: str):
             "type":      "tick",
             "second":     sec + 1,
             "wall_time":  wall_time,
-            "cv_n":       len(snapshot.get("cv_logs", [])),
+            "cv_n":       len(cv_logs),
+            "ppe":        _extract_ppe(cv_logs),
             "sensors":    _extract_sensor(sensor_data),
             "positions":  _extract_positions(pos_data),
             "agent_events": agent_events,
@@ -149,6 +151,34 @@ async def ws_run(ws: WebSocket, scenario: str):
 # ============================================================
 # 辅助函数
 # ============================================================
+
+def _extract_ppe(cv_logs):
+    """从 CV 日志中提取每人 PPE 状态(多数表决)"""
+    if not cv_logs:
+        return {}
+    # 收集所有 person_id
+    pids = sorted(set(log.get("person_id","") for log in cv_logs))
+    result = {}
+    for pid in pids:
+        if not pid: continue
+        plogs = [l for l in cv_logs if l.get("person_id") == pid]
+        total = len(plogs)
+        if total == 0: continue
+        def _miss(name):
+            return sum(1 for l in plogs
+                       if not next((d["value"] for d in l.get("detections",[])
+                                    if d["class_name"]==name), True))
+        n_h = _miss("helmet")
+        n_g = _miss("goggles")
+        n_s = _miss("protective_suit")
+        result[pid] = {
+            "total": total,
+            "helmet":       {"missing": n_h, "ratio": round(n_h/total, 2), "ok": n_h/total < 0.8},
+            "goggles":      {"missing": n_g, "ratio": round(n_g/total, 2), "ok": n_g/total < 0.8},
+            "protective_suit": {"missing": n_s, "ratio": round(n_s/total, 2), "ok": n_s/total < 0.8},
+        }
+    return result
+
 
 def _extract_sensor(sensor_data):
     """从 snapshot 中提取传感器摘要"""
