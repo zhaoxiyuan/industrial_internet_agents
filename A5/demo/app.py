@@ -3,10 +3,10 @@ A5 Demo 前端 — FastAPI 后端 + WebSocket 推送
 
 常用命令:
     # 启动(默认 5001 端口)
-    python demo/app.py
+    python A5/demo/app.py
 
     # 指定端口
-    python demo/app.py --port 8080
+    python A5/demo/app.py --port 8080
 
     # 允许局域网访问
     python A5/demo/app.py --host 0.0.0.0 --port 5001
@@ -98,12 +98,16 @@ async def ws_run(ws: WebSocket, scenario: str):
             events = await agent.tick(wall_time, snapshot, agent_now=agent_now)
             tick_ms_raw = events[-1].pop("_tick_ms", 0) if events else 0
             tick_ms = round(tick_ms_raw, 1)
-            # 取 event 核心字段(精简)
-            agent_events = [{
-                "type":   ev.get("type", "?"),
-                "person": ev.get("person", {}),
-                "explanation": ev.get("explanation", ""),
-            } for ev in events]
+            for ev in events:
+                agent_events.append({
+                    "type":       ev.get("type", "?"),
+                    "person":     ev.get("person", {}),
+                    "status":     ev.get("status", "ongoing"),
+                    "duration_sec": ev.get("duration_sec", 0),
+                    "first_seen": ev.get("first_seen", ""),
+                    "last_seen":  ev.get("last_seen", ""),
+                    "explanation": ev.get("explanation", ""),
+                })
 
         # 提取 snapshot 摘要
         sensor_data = snapshot.get("sensors", [{}])

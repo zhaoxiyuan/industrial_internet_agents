@@ -29,6 +29,7 @@ button:disabled { background:#475569; cursor:not-allowed; }
 .stats { display:flex; gap:20px; font-size:12px; color:#94a3b8; margin-top:10px; }
 .summary { background:#1e293b; border-radius:8px; padding:16px; margin-top:16px; display:none; }
 .summary h3 { color:#4ade80; margin-bottom:10px; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
 </style>
 </head>
 <body>
@@ -150,14 +151,34 @@ function updateTick(msg) {
   document.getElementById("agent_info").innerHTML =
     `tick: ${msg.tick_ms}ms | CV: ${msg.cv_n}条 | 事件: ${msg.agent_events.length}`;
 
-  // 事件
+  // 事件处理:ongoing 更新同一卡片,closed 关闭
   if (msg.agent_events.length > 0) {
     for (const ev of msg.agent_events) {
-      const el = document.createElement("div");
-      el.className = "event";
-      el.innerHTML = `<span class="time">T=${s}s</span> | ${ev.type} | ${ev.person.name}(${ev.person.role})<br>
-                      <span style="color:#fca5a5">${ev.explanation || ""}</span>`;
-      document.getElementById("events").appendChild(el);
+      // 用 first_seen 区分同一人的多次同类违规
+      const eid = (ev.person.id + "-" + ev.type + "-" + (ev.first_seen||"")).replace(/[^a-zA-Z0-9]/g, "");
+      const existing = document.getElementById("ev-" + eid);
+
+      if (existing && ev.status !== "closed") {
+        // 持续中:更新同一卡片
+        existing.querySelector(".dur").innerText =
+          `持续: ${ev.duration_sec || 0}s | last: ${(ev.last_seen||"").slice(-12)}`;
+      } else if (existing && ev.status === "closed") {
+        // 已结束:标记关闭
+        existing.style.borderLeftColor = "#4ade80";
+        existing.style.background = "#14532d";
+        existing.querySelector(".dur").innerText =
+          `已结束 | 持续: ${ev.duration_sec || 0}s`;
+      } else {
+        // 新事件:创建卡片
+        const el = document.createElement("div");
+        el.id = "ev-" + eid;
+        el.className = "event";
+        el.style.animation = "pulse 1s infinite";
+        el.innerHTML = `<span class="time">T=${s}s</span> | ${ev.type} | ${ev.person.name}(${ev.person.role})
+          <span class="dur">持续中...</span><br>
+          <span style="color:#fca5a5">${ev.explanation || ""}</span>`;
+        document.getElementById("events").appendChild(el);
+      }
     }
   }
 }
