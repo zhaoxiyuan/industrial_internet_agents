@@ -1,10 +1,10 @@
 # A5 作业过程监测智能体 — Demo 开发说明
 
-> **文档版本**:v1.0
-> **编制日期**:2026-08-04
+> **文档版本**:v1.1
+> **编制日期**:2026-08-05
 > **对应项目**:`广东石化作业场景闭环管理智能体工具链项目`
 > **对应章节**:5.2 "1+8" 业务智能体体系 → A5 作业过程监测智能体
-> **状态**:核心模块全部完成(demo/mock_data + 流式播放 + 主循环 + 智能体)
+> **状态**:全部完成 ✅ (scenario_data + stream_players + main_loop + agent + demo前端)
 
 ---
 
@@ -974,7 +974,32 @@ A5/                                 # 项目根目录
 
 ## 六、使用方式(已实现)
 
-### 6.1 纯固定流程(无智能体)
+### 6.1 CLI 运行
+
+```bash
+python main_loop/main_loop.py --scenario B      # 单场景+Agent
+python main_loop/main_loop.py --scenario ABCDE   # 全部5场景
+python main_loop/main_loop.py --scenario B --no-agent  # 纯固定流程
+```
+
+### 6.2 Web 前端
+
+```bash
+python demo/app.py                      # 启动服务
+# 浏览器打开 http://localhost:5001      # 选择场景,实时监控
+```
+
+### 6.3 场景预期输出
+
+| 场景 | raw_event | 类型 |
+|---|---|---|
+| A | 0 | 无违规 |
+| B | 2 (ongoing+closed ×2) | PPE缺失-头盔 |
+| C | 1 | 环境异常-传感器告警 |
+| D | 1 | 监护人脱岗 |
+| E | 3 | PPE+监护人+传感器 |
+
+### 6.4 纯固定流程(无 Agent)
 
 ```bash
 python 主循环/main_loop.py --scenario B                    # 单场景
@@ -985,31 +1010,6 @@ python 主循环/main_loop.py --scenario B --no-agent          # 不启动 A5
 python 主循环/main_loop.py --scenario ABCDE --log-dir logs/batch
 ```
 
-### 6.2 带 A5 智能体(默认)
-
-```bash
-python 主循环/main_loop.py --scenario B                    # 默认带 A5
-```
-
-输出示例:
-```
-[A5][T= 8s] PPE缺失-头盔  | 张师傅 | video,vl_semantic,location,work_permit
-[A5][T=22s] PPE缺失-头盔  | 张师傅 | video,vl_semantic,location,work_permit
-
-[A5Agent 摘要] 共 37.4s 实际运行
-  总事件:2
-  P7: 2 个事件
-```
-
-### 6.3 场景 A-D-E 的预期输出
-
-| 场景 | 选项 | 预期输出 |
-|---|---|---|
-| A | `--scenario A` | 总事件:0 |
-| B | `--scenario B` | 总事件:2(P7 两次摘头盔) |
-| C | `--scenario C` | 传感器 alarm,事件 1+ |
-| D | `--scenario D` | P11 离岗,事件 1 |
-| E | `--scenario E` | 多重违规叠加,事件 3+ |
 
 ---
 
@@ -1023,26 +1023,24 @@ python 主循环/main_loop.py --scenario B                    # 默认带 A5
 | **日志只增不改** | 每秒新建文件 `{type}_{ts}_T{sec:02d}.json`,永覆盖 |
 | **Agent 不判风险** | raw_event 无 risk_level,A6 才判 |
 | **Agent 不处置** | 只输出 raw_event,不发起通知/停工 |
-| **事件去重** | `EventDeduplicator` 状态机:同一违规只发 1 次 |
-| **监护人特殊处理** | P11 只检查头盔(不检查护目镜) |
-| **不用 LangGraph** | 主循环每 1 秒调一次 `agent.tick()`,无需复杂编排 |
+| **事件覆盖写** | 同一事件持续更新同一文件(last_seen + duration) |
+| **多维检测** | PPE(CV表决) + 传感器(alarm) + 监护人(位置) |
+| **作业票规则可编辑** | 前端 textarea 编辑,运行时生效 |
 
 ---
 
 ## 八、实现清单(全部完成)
 
-| # | 模块 | 文件 | 状态 |
-|---|---|---|---|
-| 1 | 5 场景数据 | `demo/mock_data/*.py` | ✅ |
-| 2 | CV 流(25 FPS) | `流式播放/mock_cv_player.py` | ✅ |
-| 3 | 传感器流(1 Hz) | `流式播放/mock_sensor_stream.py` | ✅ |
-| 4 | 定位流(1 Hz) | `流式播放/mock_positioning_stream.py` | ✅ |
-| 5 | 固定流程+落盘+防未来 | `流式播放/async_collector.py` | ✅ |
-| 6 | 主循环(批量运行) | `主循环/main_loop.py` | ✅ |
-| 7 | 事件去重状态机 | `智能体/event_deduplicator.py` | ✅ |
-| 8 | 4 个工具 | `智能体/tools.py` | ✅ |
-| 9 | A5 决策者 | `智能体/a5_agent.py` | ✅ |
-| 10 | .gitignore | `A5/.gitignore` | ✅ |
+| # | 模块 | 状态 |
+|---|---|---|
+| 1 | `scenario_data/` 5 场景数据 | ✅ |
+| 2 | `stream_players/` 3 模拟流 + AsyncCollector | ✅ |
+| 3 | `main_loop/` CLI + 批量运行 | ✅ |
+| 4 | `agent/tools.py` 8 个工具 | ✅ |
+| 5 | `agent/a5_agent.py` ReAct Agent | ✅ |
+| 6 | `agent/system_prompt.py` 提示词管理 | ✅ |
+| 7 | `agent/work_permit_rules.py` 规则管理 | ✅ |
+| 8 | `demo/` FastAPI + WebSocket 前端 | ✅ |
 
 ---
 
@@ -1050,18 +1048,17 @@ python 主循环/main_loop.py --scenario B                    # 默认带 A5
 
 ```
 A5/
-├── README.md                       # 本文档(总览)
-├── .gitignore
-├── demo/mock_data/                 # 5 个场景的剧本数据
-│   ├── types.py, mock_cv.py, mock_sensors.py
-│   ├── mock_positioning.py, mock_vl.py, mock_work_permit.py
-├── 流式播放/                       # 模拟数据源 + 固定流程
-│   ├── mock_cv_player.py, mock_sensor_stream.py
-│   ├── mock_positioning_stream.py, async_collector.py
-├── 主循环/                         # 主循环入口
-│   └── main_loop.py
-└── 智能体/                         # A5 决策者(独立模块)
-    ├── tools.py, event_deduplicator.py, a5_agent.py
+├── scenario_data/          5 场景剧本数据
+├── stream_players/         3 模拟流 + AsyncCollector
+├── main_loop/              CLI 入口(批量运行)
+├── agent/                  A5 Agent(8工具+三维检测)
+│   ├── tools.py, a5_agent.py
+│   ├── system_prompt.py, work_permit_rules.py
+│   └── event_deduplicator.py
+├── demo/                   Web 前端(FastAPI+WebSocket)
+│   ├── app.py, README.md
+│   └── templates/index.html
+└── .gitignore
 ```
 
 ---

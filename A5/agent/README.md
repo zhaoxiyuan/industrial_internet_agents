@@ -1,130 +1,76 @@
-# A5 智能体 — 设计说明
+# A5 Agent — 说明
 
-> **定位**:接收每秒快照 → 自主决策(去重 + 调 VL + 终判)+ 输出 raw_event
-> **文件**:`tools.py`, `event_deduplicator.py`, `a5_agent.py`
-> **状态**:已完成
+> **定位**: 接收每秒快照 → 自主决策 + 输出 raw_event
+> **状态**: ✅ 已完成
 
 ---
 
-## 一、明确边界
+## 文件清单
 
-| 谁 | 做什么
+| 文件 | 作用 |
 |---|---|
-| **A5**(本模块) | 接收日志 → 识别候选事件 → 输出 raw_event
-| **A6** | 接收 raw_event → 判风险等级 → 分级推送
-| **A7** | 接收分级事件 → 派单/通知/停工
-
-**A5 不判风险等级,不发起处置。**
-
----
-
-## 二、与主循环关系
-
-A5 是独立模块,**被主循环每秒回调一次**:
-
-```
-主循环(每 1 秒):
-    wall_time = collector._sec_to_wall(sec+1)
-    snapshot  = collector.get_snapshot(wall_time)
-    events   = await agent.tick(wall_time, snapshot)
-```
-
-Agent 没有自己的 while 循环 / 监听线程 / 事件驱动。
+| `a5_agent.py` | 主类: tick() + ReAct Agent + Mock LLM 降级 |
+| `tools.py` | 8 个 LangChain @tool |
+| `event_deduplicator.py` | 事件去重状态机(降级模式保留) |
+| `system_prompt.py` | 系统提示词管理(get/update/reset) |
+| `work_permit_rules.py` | 作业票规则提示词管理(前端可编辑) |
+| `AGENT_DESIGN.md` | 完整设计文档 |
+| `SENSOR_DETECTION.md` | 传感器&监护人检测设计 |
 
 ---
 
-## 三、工具清单(3 个文件)
+## 8 个工具
 
-### 3.1 `tools.py` — 4 个 LangChain `@tool`
+| 工具 | 作用 |
+|---|---|
+| `query_raw_logs` | 按 wall_time 查原始日志 |
+| `get_current_snapshot` | 取某秒快照 |
+| `analyze_ppe_compliance` | 1 秒多数表决 |
+| `call_vl_expert` | VL 专家(占位) |
+| `query_past_events` | 查已落盘 raw_event(去重) |
+| `query_timeline` | 查违规趋势 |
+| `check_sensor_alarm` | 检查传感器告警 |
+| `check_supervisor_absence` | 检查监护人离岗 |
 
-| 工具 | 作用 | 参数 |
+---
+
+## 三维检测(降级模式)
+
+`_rule_fallback` 每次 tick 检测:
+
+| 维度 | 逻辑 | 场景 |
 |---|---|---|
-| `query_raw_logs` | 按 wall_time 查原始日志 | start/end_wall(ISO), source_type, person_id |
-| `get_current_snapshot` | 取某秒快照 | wall_time(ISO) |
-| `analyze_ppe_compliance` | 1 秒多数表决 | cv_logs, person_id, threshold, required_ppe |
-| `call_vl_expert` | 调 VL 专家(**占位**) | question, history, context |
+| PPE 缺失 | CV 多数表决(≥80%) | B/E |
+| 传感器告警 | status="alarm" | C/E |
+| 监护人离岗 | not in_danger_zone | D/E |
 
-### 3.2 `event_deduplicator.py` — 事件去重
-
-每个作业人员独立的状态机:
-
-```
-NO_ACTIVE →(违规)→ NEW_EPISODE(输出事件)→ ACTIVE(持续违规)
-ACTIVE →(恢复)→ COOLDOWN →(冷却期满)→ NO_ACTIVE
-COOLDOWN →(再违规)→ ACTIVE(视为同一事件延续)
-```
-
-### 3.3 `a5_agent.py` — 主循环(每秒一次)
-
-`tick(wall_time, snapshot)` 内部逻辑:
-
-```
-1. 多数表决   → analyze_ppe_compliance
-2. 事件去重   → deduplicator.check()
-3. 调 VL      → call_vl_expert(占位,Demo 不阻塞)
-4. 收集证据   → 多源(video + vl + sensor + location + permit)
-5. A5 终判   → _is_real_violation()
-6. 输出 raw_event → 无 risk_level
-```
+去重: 每 tick 查 `query_past_events`,同一事件覆盖写(更新 last_seen)。
 
 ---
 
-## 四、raw_event 输出格式
-
-```json
-{
-  "source": "A5",
-  "event_id": "A5-P7-1734567890",
-  "type": "PPE缺失-头盔",
-  "person": {"id": "P7", "name": "张师傅", "role": "焊工"},
-  "second": 12,
-  "wall_time": "2026-08-04T14:32:12.000",
-  "evidence": {
-    "video":       {"ratio": 0.88, "frame_count": 22},
-    "vl_semantic": {...},
-    "sensors":     {...},
-    "location":    {...},
-    "work_permit": {...}
-  },
-  "supporting_sources": ["video", "vl_semantic", "location", "work_permit"],
-  "explanation": "CV 多数表决... | VL 判断:... | 在危险区...",
-  "note": "A5 不判定 risk_level,由 A6 完成"
-}
-```
-
----
-
-## 五、事件去重效果(场景 B 示例)
+## 事件生命周期
 
 ```
-T=7   NO_ACTIVE  + 无违规 → NO_ACTIVE  → 不输出
-T=8   NO_ACTIVE  + 违规   → NEW_EPISODE → 输出 raw_event #1 ★
-T=9   NEW_EPISODE+ 违规   → ACTIVE      → 不输出
+T=8  首次检测 → 写 raw_event(ongoing)
+T=9  持续中  → 覆盖同一文件(更新 last_seen + duration)
 ...
-T=13  ACTIVE     + 无违规 → COOLDOWN    → 不输出
-T=16  COOLDOWN   + 无违规 → NO_ACTIVE   → 不输出(冷却到期)
-T=22  NO_ACTIVE  + 违规   → NEW_EPISODE → 输出 raw_event #2 ★
+T=13 恢复    → 覆盖写(status=closed)
 ```
 
 ---
 
-## 六、防未来
+## LLM 模式
 
-```python
-# 主循环调用前
-collector.set_agent_now(wall_time)
-
-# agent.tick 内部自动调用 set_agent_now
-# tools.query_raw_logs/get_snapshot 拒绝查询 > agent_now 的时间
-```
+| 模式 | 条件 | 行为 |
+|---|---|---|
+| Mock(默认) | 无 .env 配置 | `_rule_fallback` 降级 |
+| OpenAI | `LLM_PROVIDER=openai` | ChatOpenAI |
+| Ollama | `LLM_PROVIDER=ollama` | ChatOllama |
 
 ---
 
-## 七、特殊处理
+## 前端集成
 
-| 场景 | 处理 |
-|---|---|
-| **监护人 P11** | `required_ppe=["helmet"]`(不检查护目镜) |
-| **VL 不可用** | 返回 `_placeholder=True`,智能体降级到规则判断 |
-| **多数表决阈值** | 默认 0.8(25 帧中 20 帧违规) |
-| **冷却期** | 2 秒(防抖动,短暂恢复不算新事件) |
+- `demo/app.py` 每 tick 调 `agent.tick()`,通过 WebSocket 推送
+- 前端页面底部可编辑 `work_permit_rules`(运行时生效)
+- raw_event 文件持久化到 `logs/{scenario}/raw_events/`
