@@ -1,0 +1,1734 @@
+{
+  "scenario": "B",
+  "type": "cv",
+  "created_at": "20260805_143002",
+  "second": 8,
+  "log_count": 75,
+  "logs": [
+    {
+      "frame_id": "cam_03_8.000",
+      "scenario_time": "8.000s",
+      "wall_time": "2026-08-05T14:30:11.803",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.000",
+      "scenario_time": "8.000s",
+      "wall_time": "2026-08-05T14:30:11.803",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.000",
+      "scenario_time": "8.000s",
+      "wall_time": "2026-08-05T14:30:11.803",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.040",
+      "scenario_time": "8.040s",
+      "wall_time": "2026-08-05T14:30:11.891",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.040",
+      "scenario_time": "8.040s",
+      "wall_time": "2026-08-05T14:30:11.891",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.040",
+      "scenario_time": "8.040s",
+      "wall_time": "2026-08-05T14:30:11.891",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.080",
+      "scenario_time": "8.080s",
+      "wall_time": "2026-08-05T14:30:11.935",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.080",
+      "scenario_time": "8.080s",
+      "wall_time": "2026-08-05T14:30:11.935",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.080",
+      "scenario_time": "8.080s",
+      "wall_time": "2026-08-05T14:30:11.935",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.120",
+      "scenario_time": "8.120s",
+      "wall_time": "2026-08-05T14:30:11.984",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.120",
+      "scenario_time": "8.120s",
+      "wall_time": "2026-08-05T14:30:11.984",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.120",
+      "scenario_time": "8.120s",
+      "wall_time": "2026-08-05T14:30:11.984",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.160",
+      "scenario_time": "8.160s",
+      "wall_time": "2026-08-05T14:30:12.031",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.160",
+      "scenario_time": "8.160s",
+      "wall_time": "2026-08-05T14:30:12.031",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.160",
+      "scenario_time": "8.160s",
+      "wall_time": "2026-08-05T14:30:12.031",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.200",
+      "scenario_time": "8.200s",
+      "wall_time": "2026-08-05T14:30:12.082",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.200",
+      "scenario_time": "8.200s",
+      "wall_time": "2026-08-05T14:30:12.082",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.200",
+      "scenario_time": "8.200s",
+      "wall_time": "2026-08-05T14:30:12.082",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.240",
+      "scenario_time": "8.240s",
+      "wall_time": "2026-08-05T14:30:12.135",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.240",
+      "scenario_time": "8.240s",
+      "wall_time": "2026-08-05T14:30:12.135",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.240",
+      "scenario_time": "8.240s",
+      "wall_time": "2026-08-05T14:30:12.136",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.280",
+      "scenario_time": "8.280s",
+      "wall_time": "2026-08-05T14:30:12.185",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.280",
+      "scenario_time": "8.280s",
+      "wall_time": "2026-08-05T14:30:12.185",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.280",
+      "scenario_time": "8.280s",
+      "wall_time": "2026-08-05T14:30:12.185",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.320",
+      "scenario_time": "8.320s",
+      "wall_time": "2026-08-05T14:30:12.235",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.320",
+      "scenario_time": "8.320s",
+      "wall_time": "2026-08-05T14:30:12.236",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.320",
+      "scenario_time": "8.320s",
+      "wall_time": "2026-08-05T14:30:12.236",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.360",
+      "scenario_time": "8.360s",
+      "wall_time": "2026-08-05T14:30:12.283",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.360",
+      "scenario_time": "8.360s",
+      "wall_time": "2026-08-05T14:30:12.283",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.360",
+      "scenario_time": "8.360s",
+      "wall_time": "2026-08-05T14:30:12.283",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.400",
+      "scenario_time": "8.400s",
+      "wall_time": "2026-08-05T14:30:12.336",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.400",
+      "scenario_time": "8.400s",
+      "wall_time": "2026-08-05T14:30:12.336",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.400",
+      "scenario_time": "8.400s",
+      "wall_time": "2026-08-05T14:30:12.336",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.440",
+      "scenario_time": "8.440s",
+      "wall_time": "2026-08-05T14:30:12.381",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.440",
+      "scenario_time": "8.440s",
+      "wall_time": "2026-08-05T14:30:12.383",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.440",
+      "scenario_time": "8.440s",
+      "wall_time": "2026-08-05T14:30:12.383",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.480",
+      "scenario_time": "8.480s",
+      "wall_time": "2026-08-05T14:30:12.435",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.480",
+      "scenario_time": "8.480s",
+      "wall_time": "2026-08-05T14:30:12.435",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.480",
+      "scenario_time": "8.480s",
+      "wall_time": "2026-08-05T14:30:12.435",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.520",
+      "scenario_time": "8.520s",
+      "wall_time": "2026-08-05T14:30:12.484",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.520",
+      "scenario_time": "8.520s",
+      "wall_time": "2026-08-05T14:30:12.484",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.520",
+      "scenario_time": "8.520s",
+      "wall_time": "2026-08-05T14:30:12.484",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.560",
+      "scenario_time": "8.560s",
+      "wall_time": "2026-08-05T14:30:12.532",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.560",
+      "scenario_time": "8.560s",
+      "wall_time": "2026-08-05T14:30:12.532",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.560",
+      "scenario_time": "8.560s",
+      "wall_time": "2026-08-05T14:30:12.532",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.600",
+      "scenario_time": "8.600s",
+      "wall_time": "2026-08-05T14:30:12.584",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.600",
+      "scenario_time": "8.600s",
+      "wall_time": "2026-08-05T14:30:12.585",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.600",
+      "scenario_time": "8.600s",
+      "wall_time": "2026-08-05T14:30:12.585",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.640",
+      "scenario_time": "8.640s",
+      "wall_time": "2026-08-05T14:30:12.633",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.640",
+      "scenario_time": "8.640s",
+      "wall_time": "2026-08-05T14:30:12.633",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.640",
+      "scenario_time": "8.640s",
+      "wall_time": "2026-08-05T14:30:12.633",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.680",
+      "scenario_time": "8.680s",
+      "wall_time": "2026-08-05T14:30:12.684",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.680",
+      "scenario_time": "8.680s",
+      "wall_time": "2026-08-05T14:30:12.684",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.680",
+      "scenario_time": "8.680s",
+      "wall_time": "2026-08-05T14:30:12.684",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.720",
+      "scenario_time": "8.720s",
+      "wall_time": "2026-08-05T14:30:12.735",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.720",
+      "scenario_time": "8.720s",
+      "wall_time": "2026-08-05T14:30:12.735",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.720",
+      "scenario_time": "8.720s",
+      "wall_time": "2026-08-05T14:30:12.735",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.760",
+      "scenario_time": "8.760s",
+      "wall_time": "2026-08-05T14:30:12.783",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.760",
+      "scenario_time": "8.760s",
+      "wall_time": "2026-08-05T14:30:12.783",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.760",
+      "scenario_time": "8.760s",
+      "wall_time": "2026-08-05T14:30:12.783",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.800",
+      "scenario_time": "8.800s",
+      "wall_time": "2026-08-05T14:30:12.834",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.800",
+      "scenario_time": "8.800s",
+      "wall_time": "2026-08-05T14:30:12.835",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.800",
+      "scenario_time": "8.800s",
+      "wall_time": "2026-08-05T14:30:12.835",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.840",
+      "scenario_time": "8.840s",
+      "wall_time": "2026-08-05T14:30:12.883",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.840",
+      "scenario_time": "8.840s",
+      "wall_time": "2026-08-05T14:30:12.883",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.840",
+      "scenario_time": "8.840s",
+      "wall_time": "2026-08-05T14:30:12.883",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.880",
+      "scenario_time": "8.880s",
+      "wall_time": "2026-08-05T14:30:12.918",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.880",
+      "scenario_time": "8.880s",
+      "wall_time": "2026-08-05T14:30:12.918",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.880",
+      "scenario_time": "8.880s",
+      "wall_time": "2026-08-05T14:30:12.918",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.920",
+      "scenario_time": "8.920s",
+      "wall_time": "2026-08-05T14:30:12.949",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.920",
+      "scenario_time": "8.920s",
+      "wall_time": "2026-08-05T14:30:12.949",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.920",
+      "scenario_time": "8.920s",
+      "wall_time": "2026-08-05T14:30:12.949",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.960",
+      "scenario_time": "8.960s",
+      "wall_time": "2026-08-05T14:30:12.984",
+      "person_id": "P11",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": false,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.960",
+      "scenario_time": "8.960s",
+      "wall_time": "2026-08-05T14:30:12.984",
+      "person_id": "P7",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": false,
+          "confidence": 0.91
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.88
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.93
+        }
+      ]
+    },
+    {
+      "frame_id": "cam_03_8.960",
+      "scenario_time": "8.960s",
+      "wall_time": "2026-08-05T14:30:12.985",
+      "person_id": "P8",
+      "detections": [
+        {
+          "class_name": "helmet",
+          "value": true,
+          "confidence": 0.95
+        },
+        {
+          "class_name": "goggles",
+          "value": true,
+          "confidence": 0.92
+        },
+        {
+          "class_name": "protective_suit",
+          "value": true,
+          "confidence": 0.97
+        }
+      ]
+    }
+  ]
+}

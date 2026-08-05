@@ -1,0 +1,26 @@
+{
+  "wall_time": "2026-08-05T14:30:32.342",
+  "events": [
+    {
+      "source": "A5",
+      "event_id": "A5-P11-1785911404690",
+      "type": "PPE缺失-头盔",
+      "person": {
+        "id": "P11",
+        "name": "赵师傅",
+        "role": "监护人"
+      },
+      "second": 1,
+      "wall_time": "2026-08-05T14:30:04.342",
+      "first_seen": "2026-08-05T14:30:04.342",
+      "last_seen": "2026-08-05T14:30:32.342",
+      "status": "ongoing",
+      "evidence": {
+        "cv_ratio": 0.0
+      },
+      "explanation": "CV多数表决: 0/25帧(0%)",
+      "note": "A5不判定risk_level,由A6完成",
+      "duration_sec": 28.0
+    }
+  ]
+}

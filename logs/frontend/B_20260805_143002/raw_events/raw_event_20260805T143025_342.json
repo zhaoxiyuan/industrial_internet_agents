@@ -1,0 +1,26 @@
+{
+  "wall_time": "2026-08-05T14:30:28.342",
+  "events": [
+    {
+      "source": "A5",
+      "event_id": "A5-P7-1785911429795",
+      "type": "PPE缺失-头盔",
+      "person": {
+        "id": "P7",
+        "name": "张师傅",
+        "role": "焊工"
+      },
+      "second": 22,
+      "wall_time": "2026-08-05T14:30:25.342",
+      "first_seen": "2026-08-05T14:30:25.342",
+      "last_seen": "2026-08-05T14:30:28.342",
+      "status": "closed",
+      "evidence": {
+        "cv_ratio": 1.0
+      },
+      "explanation": "违规已结束,事件关闭",
+      "note": "A5不判定risk_level,由A6完成",
+      "duration_sec": 3.0
+    }
+  ]
+}

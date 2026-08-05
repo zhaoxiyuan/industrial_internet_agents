@@ -1,0 +1,42 @@
+{
+  "scenario": "B",
+  "type": "sensor",
+  "created_at": "20260805_143002",
+  "second": 12,
+  "log_count": 1,
+  "logs": [
+    {
+      "scenario_time": "12.5s",
+      "wall_time": "2026-08-05T14:30:15.334",
+      "readings": {
+        "flame_detector_03": {
+          "type": "火焰探测",
+          "value": false,
+          "unit": "bool",
+          "status": "normal",
+          "threshold_warning": null,
+          "threshold_alarm": null,
+          "location": "动火区-A 北侧"
+        },
+        "gas_detector_03": {
+          "type": "可燃气体浓度",
+          "value": 0.2,
+          "unit": "%LEL",
+          "status": "normal",
+          "threshold_warning": 0.7,
+          "threshold_alarm": 1.0,
+          "location": "动火区-A 东侧 3 米"
+        },
+        "temperature_03": {
+          "type": "环境温度",
+          "value": 26.0,
+          "unit": "°C",
+          "status": "normal",
+          "threshold_warning": 35.0,
+          "threshold_alarm": 45.0,
+          "location": "动火区-A 中央"
+        }
+      }
+    }
+  ]
+}
