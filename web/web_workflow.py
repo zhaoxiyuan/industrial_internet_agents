@@ -2,17 +2,23 @@
 Web 前端 - P1-P10 工作流可视化与执行
 集成 HumanInTheLoop 人工确认机制
 
-工作流样式展示，每个节点可点击查看详情和系统提示词
+页面结构:
+1. 配置页面: 模型参数 + Agent 系统提示词配置
+2. 执行页面: 工作流可视化 + 作业申请 + HITL 弹窗确认
 """
 import json
 import os
 import gradio as gr
+from dotenv import load_dotenv
 from agents.workflow import (
     run_workflow,
     confirm_and_continue,
     get_workflow_state,
     list_pending_confirmations,
 )
+
+# 加载 .env 配置
+load_dotenv()
 
 
 # ============================================================
@@ -78,14 +84,39 @@ ALL_STAGES = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]
 # 系统提示词目录
 SYSTEM_PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "system_prompt")
 
+# .env 文件路径
+ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+
 
 # ============================================================
-# 辅助函数
+# 辅助函数 - 配置相关
 # ============================================================
+
+def load_env_config():
+    """加载 .env 配置"""
+    return {
+        "api_key": os.getenv("OPENAI_API_KEY", ""),
+        "base_url": os.getenv("OPENAI_BASE_URL", ""),
+        "model": os.getenv("OPENAI_MODEL", ""),
+    }
+
+
+def save_env_config(api_key, base_url, model):
+    """保存配置到 .env"""
+    lines = [
+        "# OpenAI Configuration",
+        f"OPENAI_API_KEY={api_key}",
+        f"OPENAI_BASE_URL={base_url}",
+        f"OPENAI_MODEL={model}",
+        "MODEL_PROVIDER=openai",
+    ]
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return "✅ 配置已保存到 .env"
+
 
 def load_system_prompt(stage: str) -> str:
     """加载系统提示词"""
-    # 文件名映射
     stage_to_file = {
         "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
         "P2": "P2_TASK_SYSTEM_PROMPT.md",
@@ -103,8 +134,33 @@ def load_system_prompt(stage: str) -> str:
     if os.path.exists(prompt_file):
         with open(prompt_file, "r", encoding="utf-8") as f:
             return f.read()
-    return f"系统提示词文件未找到: {prompt_file}"
+    return ""
 
+
+def save_system_prompt(stage: str, content: str) -> str:
+    """保存系统提示词"""
+    stage_to_file = {
+        "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
+        "P2": "P2_TASK_SYSTEM_PROMPT.md",
+        "P3": "P3_CONTEXT_SYSTEM_PROMPT.md",
+        "P4": "P4_BINDING_SYSTEM_PROMPT.md",
+        "P5": "P5_VERIFY_SYSTEM_PROMPT.md",
+        "P6": "P6_MONITOR_SYSTEM_PROMPT.md",
+        "P7": "P7_RISK_SYSTEM_PROMPT.md",
+        "P8": "P8_DISPOSITION_SYSTEM_PROMPT.md",
+        "P9": "P9_CLOSURE_SYSTEM_PROMPT.md",
+        "P10": "P10_ARCHIVE_SYSTEM_PROMPT.md",
+    }
+    filename = stage_to_file.get(stage, f"{stage}_SYSTEM_PROMPT.md")
+    prompt_file = os.path.join(SYSTEM_PROMPT_DIR, filename)
+    with open(prompt_file, "w", encoding="utf-8") as f:
+        f.write(content)
+    return f"✅ {stage} 系统提示词已保存"
+
+
+# ============================================================
+# 辅助函数 - 工作流相关
+# ============================================================
 
 def build_workflow_diagram(completed, current, pending_confirmations=None):
     """构建可视化工作流图"""
@@ -145,11 +201,11 @@ def build_workflow_diagram(completed, current, pending_confirmations=None):
         # 工具标签
         tools_preview = ", ".join(info.get("tools", [])[:2]) + ("..." if len(info.get("tools", [])) > 2 else "")
 
-        # 节点内容
+        # 节点内容 - 点击时调用 JavaScript
         lines.append(f'''
         <div class="stage-node" data-stage="{stage}"
-             style="{node_style}border-radius:12px;padding:16px;margin:4px 0;cursor:{cursor};transition:all 0.3s;
-                    onclick="selectStage('{stage}')" id="node-{stage}">
+             style="{node_style}border-radius:12px;padding:16px;margin:4px 0;cursor:{cursor};transition:all 0.3s;"
+             onclick="window.selectStage('{stage}')" id="node-{stage}">
             <div style="display:flex;align-items:center;gap:12px;">
                 <span style="font-size:28px;">{status_icon}</span>
                 <div style="flex:1;">
@@ -165,7 +221,7 @@ def build_workflow_diagram(completed, current, pending_confirmations=None):
         </div>
         ''')
 
-        # 连接箭头（除最后一个）
+        # 连接箭头
         if i < len(ALL_STAGES) - 1:
             next_has_confirm = STAGE_INFO[ALL_STAGES[i+1]].get("human_confirm") is not None
             arrow_color = info['color'] if is_completed else "#e0e0e0"
@@ -198,8 +254,6 @@ def build_stage_detail_panel(stage: str, completed, pending):
     is_pending = stage in pending
 
     lines = ['<div style="font-family:Arial,sans-serif;padding:20px;">']
-
-    # 标题
     lines.append(f'''
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
         <span style="font-size:32px;">{info.get("icon", "📋")}</span>
@@ -210,13 +264,11 @@ def build_stage_detail_panel(stage: str, completed, pending):
     </div>
     ''')
 
-    # 状态标签
     if is_completed:
         lines.append('<span style="background:#4CAF50;color:white;padding:4px 12px;border-radius:12px;font-size:12px;">✅ 已完成</span>')
     elif is_pending:
         lines.append('<span style="background:#FFC107;color:white;padding:4px 12px;border-radius:12px;font-size:12px;">⏸️ 待确认</span>')
 
-    # 人工确认信息
     if info.get("human_confirm"):
         lines.append(f'''
         <div style="background:#FFF8E1;border:2px solid #FFC107;border-radius:10px;padding:15px;margin:15px 0;">
@@ -226,10 +278,8 @@ def build_stage_detail_panel(stage: str, completed, pending):
         </div>
         ''')
 
-    # 描述
     lines.append(f'<p style="color:#555;line-height:1.6;">{info.get("description", "")}</p>')
 
-    # 输入输出
     lines.append('''
     <table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:13px;">
         <tr style="background:#f5f5f5;"><th style="padding:10px;border:1px solid #ddd;text-align:left;">类型</th><th style="padding:10px;border:1px solid #ddd;">内容</th></tr>
@@ -239,7 +289,6 @@ def build_stage_detail_panel(stage: str, completed, pending):
     </table>
     ''')
 
-    # 系统提示词
     prompt = load_system_prompt(stage)
     lines.append(f'''
     <div style="margin-top:20px;">
@@ -247,6 +296,48 @@ def build_stage_detail_panel(stage: str, completed, pending):
         <div style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;font-size:12px;white-space:pre-wrap;max-height:300px;overflow:auto;">{prompt}</div>
     </div>
     ''')
+
+    lines.append('</div>')
+    return "\n".join(lines)
+
+
+def build_confirm_modal_content(stage: str, pending_data: dict):
+    """构建确认弹窗内容"""
+    if not stage or not pending_data:
+        return "<p style='color:#999;'>无确认信息</p>"
+
+    info = STAGE_INFO.get(stage, {})
+    lines = ['<div style="font-family:Arial,sans-serif;padding:20px;">']
+
+    # 标题
+    lines.append(f'''
+    <div style="text-align:center;margin-bottom:20px;">
+        <span style="font-size:48px;">{info.get("icon", "⚠️")}</span>
+        <h2 style="color:{info.get("color", "#FF9800")};margin:10px 0;">{stage} - {info.get("name", "")}</h2>
+        <span style="background:#FF9800;color:white;padding:4px 12px;border-radius:12px;font-size:12px;">👤 需要人工确认</span>
+    </div>
+    ''')
+
+    # 确认类型
+    confirm_type = pending_data.get("confirm_type", "stage")
+    lines.append(f'<p style="font-size:16px;margin-bottom:15px;"><b>确认类型:</b> {confirm_type}</p>')
+
+    # 关键信息
+    if pending_data.get("message"):
+        lines.append(f'<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin-bottom:15px;"><b>📋 信息:</b><br>{pending_data["message"]}</div>')
+
+    # 证据/依据
+    if pending_data.get("evidence"):
+        evidence = pending_data["evidence"]
+        if isinstance(evidence, list):
+            evidence_str = "<br>".join([f"• {e}" for e in evidence])
+        else:
+            evidence_str = str(evidence)
+        lines.append(f'<div style="background:#fff3e0;padding:15px;border-radius:8px;margin-bottom:15px;"><b>📊 证据/依据:</b><br>{evidence_str}</div>')
+
+    # 建议
+    if pending_data.get("suggestion"):
+        lines.append(f'<div style="background:#e8f5e9;padding:15px;border-radius:8px;margin-bottom:15px;"><b>💡 建议:</b><br>{pending_data["suggestion"]}</div>')
 
     lines.append('</div>')
     return "\n".join(lines)
@@ -314,8 +405,10 @@ def start_workflow(application_str):
             f"[{ts}] ❌ JSON格式错误\n",
             0,
             {"status": "error", "pending": [], "confirmed": [], "thread_id": None, "current_stage": ""},
-            gr.update(choices=[], value=None),
-            [],
+            gr.update(visible=False),
+            gr.update(visible=False, value=""),
+            gr.update(visible=False, value=""),
+            gr.update(visible=False, value=""),
         )
 
     reset_thread()
@@ -334,20 +427,30 @@ def start_workflow(application_str):
     ts = datetime.now().strftime("%H:%M:%S")
     if pending_stages:
         log = f"[{ts}] ⏳ 工作流暂停，等待: {', '.join(pending_stages)}\n"
-        dropdown_update = gr.update(choices=pending_stages, value=pending_stages[0])
+        # 弹窗可见
+        first_pending = pending[0] if pending else {}
+        modal_content = build_confirm_modal_content(pending_stages[0], first_pending)
+        modal_update = gr.update(visible=True)
     else:
         log = f"[{ts}] ✅ 工作流执行完成\n"
-        dropdown_update = gr.update(choices=[], value=None)
+        modal_update = gr.update(visible=False)
 
     state = {
         "status": "waiting" if pending_stages else "completed",
         "pending": pending_stages,
+        "pending_data": {p.get("stage", ""): p for p in pending},
         "confirmed": completed,
         "thread_id": thread_id,
         "current_stage": current,
     }
 
-    return workflow_html, control_html, detail_html, log, len(completed), state, dropdown_update, [[p, "待确认"] for p in pending_stages] if pending_stages else []
+    return (
+        workflow_html, control_html, detail_html, log, len(completed), state,
+        modal_update,
+        gr.update(visible=True, value=pending_stages[0] if pending_stages else ""),
+        gr.update(visible=True, value=modal_content if pending_stages else ""),
+        gr.update(visible=True, value="approve"),
+    )
 
 
 def confirm_stage_fn(stage, decision, state):
@@ -356,7 +459,12 @@ def confirm_stage_fn(stage, decision, state):
 
     thread_id = state.get("thread_id")
     if not thread_id:
-        return "错误: 无有效工作流", state, gr.update(choices=[], value=None), []
+        err = "错误: 无有效工作流"
+        return (
+            build_workflow_diagram([], "", []), err, err, 0, state,
+            gr.update(visible=False), gr.update(visible=False, value=""),
+            gr.update(visible=False, value=""), gr.update(visible=False, value=""),
+        )
 
     result = confirm_and_continue(thread_id, stage, decision)
 
@@ -372,28 +480,30 @@ def confirm_stage_fn(stage, decision, state):
     ts = datetime.now().strftime("%H:%M:%S")
     if pending_stages:
         log = f"[{ts}] ✅ {stage} 已确认({decision})，等待: {', '.join(pending_stages)}\n"
-        dropdown_update = gr.update(choices=pending_stages, value=pending_stages[0])
+        first_pending = pending[0] if pending else {}
+        modal_content = build_confirm_modal_content(pending_stages[0], first_pending)
+        modal_update = gr.update(visible=True)
     else:
         log = f"[{ts}] ✅ {stage} 已确认({decision})，工作流完成\n"
-        dropdown_update = gr.update(choices=[], value=None)
+        modal_update = gr.update(visible=False)
+        modal_content = ""
 
     new_state = {
         "status": "waiting" if pending_stages else "completed",
         "pending": pending_stages,
+        "pending_data": {p.get("stage", ""): p for p in pending},
         "confirmed": completed,
         "thread_id": thread_id,
         "current_stage": current,
     }
 
-    return workflow_html, control_html, detail_html, log, len(completed), new_state, dropdown_update, [[p, "待确认"] for p in pending_stages] if pending_stages else []
-
-
-def on_stage_selected(stage, state):
-    """节点被选中时更新详情面板"""
-    completed = state.get("confirmed", [])
-    pending = state.get("pending", [])
-    detail_html = build_stage_detail_panel(stage, completed, pending)
-    return detail_html
+    return (
+        workflow_html, control_html, detail_html, log, len(completed), new_state,
+        modal_update,
+        gr.update(visible=True, value=pending_stages[0] if pending_stages else ""),
+        gr.update(visible=True, value=modal_content),
+        gr.update(visible=True, value="approve"),
+    )
 
 
 def sync_form_to_json(work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end):
@@ -437,7 +547,10 @@ def sync_json_to_form(application_str):
 
 
 def main():
-    # 加载默认作业申请数据 (从 P1_data.json)
+    # 加载 .env 配置
+    env_config = load_env_config()
+
+    # 加载默认作业申请数据
     p1_data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "input", "P1_data.json")
     if os.path.exists(p1_data_path):
         with open(p1_data_path, "r", encoding="utf-8") as f:
@@ -467,169 +580,353 @@ def main():
     default_planned_start = default_application.get("planned_start", "2026-08-04T09:00:00Z")
     default_planned_end = default_application.get("planned_end", "2026-08-04T17:00:00Z")
 
-    with gr.Blocks(title="P1-P10 工作流编排") as demo:
+    # JavaScript 全局函数
+    page_head = '''
+    <script>
+    window.selectStage = function(stage) {
+        var input = document.getElementById("selected-stage-input");
+        if (input) {
+            input.value = stage;
+            input.dispatchEvent(new Event("change"));
+        }
+    };
+    </script>
+    '''
+
+    with gr.Blocks(title="边缘智能作业监测系统", theme=gr.themes.Default(spacing_size="md", text_size="md"), head=page_head) as demo:
 
         gr.Markdown("## 🔄 边缘智能作业监测系统 - P1-P10 工作流编排")
-        gr.Markdown("### 👤 支持 HumanInTheLoop - 虚线框节点需要人工确认")
 
-        # 隐藏字段用于节点点击
-        selected_stage_input = gr.Textbox(elem_id="selected-stage-input", visible=False)
+        with gr.Tabs():
+            # ========================================
+            # Tab 1: 配置页面
+            # ========================================
+            with gr.Tab("⚙️ 配置"):
+                gr.Markdown("### ⚙️ 配置面板")
 
-        with gr.Row():
-            # ========== 左侧：工作流图 ==========
-            with gr.Column(scale=2):
-                gr.Markdown("#### 📊 工作流图（点击节点查看详情）")
-                workflow_display = gr.HTML(build_workflow_diagram([], "", []))
+                # 左右布局
+                with gr.Row():
+                    # 左侧菜单 (HTML 实现)
+                    with gr.Column(scale=1, min_width=0):
+                        menu_input = gr.Textbox(visible=False, value="模型配置", elem_id="menu-input")
 
-                gr.Markdown("#### 📝 作业申请")
-                with gr.Tab("📋 表单填写"):
-                    gr.Markdown("**作业基本信息**")
-                    work_type = gr.Dropdown(
-                        choices=["受限空间作业", "高空作业", "动火作业", "吊装作业", "临时用电作业"],
-                        value=default_work_type,
-                        label="作业类型"
-                    )
-                    region = gr.Textbox(value=default_region, label="作业区域")
-                    medium = gr.Textbox(value=default_medium, label="介质")
-                    equipment = gr.Textbox(value=default_equipment, label="设备(逗号分隔)")
-                    gr.Markdown("**作业人员**")
-                    person_name = gr.Textbox(value=default_person_name, label="姓名")
-                    person_badge = gr.Textbox(value=default_person_badge, label="工牌号")
-                    person_quals = gr.Textbox(value=default_person_quals, label="资质(逗号分隔)")
-                    gr.Markdown("**计划时间**")
-                    with gr.Row():
-                        planned_start = gr.Textbox(value=default_planned_start, label="开始时间")
-                        planned_end = gr.Textbox(value=default_planned_end, label="结束时间")
+                        menu_html = '''
+                        <div style="padding:5px 0;text-align:left;">
+                            <div style="font-size:12px;color:#666;padding:5px 0;margin-bottom:5px;font-weight:bold;">📋 配置菜单</div>
+                            <button id="btn-model" onclick="selectMenu('模型配置')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#FF9800;color:white;font-size:13px;text-align:left;font-weight:bold;">⚙️ 模型配置</button>
+                            <div style="border-bottom:1px solid #ddd;margin:10px 0;"></div>
+                            <div style="font-size:12px;color:#666;padding:5px 0;margin-bottom:5px;font-weight:bold;">📝 Agent 提示词</div>
+                            <button id="btn-P1" onclick="selectMenu('P1')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P1 作业预约</button>
+                            <button id="btn-P2" onclick="selectMenu('P2')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P2 作业任务获取</button>
+                            <button id="btn-P3" onclick="selectMenu('P3')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P3 作业上下文</button>
+                            <button id="btn-P4" onclick="selectMenu('P4')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P4 摄像与数据</button>
+                            <button id="btn-P5" onclick="selectMenu('P5')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P5 作业前核验</button>
+                            <button id="btn-P6" onclick="selectMenu('P6')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P6 动态监测</button>
+                            <button id="btn-P7" onclick="selectMenu('P7')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P7 风险研判</button>
+                            <button id="btn-P8" onclick="selectMenu('P8')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P8 人机协同</button>
+                            <button id="btn-P9" onclick="selectMenu('P9')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P9 闭环跟踪</button>
+                            <button id="btn-P10" onclick="selectMenu('P10')" style="display:block;width:100%;padding:10px 12px;margin:3px 0;border:none;border-radius:6px;background:#f5f5f5;color:#333;font-size:13px;text-align:left;">P10 归档复盘</button>
+                        </div>
+                        <script>
+                        function selectMenu(value) {
+                            // 更新按钮高亮
+                            document.querySelectorAll('button[id^="btn-"]').forEach(function(b) {
+                                b.style.background = '#f5f5f5';
+                                b.style.color = '#333';
+                            });
+                            var btn = document.getElementById('btn-' + value.replace('模型配置', 'model'));
+                            if (btn) {
+                                btn.style.background = 'linear-gradient(135deg, #FF9800, #FF5722)';
+                                btn.style.color = 'white';
+                            }
+                            // 触发 Gradio
+                            var inputs = document.querySelectorAll('input[type="hidden"]');
+                            for (var i = 0; i < inputs.length; i++) {
+                                inputs[i].value = value;
+                                inputs[i].dispatchEvent(new Event('change'));
+                            }
+                        }
+                        </script>
+                        '''
+                        menu_display = gr.HTML(menu_html)
 
-                with gr.Tab("📄 JSON填写"):
-                    application_text = gr.Textbox(
-                        value=default_json,
-                        placeholder='{"work_type":"...","region":"...","equipment":[...]}',
-                        lines=12,
-                        label="作业申请 JSON"
-                    )
+                    # 右侧内容区
+                    with gr.Column(scale=3):
+                        # ========== 模型配置面板 ==========
+                        with gr.Group(visible=True) as model_config_panel:
+                            gr.Markdown("#### 🤖 模型配置")
+                            with gr.Row():
+                                api_key_input = gr.Textbox(
+                                    label="API Key",
+                                    value=env_config.get("api_key", ""),
+                                    type="password",
+                                    scale=2,
+                                )
+                                base_url_input = gr.Textbox(
+                                    label="Base URL",
+                                    value=env_config.get("base_url", ""),
+                                    scale=2,
+                                )
+                                model_input = gr.Textbox(
+                                    label="Model",
+                                    value=env_config.get("model", ""),
+                                    scale=1,
+                                )
+                            with gr.Row():
+                                config_save_btn = gr.Button("💾 保存", variant="primary")
+                                config_status = gr.Textbox(label="状态", interactive=False)
 
-                # 同步表单和JSON的隐藏状态
-                form_data_state = gr.JSON(value=default_application, visible=False)
+                        # ========== Agent 提示词配置面板 ==========
+                        with gr.Group(visible=False) as agent_prompt_container:
+                            gr.Markdown("#### 📝 系统提示词配置")
+                            agent_prompt_dropdown = gr.Dropdown(
+                                choices=ALL_STAGES,
+                                value="P1",
+                                label="选择 Agent",
+                            )
+                            agent_prompt_textarea = gr.Textbox(
+                                label="系统提示词",
+                                value=load_system_prompt("P1"),
+                                lines=20,
+                                interactive=True,
+                            )
+                            with gr.Row():
+                                prompt_save_btn = gr.Button("💾 保存提示词", variant="primary")
+                                prompt_refresh_btn = gr.Button("🔄 刷新")
+                            agent_save_status = gr.Textbox(label="状态", interactive=False)
+
+                # 配置页面事件
+                def save_config(api_key, base_url, model):
+                    return save_env_config(api_key, base_url, model)
+
+                def on_agent_selected(stage):
+                    return load_system_prompt(stage)
+
+                def on_menu_selected(selection):
+                    """根据菜单选择显示不同面板"""
+                    if selection == "模型配置":
+                        return (
+                            gr.update(visible=True),    # model_config_panel
+                            gr.update(visible=False),   # agent_prompt_container
+                            gr.update(),                # agent_prompt_dropdown (保持不变)
+                            gr.update(),                # agent_prompt_textarea (保持不变)
+                        )
+                    else:
+                        # 选择 Agent 时，同步更新下拉框并加载提示词
+                        prompt = load_system_prompt(selection)
+                        return (
+                            gr.update(visible=False),   # model_config_panel
+                            gr.update(visible=True),    # agent_prompt_container
+                            gr.update(value=selection), # agent_prompt_dropdown
+                            prompt,                     # agent_prompt_textarea
+                        )
+
+                config_save_btn.click(
+                    fn=save_config,
+                    inputs=[api_key_input, base_url_input, model_input],
+                    outputs=[config_status],
+                )
+
+                # 菜单选择事件
+                menu_input.change(
+                    fn=on_menu_selected,
+                    inputs=[menu_input],
+                    outputs=[model_config_panel, agent_prompt_container, agent_prompt_dropdown, agent_prompt_textarea],
+                )
+
+                agent_prompt_dropdown.change(
+                    fn=on_agent_selected,
+                    inputs=[agent_prompt_dropdown],
+                    outputs=[agent_prompt_textarea],
+                )
+
+                prompt_save_btn.click(
+                    fn=lambda stage, content: save_system_prompt(stage, content),
+                    inputs=[agent_prompt_dropdown, agent_prompt_textarea],
+                    outputs=[agent_save_status],
+                )
+
+                prompt_refresh_btn.click(
+                    fn=on_agent_selected,
+                    inputs=[agent_prompt_dropdown],
+                    outputs=[agent_prompt_textarea],
+                )
+
+            # ========================================
+            # Tab 2: 执行页面
+            # ========================================
+            with gr.Tab("🚀 执行"):
+                # 隐藏字段用于节点点击
+                selected_stage_input = gr.Textbox(elem_id="selected-stage-input", visible=False)
 
                 with gr.Row():
-                    start_btn = gr.Button("🚀 启动", variant="primary")
-                    refresh_btn = gr.Button("🔄 刷新")
-                    reset_btn = gr.Button("🗑️ 重置")
+                    # ========== 左侧：工作流图 ==========
+                    with gr.Column(scale=2):
+                        gr.Markdown("#### 📊 工作流图（点击节点查看详情）")
+                        workflow_display = gr.HTML(build_workflow_diagram([], "", []))
 
-                gr.Markdown("#### 📜 日志")
-                log_display = gr.Textbox(lines=6, interactive=False)
+                        gr.Markdown("#### 📝 作业申请")
+                        with gr.Tab("📋 表单填写"):
+                            gr.Markdown("**作业基本信息**")
+                            work_type = gr.Dropdown(
+                                choices=["受限空间作业", "高空作业", "动火作业", "吊装作业", "临时用电作业"],
+                                value=default_work_type,
+                                label="作业类型"
+                            )
+                            region = gr.Textbox(value=default_region, label="作业区域")
+                            medium = gr.Textbox(value=default_medium, label="介质")
+                            equipment = gr.Textbox(value=default_equipment, label="设备(逗号分隔)")
+                            gr.Markdown("**作业人员**")
+                            person_name = gr.Textbox(value=default_person_name, label="姓名")
+                            person_badge = gr.Textbox(value=default_person_badge, label="工牌号")
+                            person_quals = gr.Textbox(value=default_person_quals, label="资质(逗号分隔)")
+                            gr.Markdown("**计划时间**")
+                            with gr.Row():
+                                planned_start = gr.Textbox(value=default_planned_start, label="开始时间")
+                                planned_end = gr.Textbox(value=default_planned_end, label="结束时间")
 
-            # ========== 右侧：详情和确认 ==========
-            with gr.Column(scale=1):
-                gr.Markdown("#### 🔍 节点详情")
-                detail_display = gr.HTML("<p style='color:#999;text-align:center;'>👈 点击左侧节点查看详情</p>")
+                        with gr.Tab("📄 JSON填写"):
+                            application_text = gr.Textbox(
+                                value=default_json,
+                                placeholder='{"work_type":"...","region":"...","equipment":[...]}',
+                                lines=12,
+                                label="作业申请 JSON"
+                            )
 
-                gr.Markdown("#### ⚙️ 控制面板")
-                control_display = gr.HTML("<p style='color:#999;'>启动工作流后显示状态</p>")
+                        with gr.Row():
+                            start_btn = gr.Button("🚀 启动", variant="primary")
+                            refresh_btn = gr.Button("🔄 刷新")
+                            reset_btn = gr.Button("🗑️ 重置")
 
-                gr.Markdown("#### 👤 人工确认")
-                confirm_stage_dropdown = gr.Dropdown(
-                    choices=ALL_STAGES,
-                    label="选择阶段",
-                    value=None,
+                        gr.Markdown("#### 📜 日志")
+                        log_display = gr.Textbox(lines=6, interactive=False)
+
+                    # ========== 右侧：详情和弹窗 ==========
+                    with gr.Column(scale=1):
+                        gr.Markdown("#### 🔍 节点详情")
+                        detail_display = gr.HTML("<p style='color:#999;text-align:center;'>👈 点击左侧节点查看详情</p>")
+
+                        gr.Markdown("#### ⚙️ 控制面板")
+                        control_display = gr.HTML("<p style='color:#999;'>启动工作流后显示状态</p>")
+
+                # ========== HITL 弹窗 ==========
+                with gr.Group(visible=False) as hitl_modal:
+                    gr.Markdown("### 👤 人工确认")
+                    modal_stage = gr.Textbox(label="当前阶段", interactive=False)
+                    modal_content = gr.HTML("<p style='color:#999;'>加载中...</p>")
+                    decision_radio = gr.Radio(
+                        choices=["approve", "reject"],
+                        label="决定",
+                        value="approve",
+                    )
+                    with gr.Row():
+                        modal_confirm_btn = gr.Button("✅ 确认", variant="primary")
+                        modal_cancel_btn = gr.Button("❌ 取消")
+
+                # 状态
+                workflow_state = gr.State({
+                    "status": "idle",
+                    "pending": [],
+                    "pending_data": {},
+                    "confirmed": [],
+                    "thread_id": None,
+                    "current_stage": "",
+                })
+
+                # 事件
+                def reset_all():
+                    reset_thread()
+                    return (
+                        build_workflow_diagram([], "", []),
+                        "<p style='color:#999;'>已重置</p>",
+                        "<p style='color:#999;'>启动工作流后显示状态</p>",
+                        "",
+                        0,
+                        {"status": "idle", "pending": [], "pending_data": {}, "confirmed": [], "thread_id": None, "current_stage": ""},
+                        gr.update(visible=False),
+                        gr.update(visible=False, value=""),
+                        gr.update(visible=False, value=""),
+                        gr.update(visible=False, value=""),
+                    )
+
+                def on_stage_click(stage):
+                    return build_stage_detail_panel(stage, [], [])
+
+                # 节点点击事件
+                selected_stage_input.change(
+                    fn=on_stage_click,
+                    inputs=[selected_stage_input],
+                    outputs=[detail_display],
                 )
-                decision_radio = gr.Radio(
-                    choices=["approve", "reject"],
-                    label="决定",
-                    value="approve",
-                )
-                confirm_btn = gr.Button("✅ 确认", variant="primary")
 
-                pending_display = gr.DataFrame(
-                    headers=["阶段", "确认状态"],
-                    label="待确认列表",
-                    interactive=False,
+                start_btn.click(
+                    fn=start_workflow,
+                    inputs=[application_text],
+                    outputs=[
+                        workflow_display, control_display, detail_display, log_display,
+                        gr.Number(label="已完成"), workflow_state,
+                        hitl_modal, modal_stage, modal_content, decision_radio
+                    ],
                 )
 
-        # 状态
-        workflow_state = gr.State({
-            "status": "idle",
-            "pending": [],
-            "confirmed": [],
-            "thread_id": None,
-            "current_stage": "",
-        })
+                refresh_btn.click(
+                    fn=lambda s: (
+                        build_workflow_diagram(s.get("confirmed", []), s.get("current_stage", ""), s.get("pending", [])),
+                        build_workflow_controls(s.get("confirmed", []), s.get("pending", []), s.get("current_stage", "")),
+                        build_stage_detail_panel(s.get("current_stage", ""), s.get("confirmed", []), s.get("pending", [])),
+                        s,
+                    ),
+                    inputs=[workflow_state],
+                    outputs=[workflow_display, control_display, detail_display, workflow_state],
+                )
 
-        # 事件
-        def update_pending_table(state):
-            pending = state.get("pending", [])
-            if pending:
-                return [[p, "待确认"] for p in pending]
-            return []
+                # 弹窗确认按钮
+                modal_confirm_btn.click(
+                    fn=confirm_stage_fn,
+                    inputs=[modal_stage, decision_radio, workflow_state],
+                    outputs=[
+                        workflow_display, control_display, detail_display, log_display,
+                        gr.Number(label="已完成"), workflow_state,
+                        hitl_modal, modal_stage, modal_content, decision_radio
+                    ],
+                )
 
-        def reset_all():
-            reset_thread()
-            return (
-                build_workflow_diagram([], "", []),
-                "<p style='color:#999;'>已重置</p>",
-                "<p style='color:#999;'>启动工作流后显示状态</p>",
-                "",
-                0,
-                {"status": "idle", "pending": [], "confirmed": [], "thread_id": None, "current_stage": ""},
-                gr.update(choices=[], value=None),
-                [],
-            )
+                # 弹窗取消按钮 - 简单关闭弹窗
+                modal_cancel_btn.click(
+                    fn=lambda: (
+                        gr.update(visible=False),
+                        gr.update(visible=False, value=""),
+                        gr.update(visible=False, value=""),
+                    ),
+                    outputs=[hitl_modal, modal_stage, modal_content],
+                )
 
-        def on_stage_click(stage):
-            """节点被点击"""
-            return build_stage_detail_panel(stage, [], [])
+                reset_btn.click(
+                    fn=reset_all,
+                    outputs=[
+                        workflow_display, detail_display, control_display, log_display,
+                        gr.Number(label="已完成"), workflow_state,
+                        hitl_modal, modal_stage, modal_content, decision_radio
+                    ],
+                )
 
-        # 节点点击事件 - 使用 HTML 组件的 click 方法
-        workflow_display.click(
-            fn=on_stage_click,
-            js="(evt) => { const node = evt.target.closest('.stage-node'); return node ? node.dataset.stage : ''; }",
-            inputs=[],
-            outputs=[detail_display],
-        )
+                # 表单字段变化 → 更新 JSON
+                form_fields = [work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end]
+                for field in form_fields:
+                    field.change(
+                        fn=sync_form_to_json,
+                        inputs=[work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end],
+                        outputs=[application_text],
+                    )
 
-        start_btn.click(
-            fn=start_workflow,
-            inputs=[application_text],
-            outputs=[workflow_display, control_display, detail_display, log_display, gr.Number(label="已完成"), workflow_state, confirm_stage_dropdown, pending_display],
-        )
+                # JSON 变化 → 更新表单字段
+                application_text.change(
+                    fn=sync_json_to_form,
+                    inputs=[application_text],
+                    outputs=[work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end],
+                )
 
-        refresh_btn.click(
-            fn=lambda s: (
-                build_workflow_diagram(s.get("confirmed", []), s.get("current_stage", ""), s.get("pending", [])),
-                build_workflow_controls(s.get("confirmed", []), s.get("pending", []), s.get("current_stage", "")),
-                build_stage_detail_panel(s.get("current_stage", ""), s.get("confirmed", []), s.get("pending", [])),
-                s,
-            ),
-            inputs=[workflow_state],
-            outputs=[workflow_display, control_display, detail_display, workflow_state],
-        )
-
-        confirm_btn.click(
-            fn=confirm_stage_fn,
-            inputs=[confirm_stage_dropdown, decision_radio, workflow_state],
-            outputs=[workflow_display, control_display, detail_display, log_display, gr.Number(label="已完成"), workflow_state, confirm_stage_dropdown, pending_display],
-        )
-
-        reset_btn.click(fn=reset_all, outputs=[workflow_display, detail_display, control_display, log_display, gr.Number(label="已完成"), workflow_state, confirm_stage_dropdown, pending_display])
-
-        # 表单字段变化 → 更新 JSON
-        form_fields = [work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end]
-        for field in form_fields:
-            field.change(
-                fn=sync_form_to_json,
-                inputs=[work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end],
-                outputs=[application_text],
-            )
-
-        # JSON 变化 → 更新表单字段
-        application_text.change(
-            fn=sync_json_to_form,
-            inputs=[application_text],
-            outputs=[work_type, region, medium, equipment, person_name, person_badge, person_quals, planned_start, planned_end],
-        )
-
-    demo.launch(theme=gr.themes.Default(spacing_size="md", text_size="md"))
+    demo.launch(share=False)
 
 
 if __name__ == "__main__":

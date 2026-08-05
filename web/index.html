@@ -1,0 +1,1765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>边缘智能作业监测系统 - P1-P10 工作流编排</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        /* 头部 */
+        .header {
+            background: linear-gradient(135deg, #FF9800, #FF5722);
+            color: white;
+            padding: 12px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        /* 标签页 */
+        .tabs {
+            display: flex;
+            background: white;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 30px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .tab:hover {
+            background: #fafafa;
+        }
+        .tab.active {
+            border-bottom-color: #FF9800;
+            color: #FF9800;
+        }
+
+        /* 主容器 */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 90px);
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* 左侧菜单 */
+        .sidebar {
+            width: 200px;
+            background: white;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        .sidebar-section {
+            padding: 10px 0;
+        }
+        .sidebar-title {
+            font-size: 12px;
+            color: #999;
+            padding: 10px 15px 5px;
+            text-transform: uppercase;
+        }
+        .menu-item {
+            padding: 12px 15px;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .menu-item:hover {
+            background: #f5f5f5;
+        }
+        .menu-item.active {
+            background: #FFF3E0;
+            border-left-color: #FF9800;
+            color: #FF9800;
+            font-weight: bold;
+        }
+        .menu-item.model {
+            background: #f5f5f5;
+            color: #333;
+            border-radius: 6px;
+            margin: 5px 10px;
+            border-left: none;
+        }
+        .menu-item.model:hover {
+            background: #e0e0e0;
+        }
+        .menu-item.model.active {
+            background: #FF9800;
+            color: white;
+        }
+        .divider {
+            border-bottom: 1px solid #ddd;
+            margin: 10px 0;
+        }
+
+        /* 内容区 */
+        .content {
+            flex: 1;
+            min-width: 0;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .panel {
+            display: none;
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .panel.active {
+            display: block;
+            width: calc(100vw - 220px);
+        }
+
+        /* Markdown 编辑器 */
+        .md-editor {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+        }
+        .md-editor .md-input {
+            flex: 1;
+            min-width: 0;
+        }
+        .md-editor .md-preview {
+            flex: 1;
+            min-width: 0;
+            background: #fafafa;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            overflow-y: auto;
+            max-height: calc(100vh - 350px);
+        }
+        .md-preview h1 { font-size: 20px; margin: 0 0 15px; color: #333; }
+        .md-preview h2 { font-size: 18px; margin: 15px 0 10px; color: #333; }
+        .md-preview h3 { font-size: 16px; margin: 12px 0 8px; color: #333; }
+        .md-preview p { margin: 10px 0; line-height: 1.6; }
+        .md-preview ul, .md-preview ol { margin: 10px 0; padding-left: 25px; }
+        .md-preview li { margin: 5px 0; }
+        .md-preview code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+        .md-preview pre { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 6px; overflow-x: auto; }
+        .md-preview pre code { background: none; padding: 0; color: inherit; }
+        .md-preview blockquote { border-left: 4px solid #FF9800; margin: 10px 0; padding: 5px 15px; background: #fff8e1; }
+        .md-preview strong { font-weight: bold; }
+        .md-preview em { font-style: italic; }
+        .md-preview hr { border: none; border-top: 1px solid #ddd; margin: 15px 0; }
+        .panel-title {
+            font-size: 18px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        /* 表单 */
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-label {
+            display: block;
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: #FF9800;
+        }
+        textarea.form-input {
+            width: 100%;
+            resize: vertical;
+            min-height: 400px;
+            height: calc(100vh - 350px);
+        }
+        .form-row {
+            display: flex;
+            gap: 15px;
+        }
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        /* 按钮 */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #FF9800;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #FF5722;
+        }
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* 工作流图 */
+        .workflow-container {
+            background: #fafafa;
+            border-radius: 12px;
+            padding: 10px 15px;
+            margin-bottom: 5px;
+        }
+        .workflow-node {
+            border-radius: 12px;
+            padding: 16px;
+            margin: 4px 0;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .workflow-node:hover {
+            transform: translateX(5px);
+        }
+        .workflow-node.completed {
+            background: linear-gradient(135deg, #E8F5E9, #C8E6C9);
+            border: 2px solid #4CAF50;
+        }
+        .workflow-node.current {
+            background: linear-gradient(135deg, #FFF3E0, #FFE0B2);
+            border: 3px solid #FF9800;
+            box-shadow: 0 0 15px rgba(255, 152, 0, 0.3);
+        }
+        .workflow-node.pending {
+            background: linear-gradient(135deg, #FFF8E1, #FFF3E0);
+            border: 2px solid #FFC107;
+        }
+        .workflow-node.pending .node-status {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .node-status {
+            font-size: 24px;
+        }
+        .node-info {
+            flex: 1;
+        }
+        .node-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        .node-desc {
+            font-size: 12px;
+            color: #666;
+        }
+        .node-tools {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+        }
+        .workflow-arrow {
+            text-align: center;
+            color: #ccc;
+            font-size: 18px;
+            padding: 2px 0;
+        }
+        .workflow-arrow.completed {
+            color: #4CAF50;
+        }
+        .workflow-arrow.pending {
+            color: #FFC107;
+        }
+
+        /* 执行页面S形工作流 */
+        .workflow-s-container {
+            background: #fafafa;
+            border-radius: 12px;
+            padding: 8px 15px;
+            margin-bottom: 5px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* 节点悬浮提示 */
+        .node-tooltip {
+            position: fixed;
+            z-index: 1000;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+            padding: 0;
+            min-width: 380px;
+            max-width: 420px;
+            display: none;
+            overflow: hidden;
+        }
+        .node-tooltip.visible {
+            display: block;
+        }
+        .tooltip-header {
+            background: linear-gradient(135deg, #FF9800, #FF5722);
+            color: white;
+            padding: 12px 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tooltip-header-icon {
+            font-size: 24px;
+        }
+        .tooltip-header-info {
+            flex: 1;
+        }
+        .tooltip-header-stage {
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .tooltip-header-name {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        .tooltip-body {
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .tooltip-section {
+            margin-bottom: 12px;
+        }
+        .tooltip-section:last-child {
+            margin-bottom: 0;
+        }
+        .tooltip-section-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: #FF9800;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        .tooltip-section-content {
+            font-size: 12px;
+            color: #333;
+            line-height: 1.5;
+        }
+        .tooltip-intelligence {
+            background: #f8f8f8;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border-left: 3px solid #FF9800;
+        }
+        .tooltip-tools {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .tooltip-tool-tag {
+            background: #e0e0e0;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-family: monospace;
+        }
+        .tooltip-human {
+            background: #FFF8E1;
+            border: 1px solid #FFC107;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #FF9800;
+        }
+        .workflow-s-title {
+            font-size: 13px;
+            font-weight: bold;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .workflow-s-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            padding: 2px 0;
+        }
+        .workflow-s-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 120px;
+        }
+        .workflow-s-card {
+            border-radius: 10px;
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+            width: 120px;
+            position: relative;
+            background: white;
+            border: 2px solid #e0e0e0;
+        }
+        .workflow-s-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        }
+        .workflow-s-card.completed {
+            background: linear-gradient(135deg, #E8F5E9, #C8E6C9);
+            border-color: #4CAF50;
+        }
+        .workflow-s-card.current {
+            background: linear-gradient(135deg, #FFF3E0, #FFE0B2);
+            border-color: #FF9800;
+            box-shadow: 0 0 20px rgba(255, 152, 0, 0.4);
+        }
+        .workflow-s-card.current .s-node-status {
+            animation: pulse 1s infinite;
+        }
+        .workflow-s-card.pending {
+            background: linear-gradient(135deg, #FFF8E1, #FFF3E0);
+            border-color: #FFC107;
+        }
+        .workflow-s-card.pending .s-node-status {
+            animation: pulse 1.5s infinite;
+        }
+        .workflow-s-card .s-node-icon {
+            font-size: 20px;
+            margin-bottom: 2px;
+        }
+        .workflow-s-card .s-node-stage {
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+        }
+        .workflow-s-card .s-node-name {
+            font-size: 11px;
+            color: #666;
+            margin-top: 3px;
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .workflow-s-card .s-node-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 2px;
+        }
+        .workflow-s-card .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ccc;
+        }
+        .workflow-s-card .status-text {
+            font-size: 10px;
+            color: #999;
+        }
+        .workflow-s-card.completed .status-dot { background: #4CAF50; }
+        .workflow-s-card.completed .status-text { color: #4CAF50; }
+        .workflow-s-card.current .status-dot { background: #FF9800; }
+        .workflow-s-card.current .status-text { color: #FF9800; }
+        .workflow-s-card.current .status-dot.running {
+            animation: pulse 1s infinite;
+        }
+        .workflow-s-card.pending .status-dot { background: #FFC107; }
+        .workflow-s-card.pending .status-text { color: #FFC107; }
+        .workflow-s-card .s-human-tag {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            background: #FF9800;
+            color: white;
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 6px;
+        }
+        .workflow-s-arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 25px;
+            color: #ccc;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .workflow-s-arrow.completed { color: #4CAF50; }
+        .workflow-s-arrow.current { color: #FF9800; }
+        .workflow-s-arrow.pending { color: #FFC107; }
+
+        /* 执行页面布局 - 上图下文左右分栏 */
+        .execute-layout {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            gap: 10px;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        /* 上部：横向工作流图 */
+        .execute-top {
+            flex: 0 0 auto;
+            height: 140px;
+            overflow: hidden;
+        }
+        /* 下部：左右分栏 */
+        .execute-bottom {
+            display: flex;
+            gap: 10px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        /* 左侧：作业申请（内容自适应） */
+        .execute-left {
+            width: 30%;
+            min-width: 280px;
+            flex: 0 0 auto;
+            overflow-y: auto;
+            height: 100%;
+        }
+        /* 右侧：日志、审批、结果 */
+        .execute-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 0;
+            overflow: hidden;
+            height: 100%;
+        }
+        .execute-right-middle {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .execute-right-bottom {
+            flex: 0 0 auto;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        /* 作业申请表单 */
+        .application-form {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .section-title {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+            margin: 15px 0 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
+        }
+
+        /* 日志 */
+        .log-container {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 12px;
+            max-height: 150px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 3px 0;
+        }
+        .log-time {
+            color: #888;
+        }
+        .log-success {
+            color: #4CAF50;
+        }
+        .log-error {
+            color: #f44336;
+        }
+        .log-warning {
+            color: #FFC107;
+        }
+
+        /* 弹窗 */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active {
+            display: flex;
+        }
+        .modal {
+            background: white;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+        .modal-header {
+            background: linear-gradient(135deg, #FF9800, #FF5722);
+            color: white;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .modal-icon {
+            font-size: 36px;
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .modal-subtitle {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .modal-body {
+            padding: 20px;
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+        .modal-info {
+            background: #f5f5f5;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .modal-info-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .modal-footer {
+            padding: 15px 20px;
+            border-top: 1px solid #ddd;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .btn-approve {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-approve:hover {
+            background: #388E3C;
+        }
+        .btn-reject {
+            background: #f44336;
+            color: white;
+        }
+        .btn-reject:hover {
+            background: #D32F2F;
+        }
+
+        /* 状态标签 */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-completed {
+            background: #4CAF50;
+            color: white;
+        }
+        .status-pending {
+            background: #FFC107;
+            color: white;
+        }
+        .status-current {
+            background: #FF9800;
+            color: white;
+        }
+
+        /* 节点详情 */
+        .detail-panel {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            border: 1px solid #ddd;
+        }
+        .detail-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .detail-icon {
+            font-size: 32px;
+        }
+        .detail-title {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .detail-subtitle {
+            color: #666;
+        }
+        .detail-section {
+            margin: 15px 0;
+        }
+        .detail-section-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .detail-table th,
+        .detail-table td {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        .detail-table th {
+            background: #f5f5f5;
+            width: 80px;
+        }
+        .detail-prompt {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        /* 工具标签 */
+        .tool-tag {
+            display: inline-block;
+            background: #e0e0e0;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 2px;
+            font-family: monospace;
+        }
+
+        /* JSON编辑器 */
+        .json-editor {
+            font-family: monospace;
+            font-size: 13px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            min-height: 300px;
+        }
+
+        /* Tab切换内容 */
+        .tab-content {
+            display: none;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .tab-content.active {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* 左右布局 */
+        .split-view {
+            display: flex;
+            gap: 20px;
+            height: 100%;
+        }
+        .split-left {
+            width: 20%;
+            min-width: 200px;
+            overflow-y: auto;
+        }
+        .split-right {
+            flex: 1;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔄 边缘智能作业监测系统 - P1-P10 工作流编排</h1>
+        <p>支持 HumanInTheLoop 人工确认机制</p>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="execute">🚀 执行</div>
+        <div class="tab" data-tab="config">⚙️ 配置</div>
+    </div>
+
+    <div class="main-container">
+        <!-- ========== 配置页面 ========== -->
+        <div id="tab-config" class="tab-content">
+            <div class="split-view">
+                <!-- 左侧菜单 -->
+                <div class="sidebar">
+                    <div class="sidebar-section">
+                        <div class="menu-item model active" data-panel="model-config">⚙️ 模型配置</div>
+                        <div class="divider"></div>
+                        <div class="sidebar-title">📝 Agent 提示词</div>
+                        <div class="menu-item" data-panel="agent-p1">P1 作业预约</div>
+                        <div class="menu-item" data-panel="agent-p2">P2 作业任务</div>
+                        <div class="menu-item" data-panel="agent-p3">P3 上下文理解</div>
+                        <div class="menu-item" data-panel="agent-p4">P4 摄像数据</div>
+                        <div class="menu-item" data-panel="agent-p5">P5 条件核验</div>
+                        <div class="menu-item" data-panel="agent-p6">P6 动态监测</div>
+                        <div class="menu-item" data-panel="agent-p7">P7 风险研判</div>
+                        <div class="menu-item" data-panel="agent-p8">P8 人机协同</div>
+                        <div class="menu-item" data-panel="agent-p9">P9 闭环跟踪</div>
+                        <div class="menu-item" data-panel="agent-p10">P10 归档复盘</div>
+                    </div>
+                </div>
+
+                <!-- 右侧内容 -->
+                <div class="content">
+                    <!-- 模型配置面板 -->
+                    <div id="panel-model-config" class="panel active">
+                        <div class="panel-title">🤖 模型配置</div>
+                        <div class="form-group">
+                            <label class="form-label">API Key</label>
+                            <input type="password" class="form-input" id="config-api-key" placeholder="输入 API Key">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Base URL</label>
+                            <input type="text" class="form-input" id="config-base-url" placeholder="https://api.minimax.chat/v1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Model</label>
+                            <input type="text" class="form-input" id="config-model" placeholder="MiniMax-M3">
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveModelConfig()">💾 保存配置</button>
+                            <span id="config-status" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Agent 提示词面板 (P1-P10) -->
+                    <div id="panel-agent-p1" class="panel">
+                        <div class="panel-title">📝 P1 作业预约、JSA与作业票 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p1" rows="15" oninput="updatePreview('p1')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p1"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P1')">💾 保存</button>
+                            <span id="prompt-status-p1" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p2" class="panel">
+                        <div class="panel-title">📝 P2 作业任务获取 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p2" rows="15" oninput="updatePreview('p2')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p2"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P2')">💾 保存</button>
+                            <span id="prompt-status-p2" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p3" class="panel">
+                        <div class="panel-title">📝 P3 作业上下文理解 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p3" rows="15" oninput="updatePreview('p3')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p3"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P3')">💾 保存</button>
+                            <span id="prompt-status-p3" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p4" class="panel">
+                        <div class="panel-title">📝 P4 摄像与数据关联 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p4" rows="15" oninput="updatePreview('p4')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p4"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P4')">💾 保存</button>
+                            <span id="prompt-status-p4" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p5" class="panel">
+                        <div class="panel-title">📝 P5 作业前条件核验 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p5" rows="15" oninput="updatePreview('p5')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p5"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P5')">💾 保存</button>
+                            <span id="prompt-status-p5" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p6" class="panel">
+                        <div class="panel-title">📝 P6 作业过程动态监测 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p6" rows="15" oninput="updatePreview('p6')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p6"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P6')">💾 保存</button>
+                            <span id="prompt-status-p6" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p7" class="panel">
+                        <div class="panel-title">📝 P7 风险研判与分级 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p7" rows="15" oninput="updatePreview('p7')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p7"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P7')">💾 保存</button>
+                            <span id="prompt-status-p7" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p8" class="panel">
+                        <div class="panel-title">📝 P8 人机协同处置 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p8" rows="15" oninput="updatePreview('p8')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p8"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P8')">💾 保存</button>
+                            <span id="prompt-status-p8" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p9" class="panel">
+                        <div class="panel-title">📝 P9 闭环跟踪与报告 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p9" rows="15" oninput="updatePreview('p9')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p9"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P9')">💾 保存</button>
+                            <span id="prompt-status-p9" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                    <div id="panel-agent-p10" class="panel">
+                        <div class="panel-title">📝 P10 归档与复盘 - 系统提示词</div>
+                        <div class="md-editor">
+                            <div class="md-input">
+                                <textarea class="form-input" id="prompt-p10" rows="15" oninput="updatePreview('p10')"></textarea>
+                            </div>
+                            <div class="md-preview" id="preview-p10"></div>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveAgentPrompt('P10')">💾 保存</button>
+                            <span id="prompt-status-p10" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== 执行页面 ========== -->
+        <div id="tab-execute" class="tab-content active">
+            <div class="execute-layout">
+                <!-- 上部：横向工作流图 -->
+                <div class="execute-top">
+                    <div class="workflow-container" style="margin: 0; height: 100%;">
+                        <div id="workflow-diagram"></div>
+                    </div>
+                </div>
+
+                <!-- 下部：左右分栏 -->
+                <div class="execute-bottom">
+                    <!-- 左侧：作业申请 -->
+                    <div class="execute-left">
+                        <div class="application-form" style="margin-top: 0; padding: 15px;">
+                            <div class="section-title">📋 作业申请</div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">作业类型</label>
+                                    <select class="form-input" id="app-work-type">
+                                        <option value="受限空间作业">受限空间作业</option>
+                                        <option value="高空作业">高空作业</option>
+                                        <option value="动火作业">动火作业</option>
+                                        <option value="吊装作业">吊装作业</option>
+                                        <option value="临时用电作业">临时用电作业</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">作业区域</label>
+                                    <input type="text" class="form-input" id="app-region" value="炼油厂区01">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">介质</label>
+                                    <input type="text" class="form-input" id="app-medium" value="原油">
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">设备</label>
+                                    <input type="text" class="form-input" id="app-equipment" value="反应器R-101">
+                                </div>
+                            </div>
+                            <div class="section-title">👤 作业人员</div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">姓名</label>
+                                    <input type="text" class="form-input" id="app-person-name" value="张三">
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">工牌号</label>
+                                    <input type="text" class="form-input" id="app-person-badge" value="P-101">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">资质(逗号分隔)</label>
+                                <input type="text" class="form-input" id="app-person-quals" value="受限空间作业证,易燃易爆作业证">
+                            </div>
+                            <div class="section-title">⏰ 计划时间</div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">开始时间</label>
+                                    <input type="text" class="form-input" id="app-start" value="2026-08-04T09:00:00Z">
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label">结束时间</label>
+                                    <input type="text" class="form-input" id="app-end" value="2026-08-04T17:00:00Z">
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-primary" onclick="startWorkflow()">🚀 启动</button>
+                                <button class="btn btn-secondary" onclick="refreshWorkflow()">🔄 刷新</button>
+                                <button class="btn btn-secondary" onclick="resetWorkflow()">🗑️ 重置</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：日志 + 控制面板 -->
+                    <div class="execute-right">
+                        <div class="log-container execute-right-middle" id="log-container">
+                            <div class="log-entry"><span class="log-time">[--:--:--]</span> 就绪</div>
+                        </div>
+                        <div class="execute-right-bottom">
+                            <div class="detail-panel" style="padding: 15px;">
+                                <div class="detail-section-title">⚙️ 控制面板</div>
+                                <div id="control-panel" style="color: #666;">启动工作流后显示状态</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- HITL 弹窗 -->
+    <div class="modal-overlay" id="hitl-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-icon" id="modal-icon">⚠️</span>
+                <div>
+                    <div class="modal-title" id="modal-title">人工确认</div>
+                    <div class="modal-subtitle" id="modal-subtitle">需要人工介入确认后才能继续工作流</div>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="modal-info">
+                    <div class="modal-info-title" id="modal-info-title">确认信息</div>
+                    <div id="modal-info-content">加载中...</div>
+                </div>
+                <div class="modal-info" id="modal-evidence-section" style="display: none;">
+                    <div class="modal-info-title">📊 证据/依据</div>
+                    <div id="modal-evidence"></div>
+                </div>
+                <div class="modal-info" id="modal-suggestion-section" style="display: none;">
+                    <div class="modal-info-title">💡 建议</div>
+                    <div id="modal-suggestion"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">❌ 取消</button>
+                <button class="btn btn-reject" onclick="confirmDecision('reject')">❌ 否决</button>
+                <button class="btn btn-approve" onclick="confirmDecision('approve')">✅ 批准</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========== 全局状态 ==========
+        const state = {
+            currentTab: 'config',
+            selectedMenu: 'model-config',
+            workflowState: {
+                status: 'idle',
+                pending: [],
+                confirmed: [],
+                currentStage: '',
+                threadId: null
+            },
+            selectedWorkflowNode: null
+        };
+
+        // ========== 阶段信息 ==========
+        const STAGE_INFO = {
+            P1: {
+                name: '作业预约、JSA与作业票', icon: '📋', color: '#4CAF50', humanConfirm: '作业票审批',
+                tools: ['permit_submit', 'jsa_analyze', 'permit_generate_draft'],
+                activity: '获取作业申请，识别作业类型、区域、设备、人员和时间；分析JSA；辅助形成作业票',
+                inputs: '作业申请、历史JSA、模板、人员信息',
+                outputs: '结构化任务、JSA结果、作业票草稿',
+                intelligence: '调用作业类型识别、票证结构化、JSA完整性审查和危害—措施匹配Skill；对缺失字段、风险措施不足和人员资质冲突进行提示；仅生成草稿，不自动审批。'
+            },
+            P2: {
+                name: '作业任务获取', icon: '📌', color: '#2196F3', humanConfirm: '是否纳入智能监测',
+                tools: ['task_list', 'task_get', 'task_instance_create', 'task_subscribe'],
+                activity: '从作业票系统获取已批准或待执行任务，建立唯一任务实例',
+                inputs: '作业票、审批状态、计划',
+                outputs: '任务实例、初始状态',
+                intelligence: '按时间、区域和状态轮询或订阅待执行任务，建立Task ID、场景上下文容器和初始权限上下文；重复任务必须幂等处理。'
+            },
+            P3: {
+                name: '作业上下文理解', icon: '🧠', color: '#9C27B0', humanConfirm: '上下文缺失确认',
+                tools: ['context_build', 'context_validate', 'context_history'],
+                activity: '聚合作业类型、区域、设备、介质、风险、措施、人员、时间和关联作业',
+                inputs: '作业票、JSA、场景数据',
+                outputs: '标准作业上下文包',
+                intelligence: '形成"作业对象—区域—设备—介质—人员—资质—风险—措施—时间—关联作业—数据源"的标准上下文包，并记录数据来源和有效时间。'
+            },
+            P4: {
+                name: '摄像与数据关联', icon: '📹', color: '#FF9800', humanConfirm: '资源绑定确认',
+                tools: ['binding_match', 'binding_status', 'binding_confirm', 'binding_request_manual'],
+                activity: '匹配固定/移动摄像、传感器、定位和报警数据',
+                inputs: '作业区域、资源台账',
+                outputs: '数据源绑定关系、监测清单',
+                intelligence: '根据作业区域、摄像头覆盖关系、移动设备绑定、传感器点位和人员定位能力形成监测资源清单；无法自动匹配时发起人工补充。'
+            },
+            P5: {
+                name: '作业前条件核验', icon: '✅', color: '#F44336', humanConfirm: '允许开工或整改',
+                tools: ['verify_checklist', 'verify_execute', 'verify_recommendation'],
+                activity: '核对隔离、警戒、消防、气体检测、人员资质和PPE',
+                inputs: '措施清单、视频、检测数据',
+                outputs: '核验结果、缺失项、开工建议',
+                intelligence: '按作业类型生成检查清单，调用人员资质、现场视频、气体检测和规则执行工具逐项核验；输出"符合、待确认、不符合、不适用"四态结果和证据。'
+            },
+            P6: {
+                name: '作业过程动态监测', icon: '📡', color: '#E91E63', humanConfirm: null,
+                tools: ['monitor_start', 'monitor_stop', 'monitor_status', 'monitor_events'],
+                activity: '持续获取视频、传感器、定位和作业状态，识别违章及条件变化',
+                inputs: '视频流、传感器、定位、规则',
+                outputs: '候选风险事件、证据片段',
+                intelligence: '根据作业类型和上下文动态选择CV/VL模型、提示词和采样策略；对连续帧结果进行时序聚合，避免单帧误报。'
+            },
+            P7: {
+                name: '风险研判与分级', icon: '⚠️', color: '#FF5722', humanConfirm: '高风险判断确认',
+                tools: ['risk_analyze', 'risk_grade', 'risk_cases', 'risk_list'],
+                activity: '融合上下文、模型结果、规则和历史事件，去重并判级',
+                inputs: '候选事件、上下文、规则、知识',
+                outputs: '风险事件、等级、依据和建议',
+                intelligence: '通过多源证据融合、规则执行、相似案例查询和风险等级计算，形成风险事件；输出事实、证据、规则依据、置信度和处置建议。'
+            },
+            P8: {
+                name: '人机协同处置', icon: '🔧', color: '#795548', humanConfirm: '下发、暂停、恢复',
+                tools: ['disposition_create', 'disposition_confirm', 'disposition_status', 'disposition_list'],
+                activity: '按角色与权限推送责任人，形成整改、暂停、复核或升级建议',
+                inputs: '风险事件、处置规则、组织关系',
+                outputs: '处置任务、通知、确认记录',
+                intelligence: '根据风险等级、属地责任和角色权限确定接收人；高风险事件、写入操作、暂停和恢复必须通过人工确认服务。'
+            },
+            P9: {
+                name: '闭环跟踪与报告', icon: '🔄', color: '#607D8B', humanConfirm: '关闭事件和作业',
+                tools: ['closure_status', 'closure_verify', 'closure_report', 'closure_close'],
+                activity: '跟踪整改状态，复核处置结果，汇总全过程记录',
+                inputs: '处置反馈、复核证据、任务日志',
+                outputs: '闭环状态、作业过程报告',
+                intelligence: '持续跟踪任务接收、整改、反馈和复核；关闭前执行闭环完整性检查，自动生成作业过程报告和证据索引。'
+            },
+            P10: {
+                name: '归档与复盘', icon: '📦', color: '#9E9E9E', humanConfirm: '档案确认、规则发布',
+                tools: ['archive_task', 'archive_cases', 'archive_performance', 'archive_suggestions'],
+                activity: '归档票证、视频证据、风险事件、处置记录和报告，形成案例',
+                inputs: '全过程数据',
+                outputs: '作业档案、案例、优化建议',
+                intelligence: '经确认后归档全过程记录，将误报、漏报、规则冲突和处置效果沉淀为案例及知识规则优化建议。'
+            }
+        };
+
+        const ALL_STAGES = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
+
+        // ========== 初始化 ==========
+        document.addEventListener('DOMContentLoaded', function() {
+            initTabs();
+            initMenu();
+            loadModelConfig();
+            loadAllPrompts();
+            renderWorkflowDiagram();
+        });
+
+        // ========== 标签页切换 ==========
+        function initTabs() {
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    const tabId = this.dataset.tab;
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    this.classList.add('active');
+                    document.getElementById('tab-' + tabId).classList.add('active');
+                    state.currentTab = tabId;
+                });
+            });
+        }
+
+        // ========== 菜单切换 ==========
+        function initMenu() {
+            document.querySelectorAll('.menu-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    const panel = this.dataset.panel;
+                    document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('active'));
+                    this.classList.add('active');
+                    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                    document.getElementById('panel-' + panel).classList.add('active');
+                    state.selectedMenu = panel;
+                });
+            });
+        }
+
+        // ========== 配置相关 ==========
+        function loadModelConfig() {
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('config-api-key').value = data.api_key || '';
+                    document.getElementById('config-base-url').value = data.base_url || '';
+                    document.getElementById('config-model').value = data.model || '';
+                })
+                .catch(() => {});
+        }
+
+        function saveModelConfig() {
+            const data = {
+                api_key: document.getElementById('config-api-key').value,
+                base_url: document.getElementById('config-base-url').value,
+                model: document.getElementById('config-model').value
+            };
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).then(() => {
+                document.getElementById('config-status').textContent = '✅ 已保存';
+                setTimeout(() => {
+                    document.getElementById('config-status').textContent = '';
+                }, 2000);
+            });
+        }
+
+        function loadAllPrompts() {
+            ALL_STAGES.forEach(stage => {
+                fetch('/api/prompt/' + stage)
+                    .then(r => r.text())
+                    .then(text => {
+                        document.getElementById('prompt-' + stage.toLowerCase()).value = text;
+                        updatePreview(stage.toLowerCase());
+                    })
+                    .catch(() => {
+                        document.getElementById('prompt-' + stage.toLowerCase()).value = '系统提示词加载失败';
+                    });
+            });
+        }
+
+        function updatePreview(id) {
+            const text = document.getElementById('prompt-' + id).value;
+            const preview = document.getElementById('preview-' + id);
+            if (preview) {
+                // 简单的 Markdown 解析
+                let html = text
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                    .replace(/`(.+?)`/g, '<code>$1</code>')
+                    .replace(/^- (.+)$/gm, '<li>$1</li>')
+                    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+                    .replace(/\n\n/g, '</p><p>')
+                    .replace(/\n/g, '<br>');
+                preview.innerHTML = html;
+            }
+        }
+
+        function saveAgentPrompt(stage) {
+            const content = document.getElementById('prompt-' + stage.toLowerCase()).value;
+            fetch('/api/prompt/' + stage, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            }).then(() => {
+                document.getElementById('prompt-status-' + stage.toLowerCase()).textContent = '✅ 已保存';
+                setTimeout(() => {
+                    document.getElementById('prompt-status-' + stage.toLowerCase()).textContent = '';
+                }, 2000);
+            });
+        }
+
+        // ========== 工作流相关 ==========
+        function renderWorkflowDiagram() {
+            const container = document.getElementById('workflow-diagram');
+            const { confirmed, currentStage, pending } = state.workflowState;
+
+            function getNodeHtml(stage) {
+                const info = STAGE_INFO[stage];
+                const isCompleted = confirmed.includes(stage);
+                const isCurrent = stage === currentStage;
+                const isPending = pending.includes(stage);
+
+                let nodeClass = '';
+                let statusIcon = '<span class="status-dot"></span><span class="status-text">待执行</span>';
+                if (isCompleted) {
+                    nodeClass = 'completed';
+                    statusIcon = '<span class="status-dot"></span><span class="status-text">已完成</span>';
+                } else if (isPending) {
+                    nodeClass = 'pending';
+                    statusIcon = '<span class="status-dot"></span><span class="status-text">待确认</span>';
+                } else if (isCurrent) {
+                    nodeClass = 'current';
+                    statusIcon = '<span class="status-dot running"></span><span class="status-text">执行中</span>';
+                }
+
+                return `
+                    <div class="workflow-s-node">
+                        <div class="workflow-s-card ${nodeClass}"
+                             onclick="selectWorkflowNode('${stage}')"
+                             onmouseenter="showNodeTooltip('${stage}', event)"
+                             onmouseleave="hideNodeTooltip()">
+                            ${info.humanConfirm ? '<span class="s-human-tag">👤</span>' : ''}
+                            <div class="s-node-icon">${info.icon}</div>
+                            <div class="s-node-stage">${stage}</div>
+                            <div class="s-node-name">${info.name}</div>
+                            <div class="s-node-status">${statusIcon}</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            function getArrowHtml(fromStage, toStage, cls = '') {
+                const fromCompleted = confirmed.includes(fromStage);
+                const toCompleted = confirmed.includes(toStage);
+                const arrowCls = toCompleted ? 'completed' : (cls || '');
+                return `<div class="workflow-s-arrow ${arrowCls}">→</div>`;
+            }
+
+            let html = '<div class="workflow-s-container">';
+
+            // 单行横向展示: P1 → P2 → ... → P10
+            html += '<div class="workflow-s-row">';
+            ALL_STAGES.forEach((stage, i) => {
+                html += getNodeHtml(stage);
+                if (i < ALL_STAGES.length - 1) {
+                    html += getArrowHtml(stage, ALL_STAGES[i + 1]);
+                }
+            });
+            html += '</div>';
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        function selectWorkflowNode(stage) {
+            state.selectedWorkflowNode = stage;
+            renderWorkflowNodeDetail(stage);
+        }
+
+        function renderWorkflowNodeDetail(stage) {
+            const info = STAGE_INFO[stage];
+            const { confirmed, pending } = state.workflowState;
+            const isCompleted = confirmed.includes(stage);
+            const isPending = pending.includes(stage);
+
+            let statusBadge = '';
+            if (isCompleted) statusBadge = '<span class="status-badge status-completed">✅ 已完成</span>';
+            else if (isPending) statusBadge = '<span class="status-badge status-pending">⏸️ 待确认</span>';
+            else if (stage === state.workflowState.currentStage) statusBadge = '<span class="status-badge status-current">⏳ 执行中</span>';
+
+            const panel = document.getElementById('detail-panel');
+            panel.innerHTML = `
+                <div class="detail-header">
+                    <span class="detail-icon">${info.icon}</span>
+                    <div>
+                        <div class="detail-title" style="color: ${info.color}">${stage} ${info.name}</div>
+                        <div class="detail-subtitle">${statusBadge}</div>
+                    </div>
+                </div>
+                ${info.humanConfirm ? `
+                <div style="background: #FFF8E1; border: 2px solid #FFC107; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                    <div style="font-weight: bold; color: #FF9800; margin-bottom: 8px;">👤 人工确认点</div>
+                    <div>${info.humanConfirm}</div>
+                    <div style="color: #666; font-size: 12px; margin-top: 5px;">需要人工介入确认后才能继续工作流</div>
+                </div>
+                ` : ''}
+                <div class="detail-section">
+                    <div class="detail-section-title">📋 描述</div>
+                    <p style="color: #666; line-height: 1.6;">${info.activity}</p>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-section-title">📥 主要输入</div>
+                    <p style="color: #666;">${info.inputs}</p>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-section-title">📤 主要输出</div>
+                    <p style="color: #666;">${info.outputs}</p>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-section-title">🔧 工具</div>
+                    <div>${info.tools.map(t => `<span class="tool-tag">${t}</span>`).join(' ')}</div>
+                </div>
+                <div class="detail-section">
+                    <div class="detail-section-title">🧠 智能化任务设计</div>
+                    <p style="color: #666; background: #f8f8f8; padding: 10px; border-radius: 6px; border-left: 3px solid #FF9800;">${info.intelligence}</p>
+                </div>
+            `;
+        }
+
+        // ========== 工作流执行 ==========
+        function buildApplicationJson() {
+            const equipment = document.getElementById('app-equipment').value.split(',').map(e => e.trim()).filter(e => e);
+            const quals = document.getElementById('app-person-quals').value.split(',').map(e => e.trim()).filter(e => e);
+            return {
+                work_type: document.getElementById('app-work-type').value,
+                region: document.getElementById('app-region').value,
+                equipment: equipment,
+                medium: document.getElementById('app-medium').value,
+                personnel: [{
+                    name: document.getElementById('app-person-name').value,
+                    badge_id: document.getElementById('app-person-badge').value,
+                    qualifications: quals
+                }],
+                planned_start: document.getElementById('app-start').value,
+                planned_end: document.getElementById('app-end').value
+            };
+        }
+
+        function startWorkflow() {
+            const app = buildApplicationJson();
+            addLog('🚀 启动工作流...');
+
+            fetch('/api/workflow/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(app)
+            }).then(r => r.json())
+              .then(data => {
+                  state.workflowState = data;
+                  renderWorkflowDiagram();
+                  updateControlPanel();
+
+                  if (data.pending && data.pending.length > 0) {
+                      addLog('⏳ 工作流暂停，等待: ' + data.pending.join(', '), 'warning');
+                      showHitlModal(data.pending[0], data.pending_data);
+                  } else {
+                      addLog('✅ 工作流执行完成', 'success');
+                  }
+              })
+              .catch(err => {
+                  addLog('❌ 错误: ' + err.message, 'error');
+              });
+        }
+
+        function refreshWorkflow() {
+            if (!state.workflowState.threadId) {
+                addLog('⚠️ 无进行中的工作流', 'warning');
+                return;
+            }
+
+            fetch('/api/workflow/state?thread_id=' + state.workflowState.threadId)
+                .then(r => r.json())
+                .then(data => {
+                    state.workflowState = data;
+                    renderWorkflowDiagram();
+                    updateControlPanel();
+                    if (state.selectedWorkflowNode) {
+                        renderWorkflowNodeDetail(state.selectedWorkflowNode);
+                    }
+                });
+        }
+
+        function resetWorkflow() {
+            state.workflowState = {
+                status: 'idle',
+                pending: [],
+                confirmed: [],
+                currentStage: '',
+                threadId: null
+            };
+            state.selectedWorkflowNode = null;
+            document.getElementById('detail-panel').innerHTML = `
+                <div style="color: #999; text-align: center; padding: 40px;">
+                    👈 点击左侧工作流节点查看详情
+                </div>
+            `;
+            renderWorkflowDiagram();
+            updateControlPanel();
+            document.getElementById('log-container').innerHTML = '<div class="log-entry"><span class="log-time">[--:--:--]</span> 已重置</div>';
+        }
+
+        function updateControlPanel() {
+            const { confirmed, pending, currentStage, status } = state.workflowState;
+            const panel = document.getElementById('control-panel');
+
+            if (status === 'idle') {
+                panel.innerHTML = '<span style="color: #999;">就绪</span>';
+            } else if (pending.length > 0) {
+                panel.innerHTML = `<span style="color: #FFC107;">⏸️ 等待人工确认: ${pending.join(', ')}</span>`;
+            } else if (currentStage) {
+                panel.innerHTML = `<span style="color: #FF9800;">⏳ 执行中: ${currentStage}</span>`;
+            }
+            panel.innerHTML += `<div style="margin-top: 10px;">已完成: ${confirmed.length}/${ALL_STAGES.length}</div>`;
+        }
+
+        // ========== 日志 ==========
+        function addLog(message, type = '') {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const cls = type === 'success' ? 'log-success' : (type === 'error' ? 'log-error' : (type === 'warning' ? 'log-warning' : ''));
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // ========== HITL 弹窗 ==========
+        function showHitlModal(stage, data) {
+            const info = STAGE_INFO[stage];
+            document.getElementById('modal-icon').textContent = info.icon;
+            document.getElementById('modal-title').textContent = stage + ' - ' + info.name;
+            document.getElementById('modal-subtitle').textContent = info.humanConfirm || '人工确认';
+
+            data = data || {};
+            document.getElementById('modal-info-content').innerHTML = data.message || info.humanConfirm || '请确认';
+
+            const evidenceSection = document.getElementById('modal-evidence-section');
+            const suggestionSection = document.getElementById('modal-suggestion-section');
+
+            if (data.evidence) {
+                document.getElementById('modal-evidence').innerHTML = Array.isArray(data.evidence) ? data.evidence.join('<br>') : data.evidence;
+                evidenceSection.style.display = 'block';
+            } else {
+                evidenceSection.style.display = 'none';
+            }
+
+            if (data.suggestion) {
+                document.getElementById('modal-suggestion').innerHTML = data.suggestion;
+                suggestionSection.style.display = 'block';
+            } else {
+                suggestionSection.style.display = 'none';
+            }
+
+            document.getElementById('hitl-modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('hitl-modal').classList.remove('active');
+        }
+
+        function confirmDecision(decision) {
+            const stage = state.workflowState.pending[0];
+            if (!stage) return;
+
+            addLog(`✅ ${stage} 确认: ${decision}`);
+
+            fetch('/api/workflow/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    thread_id: state.workflowState.threadId,
+                    stage: stage,
+                    decision: decision
+                })
+            }).then(r => r.json())
+              .then(data => {
+                  state.workflowState = data;
+                  renderWorkflowDiagram();
+                  updateControlPanel();
+                  closeModal();
+
+                  if (data.pending && data.pending.length > 0) {
+                      addLog('⏳ 等待: ' + data.pending.join(', '), 'warning');
+                      showHitlModal(data.pending[0], data.pending_data);
+                  } else if (data.status === 'completed') {
+                      addLog('✅ 工作流完成', 'success');
+                  }
+              });
+        }
+
+        // ========== 节点悬浮提示 ==========
+        let tooltipEl = null;
+
+        function getStageDescription(stage) {
+            const descs = {
+                P1: '接收作业申请，识别作业类型、区域、设备、人员和时间；分析JSA；辅助形成作业票',
+                P2: '从作业票系统获取已批准或待执行任务，建立唯一任务实例',
+                P3: '聚合作业类型、区域、设备、介质、风险、措施、人员、时间和关联作业',
+                P4: '匹配固定/移动摄像、传感器、定位和报警数据',
+                P5: '核对隔离、警戒、消防、气体检测、人员资质和PPE',
+                P6: '持续获取视频、传感器、定位和作业状态，识别违章及条件变化',
+                P7: '融合上下文、模型结果、规则和历史事件，去重并判级',
+                P8: '按角色与权限推送责任人，形成整改、暂停、复核或升级建议',
+                P9: '跟踪整改状态，复核处置结果，汇总全过程记录',
+                P10: '归档票证、视频证据、风险事件、处置记录和报告，形成案例'
+            };
+            return descs[stage] || '';
+        }
+
+        function showNodeTooltip(stage, event) {
+            const info = STAGE_INFO[stage];
+
+            if (!tooltipEl) {
+                tooltipEl = document.createElement('div');
+                tooltipEl.className = 'node-tooltip';
+                document.body.appendChild(tooltipEl);
+            }
+
+            const toolsHtml = info.tools.map(t => `<span class="tooltip-tool-tag">${t}</span>`).join('');
+
+            let humanHtml = '';
+            if (info.humanConfirm) {
+                humanHtml = `<div class="tooltip-section">
+                    <div class="tooltip-section-title">👤 人工控制点</div>
+                    <div class="tooltip-human">${info.humanConfirm}</div>
+                </div>`;
+            }
+
+            tooltipEl.innerHTML = `
+                <div class="tooltip-header">
+                    <span class="tooltip-header-icon">${info.icon}</span>
+                    <div class="tooltip-header-info">
+                        <div class="tooltip-header-stage">${stage}</div>
+                        <div class="tooltip-header-name">${info.name}</div>
+                    </div>
+                </div>
+                <div class="tooltip-body">
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">🎯 主要活动</div>
+                        <div class="tooltip-section-content">${info.activity}</div>
+                    </div>
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">📥 主要输入</div>
+                        <div class="tooltip-section-content">${info.inputs}</div>
+                    </div>
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">📤 主要输出</div>
+                        <div class="tooltip-section-content">${info.outputs}</div>
+                    </div>
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">🔧 工具</div>
+                        <div class="tooltip-tools">${toolsHtml}</div>
+                    </div>
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">🧠 智能化任务设计</div>
+                        <div class="tooltip-section-content tooltip-intelligence">${info.intelligence}</div>
+                    </div>
+                    ${humanHtml}
+                </div>
+            `;
+
+            // 定位
+            const rect = event.target.closest('.workflow-s-card').getBoundingClientRect();
+            let left = rect.right + 10;
+            let top = rect.top;
+
+            // 边界检测
+            if (left + 400 > window.innerWidth) {
+                left = rect.left - 410;
+            }
+            if (top + 400 > window.innerHeight) {
+                top = window.innerHeight - 410;
+            }
+
+            tooltipEl.style.left = left + 'px';
+            tooltipEl.style.top = top + 'px';
+            tooltipEl.classList.add('visible');
+        }
+
+        function hideNodeTooltip() {
+            if (tooltipEl) {
+                tooltipEl.classList.remove('visible');
+            }
+        }
+    </script>
+</body>
+</html>
