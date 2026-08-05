@@ -21,6 +21,7 @@ from agent.tools import (
     analyze_ppe_compliance, query_past_events,
 )
 from agent.system_prompt import get_system_prompt
+from agent.work_permit_rules import get_rules
 
 class MockChatModel(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -133,7 +134,8 @@ class A5Agent:
                 m = "***不在作业区***" if not p.get("is_in_danger_zone") else ""
                 po.append(f"  {wid}: {p['area_id']}({z}) {m}")
         pe = [f"作业票: {self.work_permit['permit_id']}({self.work_permit['level']})",
-              f"必戴PPE: {', '.join(self.work_permit['required_ppe'])}"]
+              f"必戴PPE: {', '.join(self.work_permit['required_ppe'])}",
+              f"\n业务规则:\n{get_rules()}"]
         return (
             f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
             f"!!! 注意: 当前现实时间是 {wall_time} !!!\n"
@@ -211,10 +213,10 @@ class A5Agent:
 
         # ── 1. PPE 检测 ──
         for pid, info in self.work_permit.get("workers", {}).items():
-            req = ["helmet"] if info.get("role") == "监护人" else None
             stats = analyze_ppe_compliance.invoke({
                 "cv_logs": cv_logs, "person_id": pid,
-                "threshold": 0.8, "required_ppe": req,
+                "threshold": 0.8,
+                "required_ppe": self.work_permit.get("required_ppe"),
             })
             is_v = stats.get("is_violating", False)
             ongoing = _has_ongoing(pid, "PPE缺失")

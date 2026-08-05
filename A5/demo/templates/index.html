@@ -70,6 +70,13 @@ button:disabled { background:#475569; cursor:not-allowed; }
 
 <div id="summary" class="summary"></div>
 
+<div class="card" style="margin-top:16px;">
+  <h3>作业票规则 <button onclick="loadRules()" style="font-size:11px;padding:4px 8px;">刷新</button>
+    <button onclick="saveRules()" style="font-size:11px;padding:4px 8px;background:#16a34a;">保存</button>
+    <button onclick="resetRules()" style="font-size:11px;padding:4px 8px;background:#64748b;">重置</button></h3>
+  <textarea id="rulesEditor" rows="8" style="width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:8px;font-size:12px;font-family:monospace;"></textarea>
+</div>
+
 <script>
 let ws = null;
 
@@ -201,6 +208,24 @@ function updateDone(msg) {
     <div class="stats">日志: ${msg.log_dir}</div>`;
   ws.close();
 }
+
+// ── 规则编辑器 ──
+async function loadRules() {
+  const r = await fetch("/api/rules");
+  const d = await r.json();
+  document.getElementById("rulesEditor").value = d.rules;
+}
+async function saveRules() {
+  const rules = document.getElementById("rulesEditor").value;
+  await fetch("/api/rules", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rules}) });
+  document.getElementById("status").innerText = "规则已保存";
+}
+async function resetRules() {
+  await fetch("/api/rules/reset", { method:"POST" });
+  loadRules();
+  document.getElementById("status").innerText = "规则已重置";
+}
+loadRules();
 </script>
 </body>
 </html>

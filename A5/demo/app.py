@@ -32,8 +32,32 @@ from fastapi.staticfiles import StaticFiles
 
 from stream_players.async_collector import AsyncCollector
 from scenario_data.mock_work_permit import WORK_PERMIT
+from agent.work_permit_rules import get_rules, update_rules, reset_rules
 
 app = FastAPI(title="A5 Demo")
+
+
+# ============================================================
+# REST: 作业票规则编辑
+# ============================================================
+
+@app.get("/api/rules")
+async def api_get_rules():
+    return {"rules": get_rules()}
+
+
+@app.post("/api/rules")
+async def api_update_rules(body: dict):
+    new_text = body.get("rules", "")
+    if not new_text:
+        return {"error": "rules 不能为空"}
+    update_rules(new_text)
+    return {"rules": get_rules(), "status": "updated"}
+
+
+@app.post("/api/rules/reset")
+async def api_reset_rules():
+    return {"rules": reset_rules(), "status": "reset"}
 
 # 静态文件
 static_dir = Path(__file__).parent / "static"
