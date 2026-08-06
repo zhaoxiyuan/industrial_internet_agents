@@ -51,7 +51,7 @@ def permit_submit(application: str) -> str:
     提交作业申请，返回作业票草稿。
 
     参数:
-        application: 作业申请 JSON 字符串，包含 work_type, region, equipment,
+        application: 作业申请 JSON 字符串，包含 job_content, region, equipment,
                     personnel, planned_start, planned_end 等字段
     返回:
         标准 JSON 响应，包含 task_id, permit_draft_id, status, missing_fields
@@ -69,22 +69,22 @@ def permit_submit(application: str) -> str:
         ), ensure_ascii=False)
 
     # 提取基本信息
-    work_type = data.get("work_type", "")
+    job_content = data.get("job_content", "")
     region = data.get("region", "")
     equipment = data.get("equipment", [])
     personnel = data.get("personnel", [])
 
     # 生成 task_id
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    task_id = f"TASK-{work_type[:4].upper()}-{region[:2]}-{timestamp}"
+    task_id = f"TASK-{job_content[:4].upper()}-{region[:2]}-{timestamp}"
 
     # 生成 permit_draft_id
     permit_draft_id = f"PD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
     # 检查缺失字段
     missing_fields = []
-    if not work_type:
-        missing_fields.append("work_type")
+    if not job_content:
+        missing_fields.append("job_content")
     if not region:
         missing_fields.append("region")
     if not equipment:
@@ -183,7 +183,7 @@ def permit_generate_draft(task_id: str) -> str:
         "permit_draft_id": f"PD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         "content": {
             "task_id": task_id,
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101", "管道P-205"],
             "medium": "原油",

@@ -74,7 +74,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-WELD-01-20260804-001",
             "permit_id": "PD-20260804001",
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -82,7 +82,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-HIGH-02-20260804-002",
             "permit_id": "PD-20260804002",
-            "work_type": "高空作业",
+            "job_content": "高空作业",
             "region": "炼油厂区02",
             "status": "running",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -129,11 +129,11 @@ def task_get(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "permit_id": f"PD-{task_id.split('-')[-1]}",
-        "work_type": "受限空间作业",
+        "job_content": "受限空间作业",
         "region": "炼油厂区01",
         "status": "pending",
         "context": {
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101"],
             "medium": "原油"

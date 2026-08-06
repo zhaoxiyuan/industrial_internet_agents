@@ -138,7 +138,7 @@ def closure_report(task_id: str, format: Optional[str] = "markdown") -> str:
         content = {
             "task_id": task_id,
             "basic_info": {
-                "work_type": "受限空间作业",
+                "job_content": "受限空间作业",
                 "region": "炼油厂区01",
                 "start_time": "2026-08-04T09:00:00Z",
                 "end_time": "2026-08-04T17:00:00Z"

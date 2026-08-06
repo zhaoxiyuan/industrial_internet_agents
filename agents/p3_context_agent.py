@@ -65,7 +65,7 @@ def context_build(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "context": {
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101", "管道P-205"],
             "medium": "原油",
@@ -160,13 +160,13 @@ def context_history(task_id: str) -> str:
     result = [
         {
             "version": 1,
-            "context": {"work_type": "受限空间作业", "region": "炼油厂区01"},
+            "context": {"job_content": "受限空间作业", "region": "炼油厂区01"},
             "changed_at": now,
             "changed_by": "system"
         },
         {
             "version": 2,
-            "context": {"work_type": "受限空间作业", "region": "炼油厂区01",
+            "context": {"job_content": "受限空间作业", "region": "炼油厂区01",
                       "equipment": ["反应器R-101"]},
             "changed_at": now,
             "changed_by": "system"

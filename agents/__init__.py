@@ -115,11 +115,31 @@ from .p10_archive_agent import (
     archive_suggestions,
 )
 
-from .workflow import (
+from .main_agent import (
+    create_main_agent,
+    run_main_agent,
+    main_demo,
+    start_workflow_tool,
+    execute_stage_tool,
+    get_status_tool,
+    confirm_stage_tool,
+    list_pending_tool,
     run_workflow,
     confirm_and_continue,
     get_workflow_state,
     list_pending_confirmations,
+)
+
+from .main_agent import (
+    save_job_application,
+    add_job_log,
+    save_confirmation,
+    get_job_status,
+    ensure_job_dir,
+    get_stage_result_path,
+    read_json_file,
+    write_json_file,
+    STAGE_EXECUTORS,
 )
 from .human_in_the_loop import (
     HumanInTheLoop,
@@ -131,6 +151,19 @@ from .human_in_the_loop import (
 )
 
 __all__ = [
+    # Main Agent
+    "create_main_agent",
+    "run_main_agent",
+    "main_demo",
+    "start_workflow_tool",
+    "execute_stage_tool",
+    "get_status_tool",
+    "confirm_stage_tool",
+    "list_pending_tool",
+    "run_workflow",
+    "confirm_and_continue",
+    "get_workflow_state",
+    "list_pending_confirmations",
     # P1: permit
     "create_permit_agent",
     "create_permit_agent_with_hitl",
@@ -187,6 +220,15 @@ __all__ = [
     "confirm_and_continue",
     "get_workflow_state",
     "list_pending_confirmations",
+    # Job persistence
+    "save_job_application",
+    "add_job_log",
+    "save_confirmation",
+    "get_job_status",
+    "ensure_job_dir",
+    "read_json_file",
+    "write_json_file",
+    "STAGE_EXECUTORS",
     # HumanInTheLoop
     "HumanInTheLoop",
     "HumanConfirmRequest",

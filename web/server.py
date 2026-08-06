@@ -4,13 +4,15 @@ Web 服务器 - 纯 HTML 前端后端
 import json
 import os
 import sys
+import threading
+from datetime import datetime
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from agents.workflow import run_workflow, confirm_and_continue, list_pending_confirmations, get_workflow_state
+from agents.main_agent import run_workflow, confirm_and_continue, list_pending_confirmations, get_workflow_state
 
 
 # 配置
@@ -24,11 +26,8 @@ SYSTEM_PROMPT_DIR = os.path.join(os.path.dirname(WEB_DIR), "system_prompt")
 _thread_store = {"id": None}
 
 
-def get_thread_id():
-    if not _thread_store["id"]:
-        import uuid
-        _thread_store["id"] = f"web-{uuid.uuid4().hex[:8]}"
-    return _thread_store["id"]
+# 正在执行的工作流线程
+_running_workflows = {}  # job_id -> thread
 
 
 def reset_thread():
@@ -67,6 +66,7 @@ def save_env_config(data):
 
 def load_system_prompt(stage: str) -> str:
     stage_to_file = {
+        "MAIN": "MAIN_AGENT_SYSTEM_PROMPT.md",
         "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
         "P2": "P2_TASK_SYSTEM_PROMPT.md",
         "P3": "P3_CONTEXT_SYSTEM_PROMPT.md",
@@ -88,6 +88,7 @@ def load_system_prompt(stage: str) -> str:
 
 def save_system_prompt(stage: str, content: str):
     stage_to_file = {
+        "MAIN": "MAIN_AGENT_SYSTEM_PROMPT.md",
         "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
         "P2": "P2_TASK_SYSTEM_PROMPT.md",
         "P3": "P3_CONTEXT_SYSTEM_PROMPT.md",
@@ -133,22 +134,30 @@ class Handler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_length).decode("utf-8")
             app = json.loads(body)
 
-            reset_thread()
-            thread_id = get_thread_id()
-            result = run_workflow(app, thread_id)
+            # 生成作业单编号: yyyyMMddHHMMssXXX (XXX为3位随机数)
+            import random
+            job_id = datetime.now().strftime("%Y%m%d%H%M%S") + f"{random.randint(0, 999):03d}"
+            app["job_id"] = job_id
 
-            pending = list_pending_confirmations(thread_id)
-            pending_stages = [p.get("stage", "") for p in pending]
-            pending_data = {p.get("stage", ""): p for p in pending}
-
+            # 立即返回，不等待工作流完成
             self.send_json({
-                "status": "waiting" if pending_stages else "completed",
-                "pending": pending_stages,
-                "pending_data": pending_data,
-                "confirmed": list(result.get("confirmed_stages", {}).keys()),
-                "current_stage": result.get("current_stage", ""),
-                "thread_id": thread_id,
+                "status": "starting",
+                "job_id": job_id,
+                "message": "工作流启动中..."
             })
+
+            # 后台线程执行工作流
+            def run_workflow_background(job_id, app):
+                try:
+                    result = run_workflow(app, thread_id=job_id)
+                    # 工作流执行完成，记录最终状态
+                except Exception as e:
+                    print(f"工作流执行错误: {e}")
+
+            t = threading.Thread(target=run_workflow_background, args=(job_id, app))
+            t.daemon = True
+            t.start()
+            _running_workflows[job_id] = t
 
         elif path == "/api/workflow/confirm":
             content_length = int(self.headers.get("Content-Length", 0))
@@ -171,6 +180,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "confirmed": list(result.get("confirmed_stages", {}).keys()),
                 "current_stage": result.get("current_stage", ""),
                 "thread_id": thread_id,
+                "job_id": thread_id,
             })
 
         else:
@@ -196,8 +206,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        elif path == "/data/input/mock_work_content.json":
-            mock_file = os.path.join(os.path.dirname(WEB_DIR), "data", "input", "mock_work_content.json")
+        elif path == "/data/input/mock_job_content.json":
+            mock_file = os.path.join(os.path.dirname(WEB_DIR), "data", "input", "mock_job_content.json")
             if os.path.exists(mock_file):
                 with open(mock_file, "r", encoding="utf-8") as f:
                     content = f.read()
