@@ -1,0 +1,12 @@
+{
+  "scenario": "B",
+  "type": "position",
+  "created_at": "20260805_184157",
+  "second": 22,
+  "log_count": 1,
+  "logs": [
+    {
+      "error": "end_wall(2026-08-05T18:42:20.658) > agent_now(2026-08-05T18:42:07.658)"
+    }
+  ]
+}

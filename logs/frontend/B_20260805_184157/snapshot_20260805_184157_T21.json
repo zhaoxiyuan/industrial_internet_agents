@@ -1,0 +1,20 @@
+{
+  "scenario": "B",
+  "type": "snapshot",
+  "created_at": "20260805_184157",
+  "second": 21,
+  "log_count": 1,
+  "snapshots": [
+    {
+      "second": 21,
+      "time_range": [
+        21.0,
+        22.0
+      ],
+      "cv_log_count": 1,
+      "cv_summary": {},
+      "sensor_summary": {},
+      "position_summary": {}
+    }
+  ]
+}
