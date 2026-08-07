@@ -9,7 +9,9 @@ const state = {
         currentStage: '',
         threadId: null
     },
-    selectedWorkflowNode: null
+    selectedWorkflowNode: null,
+    ws: null,           // 状态 WebSocket 连接
+    logsWs: null        // 日志 WebSocket 连接
 };
 
 // ========== 阶段信息 ==========
@@ -236,31 +238,45 @@ function saveAgentPrompt(stage) {
 // ========== 工作流相关 ==========
 function renderWorkflowDiagram() {
     const container = document.getElementById('workflow-diagram');
-    const { confirmed, currentStage, pending } = state.workflowState;
+    const { confirmed, currentStage, pending, agents, status: mainStatus } = state.workflowState;
 
     function getNodeHtml(stage) {
         const info = STAGE_INFO[stage];
-        const isCompleted = confirmed.includes(stage);
-        const isCurrent = stage === currentStage;
-        // 检查是否待确认（包括子步骤）
-        const isPending = pending.includes(stage) || pending.some(p => p.startsWith(stage + '_'));
+        // 从 agents 数据获取状态
+        const agentData = agents ? agents[stage] : null;
+        const agentStatus = agentData ? agentData.status : null;
+
+        let isCompleted = agentStatus === 'completed';
+        let isPending = agentStatus === 'waiting';
+        let isCurrent = agentStatus === 'running';
+
+        // 如果没有 agents 数据，使用旧逻辑
+        if (!agentData) {
+            isCompleted = confirmed.includes(stage);
+            isCurrent = stage === currentStage;
+            isPending = pending.includes(stage) || pending.some(p => p.startsWith(stage + '_'));
+        }
 
         let nodeClass = '';
         let statusIcon = '<span class="status-dot"></span><span class="status-text">待执行</span>';
         if (isCompleted) {
             nodeClass = 'completed';
-            statusIcon = '<span class="status-dot"></span><span class="status-text">已完成</span>';
+            statusIcon = '<span class="status-dot"></span><span class="status-text">执行完成</span>';
         } else if (isPending) {
             nodeClass = 'pending';
-            statusIcon = '<span class="status-dot"></span><span class="status-text">待确认</span>';
+            statusIcon = '<span class="status-dot"></span><span class="status-text">待人工确认</span>';
         } else if (isCurrent) {
             nodeClass = 'current';
-            statusIcon = '<span class="status-dot running"></span><span class="status-text">执行中</span>';
+            statusIcon = '<span class="status-dot running"></span><span class="status-text">进行中</span>';
         }
 
+        // MAIN 节点稍大一些
+        const isMain = stage === 'MAIN';
+        const cardClass = isMain ? 'workflow-s-card-main' : 'workflow-s-card';
+
         return `
-            <div class="workflow-s-node">
-                <div class="workflow-s-card ${nodeClass}"
+            <div class="workflow-s-node ${isMain ? 'main-node' : ''}">
+                <div class="${cardClass} ${nodeClass}"
                      onclick="selectWorkflowNode('${stage}')"
                      onmouseenter="showNodeTooltip('${stage}', event)"
                      onmouseleave="hideNodeTooltip()">
@@ -274,21 +290,52 @@ function renderWorkflowDiagram() {
         `;
     }
 
-    function getArrowHtml(fromStage, toStage, cls = '') {
-        const fromCompleted = confirmed.includes(fromStage);
-        const toCompleted = confirmed.includes(toStage);
-        const arrowCls = toCompleted ? 'completed' : (cls || '');
-        return `<div class="workflow-s-arrow ${arrowCls}">→</div>`;
+    // 主Agent到子Agent的调度虚线箭头
+    function getDispatchArrowHtml(targetCompleted) {
+        const arrowCls = targetCompleted ? 'completed' : 'pending';
+        return `<div class="workflow-s-arrow ${arrowCls} dispatch-arrow">⤵️</div>`;
     }
 
     let html = '<div class="workflow-s-container">';
 
-    // 单行横向展示: P1 → P2 → ... → P10
-    html += '<div class="workflow-s-row">';
-    ALL_STAGES.forEach((stage, i) => {
+    // 主调度节点（MAIN）横跨整行
+    const mainAgentStatus = mainStatus || (mainStatus === 'completed' ? 'completed' : (agents && agents['MAIN'] ? agents['MAIN'].status : 'pending'));
+    const isMainCompleted = mainAgentStatus === 'completed';
+    const isMainCurrent = mainAgentStatus === 'running';
+    const isMainWaiting = mainAgentStatus === 'waiting';
+    let mainClass = '';
+    if (isMainCompleted) mainClass = 'completed';
+    else if (isMainCurrent) mainClass = 'current';
+    else if (isMainWaiting) mainClass = 'pending';
+    html += `<div class="main-dispatch-bar ${mainClass}">
+        <div class="main-dispatch-content"
+             onclick="selectWorkflowNode('MAIN')"
+             onmouseenter="showNodeTooltip('MAIN', event)"
+             onmouseleave="hideNodeTooltip()">
+            <span class="main-icon">🎛️</span>
+            <span class="main-label">MAIN</span>
+            <span class="main-name">主调度中心</span>
+            <span class="main-status">
+                <span class="status-dot"></span>
+                <span class="status-text">${isMainCompleted ? '执行完成' : (isMainCurrent ? '进行中' : (isMainWaiting ? '待人工确认' : '待执行'))}</span>
+            </span>
+        </div>
+    </div>`;
+
+    // 调度箭头行（P1-P10对应）
+    const allStages = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
+    html += '<div class="workflow-s-row dispatch-row">';
+    allStages.forEach((stage) => {
+        html += `<div class="dispatch-arrow-wrapper"><div class="workflow-s-arrow dispatch-arrow">⤵️</div></div>`;
+    });
+    html += '</div>';
+
+    // P1-P10 节点单行排列
+    html += '<div class="workflow-s-row sub-stages-row">';
+    allStages.forEach((stage, i) => {
         html += getNodeHtml(stage);
-        if (i < ALL_STAGES.length - 1) {
-            html += getArrowHtml(stage, ALL_STAGES[i + 1]);
+        if (i < allStages.length - 1) {
+            html += `<div class="workflow-s-arrow sub-arrow">· · ·</div>`;
         }
     });
     html += '</div>';
@@ -304,14 +351,28 @@ function selectWorkflowNode(stage) {
 
 function renderWorkflowNodeDetail(stage) {
     const info = STAGE_INFO[stage];
-    const { confirmed, pending } = state.workflowState;
-    const isCompleted = confirmed.includes(stage);
-    const isPending = pending.includes(stage);
+    const { confirmed, pending, agents, currentStage } = state.workflowState;
+
+    // 从 agents 数据获取状态
+    const agentData = agents ? agents[stage] : null;
+    const agentStatus = agentData ? agentData.status : null;
+
+    let isCompleted = agentStatus === 'completed';
+    let isPending = agentStatus === 'waiting';
+    let isCurrent = agentStatus === 'running';
+
+    // 如果没有 agents 数据，使用旧逻辑
+    if (!agentData) {
+        isCompleted = confirmed.includes(stage);
+        isPending = pending.includes(stage) || pending.some(p => p.startsWith(stage + '_'));
+        isCurrent = stage === currentStage;
+    }
 
     let statusBadge = '';
-    if (isCompleted) statusBadge = '<span class="status-badge status-completed">✅ 已完成</span>';
-    else if (isPending) statusBadge = '<span class="status-badge status-pending">⏸️ 待确认</span>';
-    else if (stage === state.workflowState.currentStage) statusBadge = '<span class="status-badge status-current">⏳ 执行中</span>';
+    if (isCompleted) statusBadge = '<span class="status-badge status-completed">✅ 执行完成</span>';
+    else if (isPending) statusBadge = '<span class="status-badge status-pending">⏸️ 待人工确认</span>';
+    else if (isCurrent) statusBadge = '<span class="status-badge status-current">⏳ 进行中</span>';
+    else statusBadge = '<span class="status-badge" style="background: #ccc;">⏹️ 待执行</span>';
 
     const panel = document.getElementById('detail-panel');
     panel.innerHTML = `
@@ -354,8 +415,6 @@ function renderWorkflowNodeDetail(stage) {
 
 // ========== 工作流执行 ==========
 
-let workflowPollInterval = null;  // 轮询定时器
-
 function startWorkflow() {
     const app = buildApplicationJson();
     addLog('🚀 启动工作流...');
@@ -371,10 +430,10 @@ function startWorkflow() {
               state.workflowState.jobId = data.job_id;
               state.workflowState.status = 'starting';
               addLog('📋 作业单号: ' + data.job_id, 'success');
-              addLog('⏳ 工作流启动中，开始轮询状态...');
+              addLog('⏳ 工作流启动中，建立 WebSocket 连接...');
 
-              // 开始轮询状态
-              startPollingWorkflow(data.job_id);
+              // 建立 WebSocket 连接
+              connectWebSocket(data.job_id);
           }
       })
       .catch(err => {
@@ -382,67 +441,146 @@ function startWorkflow() {
       });
 }
 
-function startPollingWorkflow(jobId) {
-    // 清除之前的轮询
-    if (workflowPollInterval) {
-        clearInterval(workflowPollInterval);
-    }
+const WS_STATUS_PORT = 8081;  // 状态 WebSocket 端口
+const WS_LOGS_PORT = 8082;     // 日志 WebSocket 端口
 
-    // 每 2 秒轮询一次状态
-    workflowPollInterval = setInterval(() => {
-        pollWorkflowState(jobId);
-    }, 2000);
-}
+function connectWebSocket(jobId) {
+    // 关闭之前的连接
+    disconnectWebSocket();
 
-function pollWorkflowState(jobId) {
-    fetch('/api/workflow/state?thread_id=' + jobId)
-        .then(r => r.json())
-        .then(data => {
-            state.workflowState = data;
-            renderWorkflowDiagram();
-            updateControlPanel();
+    const statusWsUrl = `ws://localhost:${WS_STATUS_PORT}/ws/status/${jobId}`;
+    addLog('🔌 连接状态 WebSocket: ' + statusWsUrl);
 
-            // 更新日志
-            const currentStage = data.current_stage || '';
-            const pending = data.pending || [];
+    try {
+        state.ws = new WebSocket(statusWsUrl);
 
-            if (pending.length > 0) {
-                // 有待确认项，弹窗
-                if (!document.getElementById('hitl-modal').classList.contains('active')) {
-                    addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
-                    showHitlModal(pending[0], data.pending_data);
+        state.ws.onopen = () => {
+            addLog('✅ 状态 WebSocket 连接已建立', 'success');
+        };
+
+        state.ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+
+                if (msg.type === 'heartbeat') {
+                    // 心跳包，忽略
+                    return;
                 }
-            } else if (data.status === 'completed') {
-                // 工作流完成
-                addLog('✅ 工作流执行完成', 'success');
-                stopPolling();
-            } else if (data.status === 'error') {
-                addLog('❌ 工作流执行错误', 'error');
-                stopPolling();
-            } else if (currentStage) {
-                // 执行中
-                addLog('⏳ 执行中: ' + currentStage);
+
+                if (msg.type === 'state_update') {
+                    const data = msg.data;
+                    state.workflowState = data;
+                    renderWorkflowDiagram();
+                    updateControlPanel();
+
+                    // 更新日志
+                    const currentStage = data.current_stage || '';
+                    const pending = data.pending || [];
+
+                    if (pending.length > 0) {
+                        // 有待确认项，弹窗
+                        if (!document.getElementById('hitl-modal').classList.contains('active')) {
+                            addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
+                            showHitlModal(pending[0], data.pending_data[pending[0]]);
+                        }
+                    } else if (data.status === 'completed') {
+                        // 工作流完成
+                        addLog('✅ 工作流执行完成', 'success');
+                    } else if (data.status === 'error') {
+                        addLog('❌ 工作流执行错误', 'error');
+                    } else if (currentStage) {
+                        // 执行中
+                        addLog('⏳ 执行中: ' + currentStage);
+                    }
+
+                    // 打印agents状态便于调试
+                    if (data.agents) {
+                        console.log('[state_update] agents:', JSON.stringify(data.agents));
+                    }
+                }
+            } catch (e) {
+                console.error('解析状态 WebSocket 消息失败:', e);
             }
-        })
-        .catch(err => {
-            addLog('❌ 查询状态失败: ' + err.message, 'error');
-        });
+        };
+
+        state.ws.onerror = (error) => {
+            addLog('❌ 状态 WebSocket 连接错误', 'error');
+            console.error('WebSocket error:', error);
+        };
+
+        state.ws.onclose = () => {
+            addLog('🔌 状态 WebSocket 连接已关闭');
+            state.ws = null;
+        };
+    } catch (e) {
+        addLog('❌ 状态 WebSocket 连接失败: ' + e.message, 'error');
+    }
+
+    // 同时连接日志 WebSocket
+    connectLogsWebSocket(jobId);
 }
 
-function stopPolling() {
-    if (workflowPollInterval) {
-        clearInterval(workflowPollInterval);
-        workflowPollInterval = null;
+function connectLogsWebSocket(jobId) {
+    // 关闭之前的日志连接
+    disconnectLogsWebSocket();
+
+    const logsWsUrl = `ws://localhost:${WS_LOGS_PORT}/ws/logs/${jobId}`;
+    addLog('📋 连接日志 WebSocket: ' + logsWsUrl);
+
+    try {
+        state.logsWs = new WebSocket(logsWsUrl);
+
+        state.logsWs.onopen = () => {
+            addLog('✅ 日志 WebSocket 连接已建立', 'success');
+        };
+
+        state.logsWs.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+
+                if (msg.type === 'heartbeat') {
+                    // 心跳包，忽略
+                    return;
+                }
+
+                if (msg.type === 'workflow_log') {
+                    // 显示结构化日志
+                    displayWorkflowLog(msg);
+                } else if (msg.type === 'connected') {
+                    addLog('📋 ' + msg.message, 'success');
+                }
+            } catch (e) {
+                // 非 JSON 格式，直接显示原始文本
+                addLog('📋 ' + event.data);
+            }
+        };
+
+        state.logsWs.onerror = (error) => {
+            addLog('❌ 日志 WebSocket 连接错误', 'error');
+            console.error('Logs WebSocket error:', error);
+        };
+
+        state.logsWs.onclose = () => {
+            addLog('📋 日志 WebSocket 连接已关闭');
+            state.logsWs = null;
+        };
+    } catch (e) {
+        addLog('❌ 日志 WebSocket 连接失败: ' + e.message, 'error');
     }
 }
 
-function refreshWorkflow() {
-    const jobId = state.workflowState.threadId;
-    if (!jobId) {
-        addLog('⚠️ 无进行中的工作流', 'warning');
-        return;
+function disconnectWebSocket() {
+    if (state.ws) {
+        state.ws.close();
+        state.ws = null;
     }
-    pollWorkflowState(jobId);
+}
+
+function disconnectLogsWebSocket() {
+    if (state.logsWs) {
+        state.logsWs.close();
+        state.logsWs = null;
+    }
 }
 
 function fillMockData() {
@@ -475,7 +613,8 @@ function buildApplicationJson() {
 }
 
 function resetWorkflow() {
-    stopPolling();
+    disconnectWebSocket();
+    disconnectLogsWebSocket();
     state.workflowState = {
         status: 'idle',
         pending: [],
@@ -522,6 +661,100 @@ function addLog(message, type = '') {
     container.scrollTop = container.scrollHeight;
 }
 
+// 显示结构化工作流日志
+function displayWorkflowLog(msg) {
+    const container = document.getElementById('log-container');
+    const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : new Date().toLocaleTimeString('zh-CN', { hour12: false });
+
+    const level = msg.level || 'INFO';
+    const source = msg.source || '';
+    const message = msg.message || '';
+    const data = msg.data;
+
+    // 根据级别设置颜色
+    let levelColor = '#4CAF50'; // INFO - 绿色
+    let levelPrefix = 'ℹ️';
+    if (level === 'WARNING') {
+        levelColor = '#FFC107';
+        levelPrefix = '⚠️';
+    } else if (level === 'ERROR') {
+        levelColor = '#f44336';
+        levelPrefix = '❌';
+    } else if (level === 'DEBUG') {
+        levelColor = '#9E9E9E';
+        levelPrefix = '🔍';
+    }
+
+    // 源标签颜色
+    const sourceColors = {
+        'P1': '#4CAF50', 'P2': '#2196F3', 'P3': '#9C27B0', 'P4': '#FF9800',
+        'P5': '#F44336', 'P6': '#E91E63', 'P7': '#FF5722', 'P8': '#795548',
+        'P9': '#607D8B', 'P10': '#9E9E9E', 'MAIN': '#673AB7',
+        'TOOL': '#00BCD4', 'AGENT': '#E91E63', 'LLM': '#FFEB3B',
+        'WORKFLOW': '#673AB7'
+    };
+    const sourceColor = sourceColors[source] || '#888';
+
+    // 构建日志条目 HTML
+    let entryHtml = `<span class="log-time">[${time}]</span> `;
+    entryHtml += `<span style="color: ${levelColor}; font-weight: bold;">${levelPrefix} ${level}</span> `;
+    entryHtml += `<span style="color: ${sourceColor}; font-weight: bold;">[${source}]</span> `;
+    entryHtml += `<span>${message}</span>`;
+
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = entryHtml;
+
+    // 如果有附加数据，显示数据摘要
+    if (data && Object.keys(data).length > 0) {
+        const dataSummary = formatDataSummary(data);
+        if (dataSummary) {
+            const dataDiv = document.createElement('div');
+            dataDiv.style.marginLeft = '20px';
+            dataDiv.style.color = '#888';
+            dataDiv.style.fontSize = '11px';
+            dataDiv.textContent = dataSummary;
+            entry.appendChild(dataDiv);
+        }
+    }
+
+    container.appendChild(entry);
+    container.scrollTop = container.scrollHeight;
+
+    // 限制日志数量，防止内存溢出
+    while (container.children.length > 500) {
+        container.removeChild(container.firstChild);
+    }
+}
+
+// 格式化数据显示摘要
+function formatDataSummary(data) {
+    if (!data || typeof data !== 'object') return '';
+
+    const entries = Object.entries(data);
+    if (entries.length === 0) return '';
+
+    const parts = [];
+    for (const [key, value] of entries.slice(0, 5)) { // 最多显示5个字段
+        if (value === null || value === undefined) continue;
+
+        let valStr = '';
+        if (typeof value === 'string') {
+            valStr = value.length > 50 ? value.substring(0, 50) + '...' : value;
+        } else if (typeof value === 'object') {
+            valStr = JSON.stringify(value).length > 50 ? JSON.stringify(value).substring(0, 50) + '...' : JSON.stringify(value);
+        } else {
+            valStr = String(value);
+        }
+
+        if (valStr) {
+            parts.push(`${key}: ${valStr}`);
+        }
+    }
+
+    return parts.join(' | ');
+}
+
 // ========== HITL 弹窗 ==========
 function showHitlModal(stage, data) {
     // 提取基础阶段名称（如从"P1_permit_submit"提取"P1"）
@@ -532,20 +765,21 @@ function showHitlModal(stage, data) {
     document.getElementById('modal-subtitle').textContent = info.humanConfirm || '人工确认';
 
     data = data || {};
-    document.getElementById('modal-info-content').innerHTML = data.message || info.humanConfirm || '请确认';
+    const pendingInfo = data.pending || data;
+    document.getElementById('modal-info-content').innerHTML = pendingInfo.message || info.humanConfirm || '请确认';
 
     const evidenceSection = document.getElementById('modal-evidence-section');
     const suggestionSection = document.getElementById('modal-suggestion-section');
 
-    if (data.evidence) {
-        document.getElementById('modal-evidence').innerHTML = Array.isArray(data.evidence) ? data.evidence.join('<br>') : data.evidence;
+    if (pendingInfo.evidence) {
+        document.getElementById('modal-evidence').innerHTML = Array.isArray(pendingInfo.evidence) ? pendingInfo.evidence.join('<br>') : pendingInfo.evidence;
         evidenceSection.style.display = 'block';
     } else {
         evidenceSection.style.display = 'none';
     }
 
-    if (data.suggestion) {
-        document.getElementById('modal-suggestion').innerHTML = data.suggestion;
+    if (pendingInfo.suggestion) {
+        document.getElementById('modal-suggestion').innerHTML = pendingInfo.suggestion;
         suggestionSection.style.display = 'block';
     } else {
         suggestionSection.style.display = 'none';
@@ -559,12 +793,25 @@ function closeModal() {
 }
 
 function confirmDecision(decision) {
-    const jobId = state.workflowState.threadId || state.workflowState.jobId;
+    console.log('confirmDecision called:', decision);
+    console.log('state.workflowState:', JSON.stringify(state.workflowState));
+    const jobId = state.workflowState.thread_id || state.workflowState.jobId || state.workflowState.threadId;
+    console.log('jobId:', jobId);
+    if (!jobId) {
+        addLog('❌ 错误: 没有进行中的工作流，请先启动工作流', 'error');
+        return;
+    }
+
     const pending = state.workflowState.pending || [];
     const stage = pending[0];
-    if (!stage) return;
+    console.log('stage:', stage);
+    if (!stage) {
+        addLog('❌ 错误: 没有待确认的阶段', 'error');
+        return;
+    }
 
     addLog(`✅ ${stage} 确认: ${decision}`);
+    addLog(`📤 发送确认请求: thread_id=${jobId}, stage=${stage}, decision=${decision}`);
 
     fetch('/api/workflow/confirm', {
         method: 'POST',
@@ -574,23 +821,26 @@ function confirmDecision(decision) {
             stage: stage,
             decision: decision
         })
-    }).then(r => r.json())
-      .then(data => {
-          closeModal();
+    }).then(r => {
+        addLog(`📥 收到响应状态: ${r.status}`);
+        return r.json();
+    }).then(data => {
+        addLog(`📋 响应数据: ${JSON.stringify(data)}`);
+        closeModal();
 
-          if (data.pending && data.pending.length > 0) {
-              // 还有更多待确认，继续轮询
-              addLog('⏳ 等待: ' + data.pending.join(', '), 'warning');
-              showHitlModal(data.pending[0], data.pending_data);
-              // 继续轮询直到所有阶段完成
-              startPollingWorkflow(jobId);
-          } else if (data.status === 'completed') {
-              addLog('✅ 工作流完成', 'success');
-              stopPolling();
-          } else {
-              // 继续轮询
-              startPollingWorkflow(jobId);
-          }
+        if (data.pending && data.pending.length > 0) {
+            // 还有更多待确认
+            addLog('⏳ 等待: ' + data.pending.join(', '), 'warning');
+            showHitlModal(data.pending[0], data.pending_data[data.pending[0]]);
+            // WebSocket 会自动推送状态更新，无需轮询
+        } else if (data.status === 'completed') {
+            addLog('✅ 工作流完成', 'success');
+        } else {
+            // WebSocket 会自动推送状态更新
+            addLog(`⏳ 等待状态更新，状态: ${data.status}`);
+        }
+      }).catch(err => {
+        addLog(`❌ 请求失败: ${err.message}`, 'error');
       });
 }
 
@@ -666,7 +916,7 @@ function showNodeTooltip(stage, event) {
     `;
 
     // 定位
-    const rect = event.target.closest('.workflow-s-card').getBoundingClientRect();
+    const rect = event.target.closest('.workflow-s-card, .workflow-s-card-main').getBoundingClientRect();
     let left = rect.right + 10;
     let top = rect.top;
 
