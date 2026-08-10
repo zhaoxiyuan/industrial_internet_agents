@@ -9,9 +9,9 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 
 
 # ============================================================
@@ -241,7 +241,7 @@ def create_monitor_agent():
     """创建 P6 动态监测 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [monitor_start, monitor_stop, monitor_status, monitor_events]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P6"))
 
 
 def create_monitor_agent_with_hitl():
@@ -265,7 +265,7 @@ def create_monitor_agent_with_hitl():
     return create_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=load_system_prompt("P6"),
         middleware=[hitl_middleware],
         checkpointer=_monitor_checkpointer,
     )

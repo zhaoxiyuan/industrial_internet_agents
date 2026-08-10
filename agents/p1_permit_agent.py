@@ -11,10 +11,11 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model
+from .utils.agent_utils import extract_output
+from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.system_prompt import load_system_prompt
 
 # 配置日志
 logger = logging.getLogger("p1_permit_agent")
@@ -36,22 +37,6 @@ class PermitAgentState(TypedDict, total=False):
     """P1 Agent 内部状态"""
     messages: list
 
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个石油工业作业许可管理专家，擅长处理作业预约、JSA（作业安全分析）和作业票生成。
-
-你需要：
-1. 根据用户提供的作业基础信息包括作业内容、时间、区域和人员，识别作业类型，生成作业表单
-2. 根据作业表单内容调用JSA分析工具识别危害因素和对应措施
-3. 检查票证必填字段、风险措施完整性、人员资质冲突
-4. 仅生成草稿，不自动审批
-
-当用户提交作业申请时，调用 permit_submit 工具。
-当用户请求JSA分析时，调用 jsa_analyze 工具。
-当用户请求生成作业票草稿时，调用 permit_generate_draft 工具。
-当用户查询作业票状态时，调用 permit_check 工具。"""
 
 
 # ============================================================
@@ -152,35 +137,58 @@ def jsa_analyze(task_id: str) -> str:
             recoverable=False
         ), ensure_ascii=False)
 
+    # JSA 分析过程日志
+    push_websocket_log("*", "INFO", "TOOL", f"JSA 分析开始: task_id={task_id}", {"step": "start"})
+
+    # 危害因素识别过程
+    hazards = [
+        {
+            "id": "H-001",
+            "description": "受限空间内存在有毒有害气体",
+            "severity": "高",
+            "measures": ["气体检测", "强制通风", "佩戴呼吸器"]
+        },
+        {
+            "id": "H-002",
+            "description": "高温设备烫伤风险",
+            "severity": "中",
+            "measures": ["设备降温", "佩戴防护手套", "设置警戒区域"]
+        },
+        {
+            "id": "H-003",
+            "description": "人员误入风险区域",
+            "severity": "中",
+            "measures": ["设置警戒标识", "专人监护", "门禁管理"]
+        }
+    ]
+
+    # 记录每个危害因素的识别
+    for hazard in hazards:
+        push_websocket_log("*", "INFO", "TOOL", f"识别危害因素: [{hazard['id']}] {hazard['description']}", {
+            "hazard_id": hazard["id"],
+            "severity": hazard["severity"],
+            "measures_count": len(hazard["measures"])
+        })
+        for measure in hazard["measures"]:
+            push_websocket_log("*", "DEBUG", "TOOL", f"  -> 措施: {measure}", {"hazard_id": hazard["id"], "measure": measure})
+
+    # 计算完整性得分
+    completeness_score = 0.85
+    missing_items = ["建议补充应急救援预案"]
+
+    push_websocket_log("*", "WARNING", "TOOL", f"JSA 分析完成: 识别到 {len(hazards)} 个危害因素, 完整性得分: {completeness_score}", {
+        "hazards_count": len(hazards),
+        "completeness_score": completeness_score,
+        "missing_items": missing_items
+    })
+
     # 模拟 JSA 分析结果
     result = {
         "task_id": task_id,
-        "hazards": [
-            {
-                "id": "H-001",
-                "description": "受限空间内存在有毒有害气体",
-                "severity": "高",
-                "measures": ["气体检测", "强制通风", "佩戴呼吸器"]
-            },
-            {
-                "id": "H-002",
-                "description": "高温设备烫伤风险",
-                "severity": "中",
-                "measures": ["设备降温", "佩戴防护手套", "设置警戒区域"]
-            },
-            {
-                "id": "H-003",
-                "description": "人员误入风险区域",
-                "severity": "中",
-                "measures": ["设置警戒标识", "专人监护", "门禁管理"]
-            }
-        ],
-        "completeness_score": 0.85,
-        "missing_items": ["建议补充应急救援预案"]
+        "hazards": hazards,
+        "completeness_score": completeness_score,
+        "missing_items": missing_items
     }
-
-    logger.info(f"[jsa_analyze] <<< 工具出口: hazards_count={len(result['hazards'])}, completeness_score={result['completeness_score']}")
-    push_websocket_log("*", "INFO", "TOOL", f"<<< jsa_analyze 工具出口", {"hazards_count": len(result['hazards']), "completeness_score": result['completeness_score']})
     return json.dumps(make_response("permit analyze-jsa", result), ensure_ascii=False)
 
 
@@ -283,7 +291,7 @@ def create_permit_agent():
     logger.info("[create_permit_agent] 创建 P1 Permit Agent（无 HITL）")
     llm = create_chat_model()
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
 
 
 def create_permit_agent_with_hitl(thread_id: str = "default"):
@@ -316,7 +324,7 @@ def create_permit_agent_with_hitl(thread_id: str = "default"):
     agent = create_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=load_system_prompt("P1"),
         middleware=[hitl_middleware],
         checkpointer=_permit_checkpointer,
     )
@@ -341,6 +349,19 @@ def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume:
     import os
     push_websocket_log(thread_id, "INFO", "AGENT", f">>> P1 Agent 入口", {"message": message[:100] + "..." if message and len(message) > 100 else message, "resume": resume})
     logger.info(f"[run_permit_agent_with_hitl] >>> Agent 入口: thread_id={thread_id}, message={message[:100] if message else 'None'}, resume={resume}")
+
+    # 首次执行时：先用非 HITL agent 执行一次获取日志（工具完整执行）
+    if not resume and message and not is_agent_interrupted(thread_id):
+        push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] 第一阶段：执行 JSA 分析并输出日志")
+        logger.info(f"[run_permit_agent_with_hitl] 第一阶段：非 HITL 执行获取日志")
+        # 创建非 HITL agent 完整执行（用于输出日志）
+        llm = create_chat_model()
+        tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
+        logging_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
+        # 非 HITL 执行，工具会完整执行并输出日志
+        logging_result = logging_agent.invoke({"messages": [HumanMessage(content=message)]})
+        push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] JSA 分析完成，开始等待人工确认")
+        logger.info(f"[run_permit_agent_with_hitl] 第一阶段完成，继续 HITL 执行")
 
     # 恢复执行时：从文件读取原始消息，并清除checkpoint重新执行
     if resume and not message:
@@ -371,7 +392,7 @@ def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume:
         push_websocket_log(thread_id, "INFO", "AGENT", f"创建非 HITL Agent 重新执行")
         llm = create_chat_model()
         tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
-        fresh_agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+        fresh_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
         result = fresh_agent.invoke({"messages": [HumanMessage(content=message)]}, config)
 
         # 非 HITL agent 不会中断，直接返回结果

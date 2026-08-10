@@ -13,7 +13,8 @@
 
 ```
 ├── agents/              # Agent 核心模块
-│   └── edge_agent_demo.py   # 边缘智能 Agent 实现
+│   └── demo/              # 示例 Agent
+│       └── edge_agent_demo.py   # 边缘智能 Agent 实现
 ├── model/              # LLM 模型封装
 │   └── chat_model.py        # ChatModel 配置
 ├── utils/              # 工具模块

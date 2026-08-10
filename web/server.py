@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from agents.main_agent import run_workflow, confirm_and_continue, list_pending_confirmations, get_workflow_state, set_broadcast_callback
-from utils.logging_handler import set_logs_broadcast_queue
+from agents.utils.logging_handler import set_logs_broadcast_queue
+from agents.utils.system_prompt import load_system_prompt, save_system_prompt
 
 # 配置日志
 logging.basicConfig(
@@ -33,7 +34,7 @@ logger = logging.getLogger("server")
 PORT = 8080
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(os.path.dirname(WEB_DIR), ".env")
-SYSTEM_PROMPT_DIR = os.path.join(os.path.dirname(WEB_DIR), "system_prompt")
+SYSTEM_PROMPT_DIR = os.path.join(os.path.dirname(WEB_DIR), "agents", "system_prompt")
 
 # WebSocket 端口配置
 WS_STATUS_PORT = PORT + 1   # 状态通道端口
@@ -307,48 +308,6 @@ def save_env_config(data):
     ]
     with open(ENV_FILE, "w") as f:
         f.write("\n".join(lines))
-
-
-def load_system_prompt(stage: str) -> str:
-    stage_to_file = {
-        "MAIN": "MAIN_AGENT_SYSTEM_PROMPT.md",
-        "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
-        "P2": "P2_TASK_SYSTEM_PROMPT.md",
-        "P3": "P3_CONTEXT_SYSTEM_PROMPT.md",
-        "P4": "P4_BINDING_SYSTEM_PROMPT.md",
-        "P5": "P5_VERIFY_SYSTEM_PROMPT.md",
-        "P6": "P6_MONITOR_SYSTEM_PROMPT.md",
-        "P7": "P7_RISK_SYSTEM_PROMPT.md",
-        "P8": "P8_DISPOSITION_SYSTEM_PROMPT.md",
-        "P9": "P9_CLOSURE_SYSTEM_PROMPT.md",
-        "P10": "P10_ARCHIVE_SYSTEM_PROMPT.md",
-    }
-    filename = stage_to_file.get(stage, f"{stage}_SYSTEM_PROMPT.md")
-    filepath = os.path.join(SYSTEM_PROMPT_DIR, filename)
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
-
-
-def save_system_prompt(stage: str, content: str):
-    stage_to_file = {
-        "MAIN": "MAIN_AGENT_SYSTEM_PROMPT.md",
-        "P1": "P1_PERMIT_SYSTEM_PROMPT.md",
-        "P2": "P2_TASK_SYSTEM_PROMPT.md",
-        "P3": "P3_CONTEXT_SYSTEM_PROMPT.md",
-        "P4": "P4_BINDING_SYSTEM_PROMPT.md",
-        "P5": "P5_VERIFY_SYSTEM_PROMPT.md",
-        "P6": "P6_MONITOR_SYSTEM_PROMPT.md",
-        "P7": "P7_RISK_SYSTEM_PROMPT.md",
-        "P8": "P8_DISPOSITION_SYSTEM_PROMPT.md",
-        "P9": "P9_CLOSURE_SYSTEM_PROMPT.md",
-        "P10": "P10_ARCHIVE_SYSTEM_PROMPT.md",
-    }
-    filename = stage_to_file.get(stage, f"{stage}_SYSTEM_PROMPT.md")
-    filepath = os.path.join(SYSTEM_PROMPT_DIR, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
 
 
 class Handler(SimpleHTTPRequestHandler):

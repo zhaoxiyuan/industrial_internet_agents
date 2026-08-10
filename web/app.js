@@ -149,18 +149,55 @@ function initMenu() {
 // ========== 配置相关 ==========
 function loadModelConfig() {
     fetch('/api/config')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
         .then(data => {
-            document.getElementById('config-api-key').value = data.api_key || '';
+            console.log('[loadModelConfig] Received data:', {api_key: data.api_key ? '***' : '', base_url: data.base_url, model: data.model});
+            // API Key 用 * 号展示
+            const apiKey = data.api_key || '';
+            document.getElementById('config-api-key').value = maskString(apiKey);
+            document.getElementById('config-api-key').dataset.rawValue = apiKey;
             document.getElementById('config-base-url').value = data.base_url || '';
             document.getElementById('config-model').value = data.model || '';
+            console.log('[loadModelConfig] Fields populated, apiKey masked:', maskString(apiKey));
         })
-        .catch(() => {});
+        .catch(err => {
+            console.error('[loadModelConfig] Error:', err);
+        });
+}
+
+function maskString(str) {
+    if (!str) return '';
+    if (str.length <= 4) return '****';
+    return str.substring(0, 4) + '*'.repeat(Math.min(str.length - 4, 20));
+}
+
+function toggleApiKeyVisibility() {
+    const input = document.getElementById('config-api-key');
+    const icon = document.getElementById('toggle-api-key');
+    if (input.type === 'password') {
+        // 切换到显示模式：先更新 raw-value 为当前值，再显示
+        input.dataset.rawValue = input.value;
+        input.type = 'text';
+        icon.textContent = '🙈';
+    } else {
+        // 切换到隐藏模式：先把 raw-value 更新为当前显示的值，再隐藏
+        input.dataset.rawValue = input.value;
+        input.value = maskString(input.value);
+        input.type = 'password';
+        icon.textContent = '👁️';
+    }
 }
 
 function saveModelConfig() {
+    // 保存时使用原始值（如果当前是显示状态，需要从 input.value 获取；如果隐藏状态从 dataset.rawValue 获取）
+    const apiKeyInput = document.getElementById('config-api-key');
+    const apiKey = apiKeyInput.type === 'password' ? apiKeyInput.dataset.rawValue : apiKeyInput.value;
+
     const data = {
-        api_key: document.getElementById('config-api-key').value,
+        api_key: apiKey,
         base_url: document.getElementById('config-base-url').value,
         model: document.getElementById('config-model').value
     };

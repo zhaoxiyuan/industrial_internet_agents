@@ -10,9 +10,9 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 
 
 # ============================================================
@@ -213,7 +213,7 @@ def create_risk_agent():
     """创建 P7 风险研判 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [risk_analyze, risk_grade, risk_cases, risk_list]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P7"))
 
 
 def create_risk_agent_with_hitl():
@@ -237,7 +237,7 @@ def create_risk_agent_with_hitl():
     return create_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=load_system_prompt("P7"),
         middleware=[hitl_middleware],
         checkpointer=_risk_checkpointer,
     )

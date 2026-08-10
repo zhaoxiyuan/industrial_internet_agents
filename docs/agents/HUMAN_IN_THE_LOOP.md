@@ -1,4 +1,4 @@
-# HumanInTheLoop (human_in_the_loop)
+# HumanInTheLoop (hitl/human_in_the_loop)
 
 ## 概述
 
@@ -88,7 +88,7 @@ class HumanConfirmResult:
 ## 使用示例
 
 ```python
-from agents.human_in_the_loop import get_hitl_manager, create_confirm_request
+from agents.hitl.human_in_the_loop import get_hitl_manager, create_confirm_request
 
 # 获取管理器
 hitl = get_hitl_manager()
@@ -153,4 +153,4 @@ agent = create_agent(
 
 ## 文件位置
 
-`agents/human_in_the_loop.py`
+`agents/hitl/human_in_the_loop.py`

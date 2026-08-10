@@ -757,9 +757,8 @@
             padding: 15px;
             font-family: "Consolas", "Monaco", monospace;
             font-size: 12px;
-            max-height: 150px;
+            flex: 1;
             overflow-y: auto;
-            margin-top: 20px;
         }
         .log-container::-webkit-scrollbar {
             width: 8px;
@@ -1073,7 +1072,10 @@
                         <div class="panel-title">🤖 模型配置</div>
                         <div class="form-group">
                             <label class="form-label">API Key</label>
-                            <input type="password" class="form-input" id="config-api-key" placeholder="输入 API Key">
+                            <div style="position: relative; display: flex; align-items: center;">
+                                <input type="password" class="form-input" id="config-api-key" placeholder="输入 API Key" style="padding-right: 40px;">
+                                <span onclick="toggleApiKeyVisibility()" id="toggle-api-key" style="position: absolute; right: 12px; cursor: pointer; font-size: 18px;">👁️</span>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Base URL</label>
@@ -1308,12 +1310,6 @@
                     <div class="execute-right">
                         <div class="log-container execute-right-middle" id="log-container">
                             <div class="log-entry"><span class="log-time">[--:--:--]</span> 就绪</div>
-                        </div>
-                        <div class="execute-right-bottom">
-                            <div id="detail-panel" class="detail-panel" style="padding: 15px;">
-                                <div class="detail-section-title">⚙️ 控制面板</div>
-                                <div id="control-panel" style="color: #666;">启动工作流后显示状态</div>
-                            </div>
                         </div>
                     </div>
                 </div>

@@ -144,7 +144,7 @@ from .main_agent import (
     write_json_file,
     STAGE_EXECUTORS,
 )
-from .human_in_the_loop import (
+from .hitl.human_in_the_loop import (
     HumanInTheLoop,
     HumanConfirmRequest,
     HumanConfirmResult,
