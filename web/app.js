@@ -176,18 +176,22 @@ function maskString(str) {
 
 function toggleApiKeyVisibility() {
     const input = document.getElementById('config-api-key');
-    const icon = document.getElementById('toggle-api-key');
+    const eyeOpen = document.getElementById('eye-open');
+    const eyeClosed = document.getElementById('eye-closed');
     if (input.type === 'password') {
-        // 切换到显示模式：先更新 raw-value 为当前值，再显示
-        input.dataset.rawValue = input.value;
+        // 切换到显示模式：使用 raw-value 显示明文
+        const rawValue = input.dataset.rawValue || '';
+        input.value = rawValue;
         input.type = 'text';
-        icon.textContent = '🙈';
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = 'inline';
     } else {
-        // 切换到隐藏模式：先把 raw-value 更新为当前显示的值，再隐藏
+        // 切换到隐藏模式：保存当前明文值，重新显示掩码
         input.dataset.rawValue = input.value;
         input.value = maskString(input.value);
         input.type = 'password';
-        icon.textContent = '👁️';
+        eyeOpen.style.display = 'inline';
+        eyeClosed.style.display = 'none';
     }
 }
 

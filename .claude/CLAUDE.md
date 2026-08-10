@@ -31,6 +31,11 @@ python -c "from <模块> import <函数>; print('OK')"
 - 变更描述准确反映修改目的和内容
 - 不要提交敏感信息（如 API Key、凭证）
 
+**提交代码流程（当用户说"提交代码"时）：**
+1. `git add .` - 暂存所有变更
+2. `git commit` - 根据变更内容生成总结作为 comment
+3. `git push` - 推送到远程
+
 **-destructive 操作需确认：**
 - `git reset --hard`、`git clean -f`、`git push --force` 等操作前必须询问用户
 

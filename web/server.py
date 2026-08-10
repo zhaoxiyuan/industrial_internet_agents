@@ -482,7 +482,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/config":
             config = load_env_config()
-            logger.info(f"[GET] /api/config 响应: config={'api_key': '***', 'base_url': config.get('base_url'), 'model': config.get('model')}")
+            logger.info(f'[GET] /api/config 响应: config={{"api_key": "***", "base_url": "{config.get("base_url")}", "model": "{config.get("model")}"}}')
             self.send_json(config)
 
         elif path.startswith("/api/prompt/"):
