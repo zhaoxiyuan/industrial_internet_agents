@@ -427,8 +427,9 @@ class Handler(SimpleHTTPRequestHandler):
             thread_id = data.get("thread_id")
             stage = data.get("stage")
             decision = data.get("decision")
+            async_execute = data.get("async_execute", False)
 
-            logger.info(f"[POST] /api/workflow/confirm 进入: thread_id={thread_id}, stage={stage}, decision={decision}")
+            logger.info(f"[POST] /api/workflow/confirm 进入: thread_id={thread_id}, stage={stage}, decision={decision}, async={async_execute}")
 
             if not thread_id:
                 logger.warning(f"[POST] /api/workflow/confirm 参数错误: thread_id为空")
@@ -444,8 +445,43 @@ class Handler(SimpleHTTPRequestHandler):
                 })
                 return
 
+            if not stage:
+                logger.warning(f"[POST] /api/workflow/confirm 参数错误: stage为空")
+                self.send_json({
+                    "status": "error",
+                    "error": "stage 不能为空",
+                    "pending": [],
+                    "pending_data": {},
+                    "confirmed": [],
+                    "current_stage": "",
+                    "thread_id": thread_id,
+                    "job_id": thread_id,
+                })
+                return
+
             try:
-                result = confirm_and_continue(thread_id, stage, decision)
+                result = confirm_and_continue(thread_id, stage, decision, async_execute=async_execute)
+
+                if result is None:
+                    logger.warning(f"[POST] /api/workflow/confirm 结果为空")
+                    self.send_json({
+                        "status": "error",
+                        "error": "执行结果为空",
+                        "pending": [],
+                        "pending_data": {},
+                        "confirmed": [],
+                        "current_stage": stage,
+                        "thread_id": thread_id,
+                        "job_id": thread_id,
+                    })
+                    return
+
+                # 异步模式下立即返回，不查询 pending 状态
+                if async_execute:
+                    logger.info(f"[POST] /api/workflow/confirm 异步响应: status={result.get('status')}")
+                    self.send_json(result)
+                    return
+
                 pending = list_pending_confirmations(thread_id)
                 pending_stages = [p.get("stage", "") for p in pending]
                 pending_data = {p.get("stage", ""): p for p in pending}

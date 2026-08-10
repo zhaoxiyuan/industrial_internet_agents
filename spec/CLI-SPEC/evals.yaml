@@ -170,7 +170,7 @@ context:
       command: context build TASK-WELD-01-20260804-001
       expected:
         exit_code: 0
-        result.context.work_type: exists
+        result.context.job_content: exists
         result.context.region: exists
         result.completeness: exists
 

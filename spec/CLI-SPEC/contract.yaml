@@ -124,7 +124,7 @@ task:
             tasks: array of
               - task_id: string
                 permit_id: string
-                work_type: string
+                job_content: string
                 region: string
                 status: string
                 created_at: string
@@ -142,7 +142,7 @@ task:
           fields:
             task_id: string
             permit_id: string
-            work_type: string
+            job_content: string
             region: string
             status: string
             context: object
@@ -199,7 +199,7 @@ context:
             context:
               type: object
               fields:
-                work_type: string
+                job_content: string
                 region: string
                 equipment: array of string
                 medium: string

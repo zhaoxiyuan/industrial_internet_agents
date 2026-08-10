@@ -22,6 +22,28 @@ uv lock
 python web/server.py
 ```
 
+## 日志规范
+
+**所有 Web API 端点必须在入口和出口处打印日志，便于排查错误。**
+
+日志格式：
+```
+[HTTP方法] [端点路径] 进入: 请求参数
+[HTTP方法] [端点路径] 响应: 响应数据
+[HTTP方法] [端点路径] 异常: 错误信息
+```
+
+示例：
+```
+2026-08-06 10:30:00 [INFO] server: [POST] /api/workflow/confirm 进入: thread_id=xxx, stage=P1
+2026-08-06 10:30:01 [INFO] server: [POST] /api/workflow/confirm 响应: {'status': 'waiting', ...}
+```
+
+关键原则：
+- **入口日志**：记录请求参数（敏感信息如 api_key 需要脱敏）
+- **出口日志**：记录响应状态和数据摘要
+- **异常日志**：使用 `logger.exception()` 打印完整堆栈信息
+
 ## 技术栈
 
 - **LangChain**: 1.3.14+ (核心框架)
@@ -84,9 +106,23 @@ def agent_demo(message: str, history: list) -> str:
 ├── model/              # LLM 模型封装
 ├── utils/              # 工具函数
 ├── web/                # Gradio Web 前端
+├── docs/               # 文档目录
 ├── SDD.md              # 软件设计说明书
 └── task.md             # 作业流程阶段定义
 ```
+
+## 文档同步规则
+
+**代码变更后，必须检查并同步更新 `docs/` 目录下的相关文档：**
+
+- `docs/architecture.md` - 系统架构和技术说明
+- `docs/agents/*.md` - 各 Agent 的说明文档
+- `docs/index.md` - 执行链路和交互流程
+
+**规则：文档说明必须与代码逻辑保持一致。代码变更后：**
+1. 检查是否影响架构、接口、执行流程
+2. 如有影响，立即更新相关文档
+3. 不要留下"文档待更新"之类的 TODO
 
 ## 环境配置
 
@@ -97,3 +133,13 @@ OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://api.minimax.chat/v1
 OPENAI_MODEL=MiniMax-M3
 ```
+
+## Git 提交规则
+
+**修改代码后，必须经过人工确认才可以提交代码。**
+
+提交前必须：
+1. 运行 `git status` 和 `git diff` 查看变更内容
+2. 向用户展示变更摘要
+3. 获得用户明确确认后，才能执行 `git commit`
+4. 如果用户拒绝或要求修改，必须按要求调整后再提交

@@ -8,7 +8,7 @@
   "input": {
     "application": {
       "schema_version": "1.0",
-      "work_type": "受限空间作业",
+      "job_content": "受限空间作业",
       "region": "炼油厂区01",
       "equipment": ["反应器R-101", "管道P-205"],
       "medium": "原油",
@@ -56,7 +56,7 @@
       "permit_draft_id": "PD-20260804001",
       "content": {
         "task_id": "TASK-WELD-01-20260804-001",
-        "work_type": "受限空间作业",
+        "job_content": "受限空间作业",
         "region": "炼油厂区01",
         "equipment": ["反应器R-101", "管道P-205"],
         "medium": "原油",

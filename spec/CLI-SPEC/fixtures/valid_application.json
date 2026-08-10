@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "description": "有效作业申请 fixture",
   "application": {
-    "work_type": "受限空间作业",
+    "job_content": "受限空间作业",
     "region": "炼油厂区01",
     "equipment": ["反应器R-101", "管道P-205"],
     "medium": "原油",

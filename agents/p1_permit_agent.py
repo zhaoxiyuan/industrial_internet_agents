@@ -3,7 +3,8 @@ P1: 作业预约、JSA分析与作业票
 Permit Agent - 处理作业申请、JSA分析和作业票生成
 支持 HumanInTheLoop - Agent 层级中断
 """
-from typing import Any, TypedDict
+import logging
+from typing import Any, TypedDict, Dict
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
@@ -12,7 +13,19 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
+from utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+# 配置日志
+logger = logging.getLogger("p1_permit_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -59,9 +72,13 @@ def permit_submit(application: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    push_websocket_log("*", "INFO", "TOOL", f">>> permit_submit 工具入口", {"application": application[:200] + "..." if len(application) > 200 else application})
+    logger.info(f"[permit_submit] >>> 工具入口: application={application[:200]}...")
     try:
         data = json.loads(application)
     except json.JSONDecodeError:
+        logger.warning(f"[permit_submit] !!! JSON 解析失败")
+        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_submit JSON解析失败")
         return json.dumps(make_error(
             code="PERMIT_INVALID",
             message="无效的 JSON 格式",
@@ -106,6 +123,8 @@ def permit_submit(application: str) -> str:
         "jsa_complete": len(missing_fields) == 0,
     }
 
+    logger.info(f"[permit_submit] <<< 工具出口: task_id={task_id}, permit_draft_id={permit_draft_id}, missing_fields_count={len(missing_fields)}")
+    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_submit 工具出口", {"task_id": task_id, "permit_draft_id": permit_draft_id, "missing_fields_count": len(missing_fields)})
     return json.dumps(make_response("permit submit", result), ensure_ascii=False)
 
 
@@ -122,7 +141,11 @@ def jsa_analyze(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    push_websocket_log("*", "INFO", "TOOL", f">>> jsa_analyze 工具入口", {"task_id": task_id})
+    logger.info(f"[jsa_analyze] >>> 工具入口: task_id={task_id}")
     if not task_id:
+        logger.warning(f"[jsa_analyze] !!! task_id 为空")
+        push_websocket_log("*", "ERROR", "TOOL", "!!! jsa_analyze task_id为空")
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
             message="task_id 不能为空",
@@ -156,6 +179,8 @@ def jsa_analyze(task_id: str) -> str:
         "missing_items": ["建议补充应急救援预案"]
     }
 
+    logger.info(f"[jsa_analyze] <<< 工具出口: hazards_count={len(result['hazards'])}, completeness_score={result['completeness_score']}")
+    push_websocket_log("*", "INFO", "TOOL", f"<<< jsa_analyze 工具出口", {"hazards_count": len(result['hazards']), "completeness_score": result['completeness_score']})
     return json.dumps(make_response("permit analyze-jsa", result), ensure_ascii=False)
 
 
@@ -172,7 +197,11 @@ def permit_generate_draft(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    push_websocket_log("*", "INFO", "TOOL", f">>> permit_generate_draft 工具入口", {"task_id": task_id})
+    logger.info(f"[permit_generate_draft] >>> 工具入口: task_id={task_id}")
     if not task_id:
+        logger.warning(f"[permit_generate_draft] !!! task_id 为空")
+        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_generate_draft task_id为空")
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
             message="task_id 不能为空",
@@ -195,6 +224,8 @@ def permit_generate_draft(task_id: str) -> str:
         "requires_approval": True
     }
 
+    logger.info(f"[permit_generate_draft] <<< 工具出口: permit_draft_id={result['permit_draft_id']}, missing_fields_count={len(result['missing_fields'])}")
+    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_generate_draft 工具出口", {"permit_draft_id": result['permit_draft_id'], "missing_fields_count": len(result['missing_fields'])})
     return json.dumps(make_response("permit generate-draft", result), ensure_ascii=False)
 
 
@@ -211,7 +242,11 @@ def permit_check(permit_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    push_websocket_log("*", "INFO", "TOOL", f">>> permit_check 工具入口", {"permit_id": permit_id})
+    logger.info(f"[permit_check] >>> 工具入口: permit_id={permit_id}")
     if not permit_id:
+        logger.warning(f"[permit_check] !!! permit_id 为空")
+        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_check permit_id为空")
         return json.dumps(make_error(
             code="PERMIT_NOT_FOUND",
             message="permit_id 不能为空",
@@ -227,6 +262,8 @@ def permit_check(permit_id: str) -> str:
         "approved_at": None
     }
 
+    logger.info(f"[permit_check] <<< 工具出口: permit_id={permit_id}, status={result['status']}")
+    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_check 工具出口", {"permit_id": permit_id, "status": result['status']})
     return json.dumps(make_response("permit check", result), ensure_ascii=False)
 
 
@@ -237,19 +274,32 @@ def permit_check(permit_id: str) -> str:
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
 _permit_checkpointer = MemorySaver()
 
+# 全局 Agent 注册表 - 按 thread_id 缓存 Agent 实例，支持中断恢复
+_agent_registry: Dict[str, Any] = {}
+
 
 def create_permit_agent():
     """创建 P1 作业许可 Agent（基础版本，无 HITL）"""
+    logger.info("[create_permit_agent] 创建 P1 Permit Agent（无 HITL）")
     llm = create_chat_model()
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
 
 
-def create_permit_agent_with_hitl():
+def create_permit_agent_with_hitl(thread_id: str = "default"):
     """创建 P1 作业许可 Agent - 支持 HumanInTheLoop
 
     使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+
+    Args:
+        thread_id: 线程ID，用于注册表管理
     """
+    # 复用注册表中的 Agent（支持同一 thread_id 的中断恢复）
+    if thread_id in _agent_registry:
+        logger.info(f"[create_permit_agent_with_hitl] 复用已有 Agent: thread_id={thread_id}")
+        return _agent_registry[thread_id]
+
+    logger.info(f"[create_permit_agent_with_hitl] 创建新 Agent: thread_id={thread_id}")
     llm = create_chat_model()
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
 
@@ -263,7 +313,7 @@ def create_permit_agent_with_hitl():
         }
     )
 
-    return create_agent(
+    agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
@@ -271,38 +321,137 @@ def create_permit_agent_with_hitl():
         checkpointer=_permit_checkpointer,
     )
 
+    # 注册到全局表
+    _agent_registry[thread_id] = agent
+    logger.info(f"[create_permit_agent_with_hitl] Agent 已注册: thread_id={thread_id}")
+    return agent
 
-def run_permit_agent_with_hitl(message: str, thread_id: str = "default") -> dict:
+
+def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume: bool = False) -> dict:
     """运行 P1 作业许可 Agent（支持 HITL 中断）
 
     Args:
         message: 输入消息
         thread_id: 线程ID（用于 checkpoint 恢复）
+        resume: 是否从中断点恢复（True=清除checkpoint重新执行）
 
     Returns:
         包含 {"result": ..., "interrupted": bool, "next": list}
     """
-    agent = create_permit_agent_with_hitl()
+    import os
+    push_websocket_log(thread_id, "INFO", "AGENT", f">>> P1 Agent 入口", {"message": message[:100] + "..." if message and len(message) > 100 else message, "resume": resume})
+    logger.info(f"[run_permit_agent_with_hitl] >>> Agent 入口: thread_id={thread_id}, message={message[:100] if message else 'None'}, resume={resume}")
+
+    # 恢复执行时：从文件读取原始消息，并清除checkpoint重新执行
+    if resume and not message:
+        # 读取保存的原始消息
+        jobs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "jobs")
+        msg_file = os.path.join(jobs_dir, thread_id, "p1_original_message.txt")
+        if os.path.exists(msg_file):
+            with open(msg_file, "r", encoding="utf-8") as f:
+                message = f.read()
+            logger.info(f"[run_permit_agent_with_hitl] 从文件恢复原始消息: length={len(message)}")
+
+        # 清除该 thread_id 的 checkpoint，重新执行
+        config = {"configurable": {"thread_id": thread_id}}
+
+        # 获取 agent 并清除 checkpoint
+        if thread_id in _agent_registry:
+            agent = _agent_registry[thread_id]
+            # 清除 checkpoint：通过写入空状态
+            try:
+                agent.delete_state(config)
+                logger.info(f"[run_permit_agent_with_hitl] checkpoint 已清除: thread_id={thread_id}")
+            except Exception as e:
+                logger.warning(f"[run_permit_agent_with_hitl] 清除 checkpoint 失败: {e}")
+
+        # 创建新的非 HITL agent 来执行（避免再次中断）
+        # 不设置 checkpointer，因为不需要中断恢复
+        logger.info(f"[run_permit_agent_with_hitl] 创建非 HITL Agent 重新执行")
+        push_websocket_log(thread_id, "INFO", "AGENT", f"创建非 HITL Agent 重新执行")
+        llm = create_chat_model()
+        tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
+        fresh_agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+        result = fresh_agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+
+        # 非 HITL agent 不会中断，直接返回结果
+        logger.info(f"[run_permit_agent_with_hitl] <<< 非 HITL Agent 执行完成")
+        push_websocket_log(thread_id, "INFO", "AGENT", f"<<< 非 HITL Agent 执行完成")
+        return {
+            "result": extract_output(result),
+            "interrupted": False,
+            "next": []
+        }
+
+    # 正常首次执行或新消息执行
+    agent = create_permit_agent_with_hitl(thread_id)
     config = {"configurable": {"thread_id": thread_id}}
+
+    # 保存原始消息到文件（用于恢复）
+    if message:
+        jobs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "jobs")
+        os.makedirs(os.path.join(jobs_dir, thread_id), exist_ok=True)
+        msg_file = os.path.join(jobs_dir, thread_id, "p1_original_message.txt")
+        with open(msg_file, "w", encoding="utf-8") as f:
+            f.write(message)
+        logger.info(f"[run_permit_agent_with_hitl] 原始消息已保存: {msg_file}")
 
     # 检查是否有中断点可恢复
     state = agent.get_state(config)
     if state and state.next:
-        # 有暂停点，恢复执行
+        logger.info(f"[run_permit_agent_with_hitl] 从中断点恢复执行: next={list(state.next)}")
+        push_websocket_log(thread_id, "INFO", "AGENT", f"从中断点恢复执行", {"next": list(state.next)})
         result = agent.invoke(None, config)
     else:
-        # 正常执行
+        logger.info(f"[run_permit_agent_with_hitl] 正常执行新消息")
+        push_websocket_log(thread_id, "INFO", "AGENT", f"正常执行新消息")
         result = agent.invoke({"messages": [HumanMessage(content=message)]}, config)
 
     # 检查是否中断
     final_state = agent.get_state(config)
     interrupted = bool(final_state.next)
 
+    if interrupted:
+        logger.info(f"[run_permit_agent_with_hitl] !!! Agent 被中断: next={list(final_state.next)}")
+        push_websocket_log(thread_id, "WARNING", "AGENT", f"!!! Agent 被中断", {"next_tools": list(final_state.next)})
+    else:
+        logger.info(f"[run_permit_agent_with_hitl] <<< Agent 执行完成")
+        push_websocket_log(thread_id, "INFO", "AGENT", f"<<< Agent 执行完成")
+
     return {
         "result": extract_output(result) if not interrupted else None,
         "interrupted": interrupted,
         "next": list(final_state.next) if final_state.next else []
     }
+
+
+def is_agent_interrupted(thread_id: str) -> bool:
+    """检查指定 thread_id 的 Agent 是否处于中断状态"""
+    if thread_id not in _agent_registry:
+        return False
+    agent = _agent_registry[thread_id]
+    config = {"configurable": {"thread_id": thread_id}}
+    state = agent.get_state(config)
+    return bool(state and state.next)
+
+
+def get_agent_next_tools(thread_id: str) -> list:
+    """获取 Agent 下一个待执行工具"""
+    if thread_id not in _agent_registry:
+        return []
+    agent = _agent_registry[thread_id]
+    config = {"configurable": {"thread_id": thread_id}}
+    state = agent.get_state(config)
+    return list(state.next) if state and state.next else []
+
+
+def clear_agent_registry(thread_id: str = None):
+    """清除 Agent 注册表"""
+    global _agent_registry
+    if thread_id:
+        _agent_registry.pop(thread_id, None)
+    else:
+        _agent_registry = {}
 
 
 def run_permit_agent(message: str) -> str:
