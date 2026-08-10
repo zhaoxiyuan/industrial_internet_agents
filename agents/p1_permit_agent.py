@@ -1,11 +1,14 @@
 """
 P1: 作业预约、JSA分析与作业票
 Permit Agent - 处理作业申请、JSA分析和作业票生成
+支持 HumanInTheLoop - Agent 层级中断
 """
-from typing import Any
+from typing import Any, TypedDict
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
@@ -13,13 +16,22 @@ from .utils import make_response, make_error, SCHEMA_VERSION
 
 
 # ============================================================
+# Agent State Schema
+# ============================================================
+
+class PermitAgentState(TypedDict, total=False):
+    """P1 Agent 内部状态"""
+    messages: list
+
+
+# ============================================================
 # 系统提示词
 # ============================================================
-SYSTEM_PROMPT = """你是一个工业作业许可管理专家，擅长处理作业预约、JSA（作业安全分析）和作业票生成。
+SYSTEM_PROMPT = """你是一个石油工业作业许可管理专家，擅长处理作业预约、JSA（作业安全分析）和作业票生成。
 
 你需要：
-1. 分析作业申请，提取作业类型、区域、设备、人员和时间信息
-2. 调用JSA分析工具识别危害因素和对应措施
+1. 根据用户提供的作业基础信息包括作业内容、时间、区域和人员，识别作业类型，生成作业表单
+2. 根据作业表单内容调用JSA分析工具识别危害因素和对应措施
 3. 检查票证必填字段、风险措施完整性、人员资质冲突
 4. 仅生成草稿，不自动审批
 
@@ -39,7 +51,7 @@ def permit_submit(application: str) -> str:
     提交作业申请，返回作业票草稿。
 
     参数:
-        application: 作业申请 JSON 字符串，包含 work_type, region, equipment,
+        application: 作业申请 JSON 字符串，包含 job_content, region, equipment,
                     personnel, planned_start, planned_end 等字段
     返回:
         标准 JSON 响应，包含 task_id, permit_draft_id, status, missing_fields
@@ -57,22 +69,22 @@ def permit_submit(application: str) -> str:
         ), ensure_ascii=False)
 
     # 提取基本信息
-    work_type = data.get("work_type", "")
+    job_content = data.get("job_content", "")
     region = data.get("region", "")
     equipment = data.get("equipment", [])
     personnel = data.get("personnel", [])
 
     # 生成 task_id
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    task_id = f"TASK-{work_type[:4].upper()}-{region[:2]}-{timestamp}"
+    task_id = f"TASK-{job_content[:4].upper()}-{region[:2]}-{timestamp}"
 
     # 生成 permit_draft_id
     permit_draft_id = f"PD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
     # 检查缺失字段
     missing_fields = []
-    if not work_type:
-        missing_fields.append("work_type")
+    if not job_content:
+        missing_fields.append("job_content")
     if not region:
         missing_fields.append("region")
     if not equipment:
@@ -171,7 +183,7 @@ def permit_generate_draft(task_id: str) -> str:
         "permit_draft_id": f"PD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         "content": {
             "task_id": task_id,
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101", "管道P-205"],
             "medium": "原油",
@@ -219,14 +231,78 @@ def permit_check(permit_id: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+_permit_checkpointer = MemorySaver()
+
+
 def create_permit_agent():
-    """创建 P1 作业许可 Agent"""
+    """创建 P1 作业许可 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_permit_agent_with_hitl():
+    """创建 P1 作业许可 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
+
+    # 创建 HITL Middleware - 所有工具都需要人工确认
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "permit_submit": True,      # 作业申请需要确认
+            "jsa_analyze": True,       # JSA分析需要确认
+            "permit_generate_draft": True,  # 生成作业票需要确认
+            "permit_check": True,       # 查询状态需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_permit_checkpointer,
+    )
+
+
+def run_permit_agent_with_hitl(message: str, thread_id: str = "default") -> dict:
+    """运行 P1 作业许可 Agent（支持 HITL 中断）
+
+    Args:
+        message: 输入消息
+        thread_id: 线程ID（用于 checkpoint 恢复）
+
+    Returns:
+        包含 {"result": ..., "interrupted": bool, "next": list}
+    """
+    agent = create_permit_agent_with_hitl()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # 检查是否有中断点可恢复
+    state = agent.get_state(config)
+    if state and state.next:
+        # 有暂停点，恢复执行
+        result = agent.invoke(None, config)
+    else:
+        # 正常执行
+        result = agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+
+    # 检查是否中断
+    final_state = agent.get_state(config)
+    interrupted = bool(final_state.next)
+
+    return {
+        "result": extract_output(result) if not interrupted else None,
+        "interrupted": interrupted,
+        "next": list(final_state.next) if final_state.next else []
+    }
 
 
 def run_permit_agent(message: str) -> str:

@@ -10,6 +10,8 @@ from langchain.agents import create_agent
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 
 # ============================================================
@@ -136,7 +138,7 @@ def closure_report(task_id: str, format: Optional[str] = "markdown") -> str:
         content = {
             "task_id": task_id,
             "basic_info": {
-                "work_type": "受限空间作业",
+                "job_content": "受限空间作业",
                 "region": "炼油厂区01",
                 "start_time": "2026-08-04T09:00:00Z",
                 "end_time": "2026-08-04T17:00:00Z"
@@ -211,14 +213,47 @@ def closure_close(task_id: str) -> str:
 
 
 # ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_closure_checkpointer = MemorySaver()
+
+
+# ============================================================
 # Agent 工厂
 # ============================================================
 
 def create_closure_agent():
-    """创建 P9 闭环跟踪 Agent"""
+    """创建 P9 闭环跟踪 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [closure_status, closure_verify, closure_report, closure_close]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_closure_agent_with_hitl():
+    """创建 P9 闭环跟踪 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [closure_status, closure_verify, closure_report, closure_close]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "closure_status": False,         # 查询状态自动批准
+            "closure_verify": True,          # 验证需要确认
+            "closure_report": True,          # 生成报告需要确认
+            "closure_close": True,           # 关闭作业需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_closure_checkpointer,
+    )
 
 
 def run_closure_agent(message: str) -> str:

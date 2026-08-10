@@ -6,10 +6,18 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_monitor_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -230,10 +238,37 @@ def monitor_events(task_id: str, since: Optional[str] = None) -> str:
 # ============================================================
 
 def create_monitor_agent():
-    """创建 P6 动态监测 Agent"""
+    """创建 P6 动态监测 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [monitor_start, monitor_stop, monitor_status, monitor_events]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_monitor_agent_with_hitl():
+    """创建 P6 动态监测 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [monitor_start, monitor_stop, monitor_status, monitor_events]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "monitor_start": True,           # 启动监测需要确认
+            "monitor_stop": True,            # 停止监测需要确认
+            "monitor_status": False,         # 查询状态自动批准
+            "monitor_events": False,         # 查询事件自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_monitor_checkpointer,
+    )
 
 
 def run_monitor_agent(message: str) -> str:

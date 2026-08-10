@@ -209,7 +209,7 @@ class TaskService:
 ```python
 class WorkContext(TypedDict):
     task_id: str                           # 任务ID
-    work_type: str                         # 作业类型
+    job_content: str                         # 作业内容
     region: str                            # 作业区域
     equipment: list[str]                   # 涉及设备
     medium: str                            # 介质
@@ -687,7 +687,7 @@ class ArchiveService:
 class WorkTask:
     task_id: str              # 唯一标识
     permit_id: str            # 作业票ID
-    work_type: str            # 作业类型
+    job_content: str            # 作业类型
     region: str               # 作业区域
     status: TaskStatus        # 状态
     context: WorkContext      # 上下文

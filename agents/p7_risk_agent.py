@@ -7,9 +7,18 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
+
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_risk_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -201,10 +210,37 @@ def risk_list(task_id: str) -> str:
 # ============================================================
 
 def create_risk_agent():
-    """创建 P7 风险研判 Agent"""
+    """创建 P7 风险研判 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [risk_analyze, risk_grade, risk_cases, risk_list]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_risk_agent_with_hitl():
+    """创建 P7 风险研判 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [risk_analyze, risk_grade, risk_cases, risk_list]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "risk_analyze": True,         # 风险分析需要确认
+            "risk_grade": True,          # 风险评级需要确认
+            "risk_cases": False,          # 查询案例自动批准
+            "risk_list": False,          # 查询列表自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_risk_checkpointer,
+    )
 
 
 def run_risk_agent(message: str) -> str:

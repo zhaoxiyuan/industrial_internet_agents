@@ -19,7 +19,7 @@ uv pip install -r requirements.txt --upgrade
 uv lock
 
 # 启动 Web 服务
-python web/web_demo.py
+python web/server.py
 ```
 
 ## 技术栈

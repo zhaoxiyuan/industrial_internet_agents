@@ -1,14 +1,23 @@
 """
 P4: 监测资源绑定与数据关联
 Binding Agent - 匹配固定/移动摄像头、传感器、定位数据
+支持 HumanInTheLoop - Agent 层级中断
 """
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_binding_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -189,13 +198,41 @@ def binding_request_manual(task_id: str, resource_type: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
 def create_binding_agent():
-    """创建 P4 监测资源绑定 Agent"""
+    """创建 P4 监测资源绑定 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [binding_match, binding_status, binding_confirm, binding_request_manual]
+    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_binding_agent_with_hitl():
+    """创建 P4 监测资源绑定 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [binding_match, binding_status, binding_confirm, binding_request_manual]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "binding_match": True,              # 绑定匹配需要确认
+            "binding_status": False,            # 查询状态自动批准
+            "binding_confirm": True,             # 确认绑定需要确认
+            "binding_request_manual": True,      # 请求人工绑定需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_binding_checkpointer,
+    )
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
 
 

@@ -690,7 +690,7 @@ def archive_suggestions(ctx, task_id):
 # ============================================================
 # workflow (LangGraph 顺序编排)
 # ============================================================
-from agents.workflow import run_workflow, run_workflow_stream
+from agents.main_agent import run_workflow
 
 
 @cli.group("workflow")
@@ -752,32 +752,6 @@ def workflow_run(ctx, application_file, human_confirm, confirm_action):
 
         echo_result(json.dumps(output, ensure_ascii=False, indent=2),
                     ctx.obj["output"], ctx.obj["quiet"])
-
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
-
-
-@workflow.command("stream")
-@click.argument("application_file", type=click.File("r"))
-@click.pass_context
-def workflow_stream(ctx, application_file):
-    """流式运行工作流，逐步输出每个阶段的结果"""
-    try:
-        application = json.load(application_file)
-        for stage_name, stage_state in run_workflow_stream(application):
-            if ctx.obj["quiet"]:
-                continue
-            stage_output = {
-                "stage": stage_name if stage_name != "__end__" else "COMPLETED",
-                "state": {
-                    "current_stage": stage_state.get("current_stage"),
-                    "task_id": stage_state.get("task_id"),
-                    "error": stage_state.get("error"),
-                    "requires_human_confirm": stage_state.get("requires_human_confirm"),
-                }
-            }
-            click.echo(json.dumps(stage_output, ensure_ascii=False, indent=2))
 
     except Exception as e:
         click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)

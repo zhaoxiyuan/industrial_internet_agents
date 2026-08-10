@@ -37,3 +37,4 @@ gradio>=4.0.0
 
 # CLI 框架
 click>=8.0.0
+rich>=15.0.0

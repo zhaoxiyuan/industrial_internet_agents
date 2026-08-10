@@ -1,15 +1,24 @@
 """
 P2: 作业任务获取与实例化
 Task Agent - 处理任务列表、详情、订阅和实例创建
+支持 HumanInTheLoop - Agent 层级中断
 """
 from typing import Optional, List
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from model.chat_model import create_chat_model
 from utils.agent_utils import extract_output
 from .utils import make_response, make_error, SCHEMA_VERSION
+
+
+# ============================================================
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
+# ============================================================
+_task_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -65,7 +74,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-WELD-01-20260804-001",
             "permit_id": "PD-20260804001",
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -73,7 +82,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-HIGH-02-20260804-002",
             "permit_id": "PD-20260804002",
-            "work_type": "高空作业",
+            "job_content": "高空作业",
             "region": "炼油厂区02",
             "status": "running",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -120,11 +129,11 @@ def task_get(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "permit_id": f"PD-{task_id.split('-')[-1]}",
-        "work_type": "受限空间作业",
+        "job_content": "受限空间作业",
         "region": "炼油厂区01",
         "status": "pending",
         "context": {
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101"],
             "medium": "原油"
@@ -239,14 +248,41 @@ def task_subscribe(task_id: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
 def create_task_agent():
-    """创建 P2 作业任务 Agent"""
+    """创建 P2 作业任务 Agent（基础版本，无 HITL）"""
     llm = create_chat_model()
     tools = [task_list, task_get, task_instance_create, task_subscribe]
     return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+def create_task_agent_with_hitl():
+    """创建 P2 作业任务 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model()
+    tools = [task_list, task_get, task_instance_create, task_subscribe]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "task_list": False,              # 查询自动批准
+            "task_get": False,               # 查询自动批准
+            "task_instance_create": True,     # 创建需要确认
+            "task_subscribe": False,          # 订阅自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[hitl_middleware],
+        checkpointer=_task_checkpointer,
+    )
 
 
 def run_task_agent(message: str) -> str:
