@@ -133,10 +133,13 @@ main_agent.py: confirm_and_continue(thread_id, stage, decision)
 └─────────────────────────────────────────────────────────────┘
           ↓
     ┌─────────────────────────────────────────────────────┐
-    │ P1: execute_p1()                                    │
-    │  permit_submit → jsa_analyze → permit_generate_draft│
+    │ P1: execute_p1() - HITL Agent 层中断恢复            │
+    │  run_permit_agent_with_hitl()                       │
+    │  → 工具调用前被 HITL Middleware 中断                │
+    │  → pending: P1 Agent 工具调用确认                   │
+    │  → 用户确认后: execute_p1(resume=True) 恢复执行    │
     │  → 保存 p1_result.json                              │
-    │  → pending: 作业票缺失字段确认                      │
+    │  → pending: 作业票缺失字段确认（阶段级）            │
     └─────────────────────────────────────────────────────┘
           ↓ 用户确认
     ┌─────────────────────────────────────────────────────┐
@@ -220,7 +223,33 @@ main_agent.py: confirm_and_continue(thread_id, stage, decision)
 │  触发: 工具调用前通过 HumanInTheLoopMiddleware 暂停         │
 │  处理: 中断在 checkpointer，保存状态，恢复后可继续          │
 │  配置: interrupt_on 字典控制哪些工具需要确认                │
+│  恢复: confirm_and_continue() 调用 execute_p1(resume=True) │
+│        → run_permit_agent_with_hitl(None, job_id)          │
+│        → agent.invoke(None, config) 从中断点恢复            │
 └─────────────────────────────────────────────────────────────┘
+```
+
+#### P1 Agent HITL 中断恢复实现
+
+```python
+# p1_permit_agent.py - Agent 注册表
+_agent_registry: Dict[str, Any] = {}  # thread_id → Agent 实例
+
+def is_agent_interrupted(thread_id: str) -> bool:
+    """检查指定 thread_id 的 Agent 是否处于中断状态"""
+    if thread_id not in _agent_registry:
+        return False
+    agent = _agent_registry[thread_id]
+    config = {"configurable": {"thread_id": thread_id}}
+    state = agent.get_state(config)
+    return bool(state and state.next)
+
+# main_agent.py - execute_p1() 中使用
+def execute_p1(job_id: str, resume: bool = False) -> dict:
+    if is_agent_interrupted(job_id):
+        # 从中断点恢复
+        hitl_result = run_permit_agent_with_hitl(None, job_id)  # message=None
+        ...
 ```
 
 ---
@@ -290,8 +319,9 @@ data/
 |---------|------|
 | `STAGE_EXECUTORS` | P1-P10 阶段执行器映射 {"P1": execute_p1, ...} |
 | `execute_p1() ~ execute_p10()` | 各阶段执行函数 |
+| `execute_p1(job_id, resume=False)` | P1 执行函数（支持 HITL 中断恢复） |
 | `run_workflow(application, thread_id)` | 主工作流入口 |
-| `confirm_and_continue(thread_id, stage, decision)` | 确认并继续 |
+| `confirm_and_continue(thread_id, stage, decision)` | 确认并继续（含 P1 HITL 恢复逻辑） |
 | `get_workflow_state(thread_id)` | 获取工作流状态 |
 | `save_job_application() / add_job_log() / save_confirmation()` | 持久化函数 |
 

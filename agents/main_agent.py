@@ -6,6 +6,7 @@
 import os
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import TypedDict, Optional, Any, List
 from langchain_core.tools import tool
@@ -302,11 +303,14 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
     result_file = get_stage_result_path(job_id, "p1")
     existing_result = read_json_file(result_file)
 
-    # 检查是否已处于中断状态（需要恢复执行）
-    if is_agent_interrupted(job_id):
+    # 当 resume=True 时，强制从 checkpoint 恢复执行，不依赖 is_agent_interrupted 的检查
+    if resume or is_agent_interrupted(job_id):
         log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
         # 从中断点恢复执行
-        hitl_result = run_permit_agent_with_hitl(None, job_id)
+        hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
+        if not hitl_result:
+            logger.error(f"[execute_p1] hitl_result 为空: job_id={job_id}, resume={resume}")
+            return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
         if hitl_result["interrupted"]:
             # 仍然中断，等待下次确认
             next_tools = hitl_result.get("next", [])
@@ -1257,12 +1261,19 @@ def run_workflow(application: dict, thread_id: str) -> dict:
     }
 
 
-def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "") -> dict:
+def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False) -> dict:
     """确认阶段并继续工作流
 
     对于 P1 阶段的 HITL 中断，确认后会调用 execute_p1(resume=True) 恢复执行
+
+    Args:
+        thread_id: 作业ID
+        stage: 阶段名称 (P1-P10)
+        decision: 决定 (approve/reject)
+        notes: 备注
+        async_execute: 是否异步执行（True=点击确认后立即返回，后台执行）
     """
-    logger.info(f"[confirm_and_continue] >>> 确认入口: thread_id={thread_id}, stage={stage}, decision={decision}")
+    logger.info(f"[confirm_and_continue] >>> 确认入口: thread_id={thread_id}, stage={stage}, decision={decision}, async={async_execute}")
     if not thread_id:
         raise ValueError("thread_id 不能为空")
     if not stage:
@@ -1293,6 +1304,167 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
 
     stage_order = list(STAGE_EXECUTORS.keys())
     current_idx = stage_order.index(stage.upper()) if stage.upper() in stage_order else 0
+
+    # 异步执行模式：立即返回，后台继续执行
+    if async_execute:
+        logger.info(f"[confirm_and_continue] 异步模式，立即返回")
+        # 启动后台线程执行
+        thread = threading.Thread(
+            target=_confirm_and_continue_async,
+            args=(job_id, stage, decision, notes, current_idx, stage_order)
+        )
+        thread.daemon = True
+        thread.start()
+        return {
+            "job_id": job_id,
+            "current_stage": stage.upper(),
+            "pending_confirmations": [],
+            "confirmed_stages": [stage.upper()],
+            "status": "executing",
+            "message": f"{stage} 已确认，异步执行中"
+        }
+
+    # 同步执行模式：等待执行完成
+
+
+def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: str, current_idx: int, stage_order: list):
+    """后台执行工作流（供异步模式调用）
+
+    注意：这是后台线程执行，不能直接返回结果到前端，只能通过 WebSocket 推送状态更新
+    """
+    try:
+        logger.info(f"[_confirm_and_continue_async] >>> 后台执行开始: job_id={job_id}, stage={stage}")
+
+        # P1 阶段特殊处理：HITL 中断恢复
+        if stage.upper() == "P1" and is_agent_interrupted(job_id):
+            logger.info(f"[_confirm_and_continue_async] P1 HITL 恢复执行")
+            add_job_log(job_id, {
+                "action": "p1_hitl_resume",
+                "message": "P1 阶段 HITL 中断恢复执行"
+            })
+            p1_result = execute_p1(job_id, resume=True)
+
+            if p1_result.get("pending_confirmation"):
+                logger.info(f"[_confirm_and_continue_async] P1 恢复后仍等待确认")
+                update_workflow_status(job_id, {
+                    "main_agent": {"status": "waiting", "current_stage": "P1", "pending_confirmations": ["P1"]},
+                    "P1_status": "waiting"
+                })
+                _broadcast_state(job_id)
+                return
+
+            # P1 恢复执行后完成，继续后续阶段
+            current_idx = 0  # P1 已完成，从 P2 继续
+
+        for i in range(current_idx + 1, len(stage_order)):
+            next_stage = stage_order[i]
+            executor = STAGE_EXECUTORS[next_stage]
+
+            logger.info(f"[_confirm_and_continue_async] 继续执行下一阶段: {next_stage}")
+            add_job_log(job_id, {
+                "action": f"execute_{next_stage.lower()}",
+                "message": f"继续执行 {next_stage}"
+            })
+
+            # 更新下一阶段状态为 running
+            update_workflow_status(job_id, {
+                "main_agent": {"status": "running", "current_stage": next_stage},
+                f"{next_stage}_status": "running"
+            })
+            _broadcast_state(job_id)
+
+            next_result = executor(job_id)
+
+            if next_result.get("pending_confirmation"):
+                update_workflow_status(job_id, {
+                    f"{next_stage}_status": "waiting",
+                    "main_agent": {"status": "waiting", "pending_confirmations": [next_stage]}
+                })
+                _broadcast_state(job_id)
+                logger.info(f"[_confirm_and_continue_async] 下一阶段等待确认: {next_stage}")
+                return
+            else:
+                update_workflow_status(job_id, {f"{next_stage}_status": "completed"})
+                _broadcast_state(job_id)
+
+        logger.info(f"[_confirm_and_continue_async] <<< 工作流全部完成")
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
+        })
+        _broadcast_state(job_id)
+
+    except Exception as e:
+        logger.exception(f"[_confirm_and_continue_async] 后台执行异常: job_id={job_id}, error={e}")
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "error", "current_stage": stage, "pending_confirmations": []}
+        })
+        _broadcast_state(job_id)
+
+
+def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False) -> dict:
+    """确认阶段并继续工作流
+
+    对于 P1 阶段的 HITL 中断，确认后会调用 execute_p1(resume=True) 恢复执行
+
+    Args:
+        thread_id: 作业ID
+        stage: 阶段名称 (P1-P10)
+        decision: 决定 (approve/reject)
+        notes: 备注
+        async_execute: 是否异步执行（True=点击确认后立即返回，后台执行）
+    """
+    logger.info(f"[confirm_and_continue] >>> 确认入口: thread_id={thread_id}, stage={stage}, decision={decision}, async={async_execute}")
+    if not thread_id:
+        raise ValueError("thread_id 不能为空")
+    if not stage:
+        raise ValueError("stage 不能为空")
+
+    job_id = thread_id
+
+    result_file = get_stage_result_path(job_id, stage.lower())
+    result = read_json_file(result_file)
+
+    save_confirmation(job_id, stage, decision, notes)
+
+    # 更新工作流状态：清除该阶段的 waiting 状态
+    update_workflow_status(job_id, {f"{stage.upper()}_status": "completed"})
+    _broadcast_state(job_id)
+
+    # 清除 pending_confirmation 标记
+    if result and "pending_confirmation" in result:
+        del result["pending_confirmation"]
+        write_json_file(result_file, result)
+
+    add_job_log(job_id, {
+        "action": "stage_confirm",
+        "stage": stage,
+        "decision": decision,
+        "notes": notes
+    })
+
+    stage_order = list(STAGE_EXECUTORS.keys())
+    current_idx = stage_order.index(stage.upper()) if stage.upper() in stage_order else 0
+
+    # 异步执行模式：立即返回，后台继续执行
+    if async_execute:
+        logger.info(f"[confirm_and_continue] 异步模式，立即返回")
+        # 启动后台线程执行
+        thread = threading.Thread(
+            target=_confirm_and_continue_async,
+            args=(job_id, stage, decision, notes, current_idx, stage_order)
+        )
+        thread.daemon = True
+        thread.start()
+        return {
+            "job_id": job_id,
+            "current_stage": stage.upper(),
+            "pending_confirmations": [],
+            "confirmed_stages": [stage.upper()],
+            "status": "executing",
+            "message": f"{stage} 已确认，异步执行中"
+        }
+
+    # 同步执行模式：等待执行完成
 
     # P1 阶段特殊处理：HITL 中断恢复
     if stage.upper() == "P1" and is_agent_interrupted(job_id):
@@ -1346,7 +1518,7 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
                 "job_id": job_id,
                 "current_stage": next_stage,
                 "pending_confirmations": [next_stage],
-                "confirmed_stages": stage_order[:i+1],
+                "confirmed_stages": stage_order[:i],  # i 之前的是真正完成的，i 之后的是未执行的
                 "status": "waiting"
             }
         else:

@@ -819,7 +819,8 @@ function confirmDecision(decision) {
         body: JSON.stringify({
             thread_id: jobId,
             stage: stage,
-            decision: decision
+            decision: decision,
+            async_execute: true  // 异步执行，点击确认后立即返回
         })
     }).then(r => {
         addLog(`📥 收到响应状态: ${r.status}`);
@@ -828,15 +829,18 @@ function confirmDecision(decision) {
         addLog(`📋 响应数据: ${JSON.stringify(data)}`);
         closeModal();
 
-        if (data.pending && data.pending.length > 0) {
-            // 还有更多待确认
+        if (data.status === 'executing') {
+            // 异步执行中，等待 WebSocket 状态更新
+            addLog(`⏳ ${stage} 已确认，异步执行中...`, 'info');
+        } else if (data.pending && data.pending.length > 0) {
+            // 还有更多待确认（同步模式下的直接返回）
             addLog('⏳ 等待: ' + data.pending.join(', '), 'warning');
-            showHitlModal(data.pending[0], data.pending_data[data.pending[0]]);
-            // WebSocket 会自动推送状态更新，无需轮询
+            setTimeout(() => {
+                showHitlModal(data.pending[0], data.pending_data[data.pending[0]]);
+            }, 300);
         } else if (data.status === 'completed') {
             addLog('✅ 工作流完成', 'success');
         } else {
-            // WebSocket 会自动推送状态更新
             addLog(`⏳ 等待状态更新，状态: ${data.status}`);
         }
       }).catch(err => {

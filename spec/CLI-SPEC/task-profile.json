@@ -124,7 +124,7 @@
 
   "context_completeness": {
     "required_fields": [
-      "work_type",
+      "job_content",
       "region",
       "equipment",
       "medium",
