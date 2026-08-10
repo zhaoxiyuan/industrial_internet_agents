@@ -1,0 +1,28 @@
+[
+  {
+    "action": "workflow_start",
+    "message": "开始执行作业 20260810104516700",
+    "timestamp": "2026-08-10T02:45:16.414486+00:00"
+  },
+  {
+    "action": "execute_p1",
+    "message": "开始执行 P1",
+    "timestamp": "2026-08-10T02:45:16.416806+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "message": "开始执行 P2",
+    "timestamp": "2026-08-10T02:45:16.432675+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "result": "success",
+    "timestamp": "2026-08-10T02:45:16.440435+00:00"
+  },
+  {
+    "action": "workflow_pending",
+    "stage": "P2",
+    "message": "是否将此作业纳入智能监测",
+    "timestamp": "2026-08-10T02:45:16.443455+00:00"
+  }
+]

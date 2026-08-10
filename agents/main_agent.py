@@ -3,7 +3,6 @@
 通过文件传递协调各阶段 Agent 执行
 支持 HumanInTheLoop 中断恢复
 """
-import os
 import json
 import logging
 import threading
@@ -12,13 +11,20 @@ from typing import TypedDict, Optional, Any, List
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from utils.logging_handler import get_stage_logger
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model
+from .utils import extract_output, get_stage_logger, push_websocket_log
+
+# 导入 Workflow 模块
+from .workflow import (
+    get_job_dir, ensure_job_dir, get_stage_result_path,
+    read_json_file, write_json_file,
+    init_workflow_status, update_workflow_status, get_workflow_status,
+    ALL_STAGES,
+    save_job_application, add_job_log, save_confirmation, get_job_status,
+)
+# 导入工具响应和 Prompt 加载器
+from .utils import make_response, make_error, SCHEMA_VERSION, load_system_prompt
 
 # 配置日志
 logger = logging.getLogger("main_agent")
@@ -42,249 +48,6 @@ from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import disposition_create
 from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
 from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
-
-
-# ============================================================
-# 文件路径管理
-# ============================================================
-
-def get_jobs_dir():
-    """获取作业根目录"""
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "data", "jobs"
-    )
-
-
-def get_job_dir(job_id: str) -> str:
-    """获取指定作业的目录"""
-    return os.path.join(get_jobs_dir(), job_id)
-
-
-def ensure_job_dir(job_id: str) -> str:
-    """确保作业目录存在"""
-    job_dir = get_job_dir(job_id)
-    os.makedirs(job_dir, exist_ok=True)
-    return job_dir
-
-
-def get_stage_result_path(job_id: str, stage: str) -> str:
-    """获取指定阶段结果文件路径"""
-    return os.path.join(get_job_dir(job_id), f"{stage}_result.json")
-
-
-def read_json_file(filepath: str) -> dict:
-    """读取 JSON 文件"""
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def write_json_file(filepath: str, data: dict) -> None:
-    """写入 JSON 文件"""
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def get_workflow_status_path(job_id: str) -> str:
-    """获取工作流状态文件路径"""
-    return os.path.join(get_job_dir(job_id), "workflow_status.json")
-
-
-def init_workflow_status(job_id: str) -> dict:
-    """初始化工作流状态文件"""
-    job_dir = ensure_job_dir(job_id)
-    status = {
-        "job_id": job_id,
-        "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "main_agent": {
-            "status": "pending",  # pending, running, waiting, completed
-            "current_stage": "",
-            "pending_confirmations": []
-        },
-        "agents": {
-            "P1": {"status": "pending", "updated_at": None},
-            "P2": {"status": "pending", "updated_at": None},
-            "P3": {"status": "pending", "updated_at": None},
-            "P4": {"status": "pending", "updated_at": None},
-            "P5": {"status": "pending", "updated_at": None},
-            "P6": {"status": "pending", "updated_at": None},
-            "P7": {"status": "pending", "updated_at": None},
-            "P8": {"status": "pending", "updated_at": None},
-            "P9": {"status": "pending", "updated_at": None},
-            "P10": {"status": "pending", "updated_at": None}
-        }
-    }
-    status_file = get_workflow_status_path(job_id)
-    write_json_file(status_file, status)
-    return status
-
-
-def update_workflow_status(job_id: str, updates: dict) -> dict:
-    """更新工作流状态文件
-
-    Args:
-        job_id: 作业ID
-        updates: 更新内容，支持:
-            - main_agent: 主Agent状态更新
-            - agents.{P1-P10}: 各Agent状态更新
-            - {agent}_status: 快捷方式，直接更新某个Agent状态
-
-    Returns:
-        更新后的完整状态
-    """
-    status_file = get_workflow_status_path(job_id)
-    status = read_json_file(status_file)
-
-    if not status:
-        status = init_workflow_status(job_id)
-
-    now = datetime.now(timezone.utc).isoformat()
-    status["updated_at"] = now
-
-    # 处理快捷方式（如 P1_status → agents.P1.status）
-    if "P1_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P1"] = {"status": updates.pop("P1_status"), "updated_at": now}
-    if "P2_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P2"] = {"status": updates.pop("P2_status"), "updated_at": now}
-    if "P3_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P3"] = {"status": updates.pop("P3_status"), "updated_at": now}
-    if "P4_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P4"] = {"status": updates.pop("P4_status"), "updated_at": now}
-    if "P5_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P5"] = {"status": updates.pop("P5_status"), "updated_at": now}
-    if "P6_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P6"] = {"status": updates.pop("P6_status"), "updated_at": now}
-    if "P7_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P7"] = {"status": updates.pop("P7_status"), "updated_at": now}
-    if "P8_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P8"] = {"status": updates.pop("P8_status"), "updated_at": now}
-    if "P9_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P9"] = {"status": updates.pop("P9_status"), "updated_at": now}
-    if "P10_status" in updates: updates["agents"] = updates.get("agents", {}); updates["agents"]["P10"] = {"status": updates.pop("P10_status"), "updated_at": now}
-
-    # 更新主Agent状态
-    if "main_agent" in updates:
-        for k, v in updates["main_agent"].items():
-            if k == "pending_confirmations":
-                status["main_agent"]["pending_confirmations"] = v
-            else:
-                status["main_agent"][k] = v
-
-    # 更新各Agent状态
-    if "agents" in updates:
-        for agent_id, agent_update in updates["agents"].items():
-            if agent_id in status["agents"]:
-                if isinstance(agent_update, dict):
-                    for k, v in agent_update.items():
-                        status["agents"][agent_id][k] = v
-                else:
-                    status["agents"][agent_id]["status"] = agent_update
-                status["agents"][agent_id]["updated_at"] = now
-
-    write_json_file(status_file, status)
-    return status
-
-
-def get_workflow_status(job_id: str) -> dict:
-    """获取工作流状态"""
-    status_file = get_workflow_status_path(job_id)
-    return read_json_file(status_file)
-
-
-# ============================================================
-# 持久化函数
-# ============================================================
-
-def save_job_application(job_id: str, application: dict) -> str:
-    """保存作业申请"""
-    job_dir = ensure_job_dir(job_id)
-    filepath = os.path.join(job_dir, "application.json")
-    write_json_file(filepath, {
-        "job_id": job_id,
-        "application": application,
-        "saved_at": datetime.now(timezone.utc).isoformat()
-    })
-    return filepath
-
-
-def add_job_log(job_id: str, log_entry: dict) -> str:
-    """追加作业执行日志"""
-    job_dir = ensure_job_dir(job_id)
-    log_file = os.path.join(job_dir, "logs.json")
-
-    logs = []
-    if os.path.exists(log_file):
-        try:
-            logs = read_json_file(log_file)
-            if isinstance(logs, dict):
-                logs = [logs]
-        except:
-            logs = []
-
-    log_entry["timestamp"] = datetime.now(timezone.utc).isoformat()
-    logs.append(log_entry)
-
-    write_json_file(log_file, logs)
-    return log_file
-
-
-def save_confirmation(job_id: str, stage: str, decision: str, notes: str = "") -> str:
-    """保存确认记录"""
-    job_dir = ensure_job_dir(job_id)
-    confirm_file = os.path.join(job_dir, "confirmations.json")
-
-    confirmations = []
-    if os.path.exists(confirm_file):
-        try:
-            confirmations = read_json_file(confirm_file)
-            if isinstance(confirmations, dict):
-                confirmations = [confirmations]
-        except:
-            confirmations = []
-
-    record = {
-        "stage": stage,
-        "decision": decision,
-        "notes": notes,
-        "confirmed_at": datetime.now(timezone.utc).isoformat()
-    }
-    confirmations.append(record)
-
-    write_json_file(confirm_file, confirmations)
-    return confirm_file
-
-
-def get_job_status(job_id: str) -> dict:
-    """获取作业状态"""
-    job_dir = get_job_dir(job_id)
-    if not os.path.exists(job_dir):
-        return {"error": "Job not found"}
-
-    status = {
-        "job_id": job_id,
-        "stages": {},
-        "current_stage": None,
-        "pending_confirmations": []
-    }
-
-    for stage in ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]:
-        result_file = os.path.join(job_dir, f"{stage}_result.json")
-        if os.path.exists(result_file):
-            result_data = read_json_file(result_file)
-            status["stages"][stage] = {
-                "completed": result_data.get("completed", False),
-                "has_pending": bool(result_data.get("pending_confirmation")),
-            }
-            if result_data.get("pending_confirmation"):
-                status["pending_confirmations"].append({
-                    "stage": stage.upper(),
-                    "pending": result_data["pending_confirmation"]
-                })
-
-    for stage in ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]:
-        result_file = os.path.join(job_dir, f"{stage}_result.json")
-        if not os.path.exists(result_file):
-            status["current_stage"] = stage.upper()
-            break
-    else:
-        status["current_stage"] = "completed"
-
-    return status
 
 
 # ============================================================
@@ -337,7 +100,7 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
         return result
 
     # 首次执行或正常流程
-    app_file = os.path.join(get_job_dir(job_id), "application.json")
+    app_file = get_job_dir(job_id) + "/application.json"
     application = read_json_file(app_file).get("application", {})
 
     if not application:
@@ -367,6 +130,7 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
 
         # 使用 HITL Agent 执行
         logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
+        push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
         hitl_result = run_permit_agent_with_hitl(message, job_id)
 
         if hitl_result["interrupted"]:
@@ -425,7 +189,7 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
             result["missing_fields"] = submit_data.get("missing_fields", [])
 
         # 保存作业票
-        app_file = os.path.join(get_job_dir(job_id), "application.json")
+        app_file = get_job_dir(job_id) + "/application.json"
         application = read_json_file(app_file).get("application", {})
 
         permit_data = {
@@ -436,7 +200,7 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
             "permit_content": result.get("permit_content"),
             "saved_at": datetime.now(timezone.utc).isoformat()
         }
-        output_path = os.path.join(get_job_dir(job_id), "permit.json")
+        output_path = get_job_dir(job_id) + "/permit.json"
         write_json_file(output_path, permit_data)
         result["permit_file"] = output_path
 
@@ -978,6 +742,7 @@ def execute_stage_tool(job_id: str, stage: str) -> str:
     返回:
         标准 JSON 响应，包含执行结果文件路径
     """
+    import os
     logger.info(f"[execute_stage_tool] >>> 工具入口: job_id={job_id}, stage={stage}")
     stage = stage.upper()
 
@@ -1084,7 +849,7 @@ def confirm_stage_tool(job_id: str, stage: str, decision: str = "approve", notes
     add_job_log(job_id, {
         "action": "stage_confirm",
         "stage": stage,
-        "其他": decision,
+        "decision": decision,
         "notes": notes
     })
 
@@ -1128,23 +893,6 @@ def list_pending_tool(job_id: str) -> str:
 # Agent 工厂
 # ============================================================
 
-SYSTEM_PROMPT = """你是工业互联网边缘智能作业管理的主调度 Agent。
-
-你通过文件传递协调 P1-P10 各阶段 Agent：
-1. 作业申请保存在 data/jobs/{job_id}/application.json
-2. 各阶段执行结果保存到 data/jobs/{job_id}/p{n}_result.json
-3. 依次调度各阶段执行
-4. 每个阶段执行后检查是否有待确认项
-
-工作流阶段：P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10
-
-当需要启动工作流时，调用 start_workflow_tool。
-当需要执行某个阶段时，调用 execute_stage_tool。
-当用户确认后，调用 confirm_stage_tool 清除待确认状态。
-当需要查询状态时，调用 get_status_tool。
-当需要列出待确认项时，调用 list_pending_tool。"""
-
-
 def create_main_agent():
     """创建主 Agent"""
     logger.info("[create_main_agent] 创建主 Agent")
@@ -1156,7 +904,8 @@ def create_main_agent():
         confirm_stage_tool,
         list_pending_tool,
     ]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    system_prompt = load_system_prompt("MAIN")
+    return create_agent(model=llm, tools=tools, system_prompt=system_prompt)
 
 
 def run_main_agent(message: str, thread_id: str = "default") -> str:
@@ -1181,6 +930,7 @@ def main_demo(message: str, history: list = None) -> str:
 
 def run_workflow(application: dict, thread_id: str) -> dict:
     """运行工作流（按文件传递模式执行）"""
+    import os
     job_id = thread_id
     logger.info(f"[run_workflow] >>> 工作流入口: job_id={job_id}")
 
@@ -1273,146 +1023,7 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         notes: 备注
         async_execute: 是否异步执行（True=点击确认后立即返回，后台执行）
     """
-    logger.info(f"[confirm_and_continue] >>> 确认入口: thread_id={thread_id}, stage={stage}, decision={decision}, async={async_execute}")
-    if not thread_id:
-        raise ValueError("thread_id 不能为空")
-    if not stage:
-        raise ValueError("stage 不能为空")
-
-    job_id = thread_id
-
-    result_file = get_stage_result_path(job_id, stage.lower())
-    result = read_json_file(result_file)
-
-    save_confirmation(job_id, stage, decision, notes)
-
-    # 更新工作流状态：清除该阶段的 waiting 状态
-    update_workflow_status(job_id, {f"{stage.upper()}_status": "completed"})
-    _broadcast_state(job_id)
-
-    # 清除 pending_confirmation 标记
-    if result and "pending_confirmation" in result:
-        del result["pending_confirmation"]
-        write_json_file(result_file, result)
-
-    add_job_log(job_id, {
-        "action": "stage_confirm",
-        "stage": stage,
-        "decision": decision,
-        "notes": notes
-    })
-
-    stage_order = list(STAGE_EXECUTORS.keys())
-    current_idx = stage_order.index(stage.upper()) if stage.upper() in stage_order else 0
-
-    # 异步执行模式：立即返回，后台继续执行
-    if async_execute:
-        logger.info(f"[confirm_and_continue] 异步模式，立即返回")
-        # 启动后台线程执行
-        thread = threading.Thread(
-            target=_confirm_and_continue_async,
-            args=(job_id, stage, decision, notes, current_idx, stage_order)
-        )
-        thread.daemon = True
-        thread.start()
-        return {
-            "job_id": job_id,
-            "current_stage": stage.upper(),
-            "pending_confirmations": [],
-            "confirmed_stages": [stage.upper()],
-            "status": "executing",
-            "message": f"{stage} 已确认，异步执行中"
-        }
-
-    # 同步执行模式：等待执行完成
-
-
-def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: str, current_idx: int, stage_order: list):
-    """后台执行工作流（供异步模式调用）
-
-    注意：这是后台线程执行，不能直接返回结果到前端，只能通过 WebSocket 推送状态更新
-    """
-    try:
-        logger.info(f"[_confirm_and_continue_async] >>> 后台执行开始: job_id={job_id}, stage={stage}")
-
-        # P1 阶段特殊处理：HITL 中断恢复
-        if stage.upper() == "P1" and is_agent_interrupted(job_id):
-            logger.info(f"[_confirm_and_continue_async] P1 HITL 恢复执行")
-            add_job_log(job_id, {
-                "action": "p1_hitl_resume",
-                "message": "P1 阶段 HITL 中断恢复执行"
-            })
-            p1_result = execute_p1(job_id, resume=True)
-
-            if p1_result.get("pending_confirmation"):
-                logger.info(f"[_confirm_and_continue_async] P1 恢复后仍等待确认")
-                update_workflow_status(job_id, {
-                    "main_agent": {"status": "waiting", "current_stage": "P1", "pending_confirmations": ["P1"]},
-                    "P1_status": "waiting"
-                })
-                _broadcast_state(job_id)
-                return
-
-            # P1 恢复执行后完成，继续后续阶段
-            current_idx = 0  # P1 已完成，从 P2 继续
-
-        for i in range(current_idx + 1, len(stage_order)):
-            next_stage = stage_order[i]
-            executor = STAGE_EXECUTORS[next_stage]
-
-            logger.info(f"[_confirm_and_continue_async] 继续执行下一阶段: {next_stage}")
-            add_job_log(job_id, {
-                "action": f"execute_{next_stage.lower()}",
-                "message": f"继续执行 {next_stage}"
-            })
-
-            # 更新下一阶段状态为 running
-            update_workflow_status(job_id, {
-                "main_agent": {"status": "running", "current_stage": next_stage},
-                f"{next_stage}_status": "running"
-            })
-            _broadcast_state(job_id)
-
-            next_result = executor(job_id)
-
-            if next_result.get("pending_confirmation"):
-                update_workflow_status(job_id, {
-                    f"{next_stage}_status": "waiting",
-                    "main_agent": {"status": "waiting", "pending_confirmations": [next_stage]}
-                })
-                _broadcast_state(job_id)
-                logger.info(f"[_confirm_and_continue_async] 下一阶段等待确认: {next_stage}")
-                return
-            else:
-                update_workflow_status(job_id, {f"{next_stage}_status": "completed"})
-                _broadcast_state(job_id)
-
-        logger.info(f"[_confirm_and_continue_async] <<< 工作流全部完成")
-        update_workflow_status(job_id, {
-            "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
-        })
-        _broadcast_state(job_id)
-
-    except Exception as e:
-        logger.exception(f"[_confirm_and_continue_async] 后台执行异常: job_id={job_id}, error={e}")
-        update_workflow_status(job_id, {
-            "main_agent": {"status": "error", "current_stage": stage, "pending_confirmations": []}
-        })
-        _broadcast_state(job_id)
-
-
-def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False) -> dict:
-    """确认阶段并继续工作流
-
-    对于 P1 阶段的 HITL 中断，确认后会调用 execute_p1(resume=True) 恢复执行
-
-    Args:
-        thread_id: 作业ID
-        stage: 阶段名称 (P1-P10)
-        decision: 决定 (approve/reject)
-        notes: 备注
-        async_execute: 是否异步执行（True=点击确认后立即返回，后台执行）
-    """
+    import os
     logger.info(f"[confirm_and_continue] >>> 确认入口: thread_id={thread_id}, stage={stage}, decision={decision}, async={async_execute}")
     if not thread_id:
         raise ValueError("thread_id 不能为空")
@@ -1539,6 +1150,80 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     }
 
 
+def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: str, current_idx: int, stage_order: list):
+    """后台执行工作流（供异步模式调用）
+
+    注意：这是后台线程执行，不能直接返回结果到前端，只能通过 WebSocket 推送状态更新
+    """
+    try:
+        logger.info(f"[_confirm_and_continue_async] >>> 后台执行开始: job_id={job_id}, stage={stage}")
+
+        # P1 阶段特殊处理：HITL 中断恢复
+        if stage.upper() == "P1" and is_agent_interrupted(job_id):
+            logger.info(f"[_confirm_and_continue_async] P1 HITL 恢复执行")
+            add_job_log(job_id, {
+                "action": "p1_hitl_resume",
+                "message": "P1 阶段 HITL 中断恢复执行"
+            })
+            p1_result = execute_p1(job_id, resume=True)
+
+            if p1_result.get("pending_confirmation"):
+                logger.info(f"[_confirm_and_continue_async] P1 恢复后仍等待确认")
+                update_workflow_status(job_id, {
+                    "main_agent": {"status": "waiting", "current_stage": "P1", "pending_confirmations": ["P1"]},
+                    "P1_status": "waiting"
+                })
+                _broadcast_state(job_id)
+                return
+
+            # P1 恢复执行后完成，继续后续阶段
+            current_idx = 0  # P1 已完成，从 P2 继续
+
+        for i in range(current_idx + 1, len(stage_order)):
+            next_stage = stage_order[i]
+            executor = STAGE_EXECUTORS[next_stage]
+
+            logger.info(f"[_confirm_and_continue_async] 继续执行下一阶段: {next_stage}")
+            add_job_log(job_id, {
+                "action": f"execute_{next_stage.lower()}",
+                "message": f"继续执行 {next_stage}"
+            })
+
+            # 更新下一阶段状态为 running
+            update_workflow_status(job_id, {
+                "main_agent": {"status": "running", "current_stage": next_stage},
+                f"{next_stage}_status": "running"
+            })
+            _broadcast_state(job_id)
+
+            next_result = executor(job_id)
+
+            if next_result.get("pending_confirmation"):
+                update_workflow_status(job_id, {
+                    f"{next_stage}_status": "waiting",
+                    "main_agent": {"status": "waiting", "pending_confirmations": [next_stage]}
+                })
+                _broadcast_state(job_id)
+                logger.info(f"[_confirm_and_continue_async] 下一阶段等待确认: {next_stage}")
+                return
+            else:
+                update_workflow_status(job_id, {f"{next_stage}_status": "completed"})
+                _broadcast_state(job_id)
+
+        logger.info(f"[_confirm_and_continue_async] <<< 工作流全部完成")
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
+        })
+        _broadcast_state(job_id)
+
+    except Exception as e:
+        logger.exception(f"[_confirm_and_continue_async] 后台执行异常: job_id={job_id}, error={e}")
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "error", "current_stage": stage, "pending_confirmations": []}
+        })
+        _broadcast_state(job_id)
+
+
 def get_workflow_state(thread_id: str) -> dict:
     """获取工作流状态（兼容旧接口，同时返回新旧格式）"""
     # 尝试从新的统一状态文件获取
@@ -1549,7 +1234,7 @@ def get_workflow_state(thread_id: str) -> dict:
         agents_status = status.get("agents", {})
         confirmed = [f"P{i}" for i in range(1, 11) if agents_status.get(f"P{i}", {}).get("status") == "completed"]
         pending_stages = []
-        for stage in ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]:
+        for stage in ALL_STAGES:
             if agents_status.get(stage, {}).get("status") == "waiting":
                 pending_stages.append(stage)
         return {
@@ -1568,7 +1253,7 @@ def list_pending_confirmations(thread_id: str) -> list:
     status = get_workflow_status(thread_id)
     if status:
         pending = []
-        for stage in ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]:
+        for stage in ALL_STAGES:
             if status.get("agents", {}).get(stage, {}).get("status") == "waiting":
                 pending.append({"stage": stage, "pending": {}})
         return pending
@@ -1578,6 +1263,7 @@ def list_pending_confirmations(thread_id: str) -> list:
 
 # 全局广播回调（由 server.py 设置）
 _broadcast_callback = None
+
 
 def set_broadcast_callback(callback):
     """设置状态广播回调函数（供 server.py 调用）"""

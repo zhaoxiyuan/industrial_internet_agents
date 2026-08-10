@@ -5,8 +5,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
+from .model.chat_model import create_chat_model
+from .utils.agent_utils import extract_output
 from rich import print as rprint
 
 
