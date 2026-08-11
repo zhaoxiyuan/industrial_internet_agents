@@ -63,27 +63,8 @@ from .p5_verify_agent import (
     verify_recommendation,
 )
 
-from .p6_monitor_agent import (
-    create_monitor_agent,
-    create_monitor_agent_with_hitl,
-    run_monitor_agent,
-    monitor_demo,
-    monitor_start,
-    monitor_stop,
-    monitor_status,
-    monitor_events,
-)
-
-from .p7_risk_agent import (
-    create_risk_agent,
-    create_risk_agent_with_hitl,
-    run_risk_agent,
-    risk_demo,
-    risk_analyze,
-    risk_grade,
-    risk_cases,
-    risk_list,
-)
+# p6_monitor_agent 承载 A5 前端 + A6 前端，作为统一入口
+# 实际使用的 A5/A6 路由函数无需在此导出
 
 from .p8_disposition_agent import (
     create_disposition_agent,
@@ -193,16 +174,8 @@ __all__ = [
     "create_verify_agent_with_hitl",
     "run_verify_agent",
     "verify_demo",
-    # P6: monitor
-    "create_monitor_agent",
-    "create_monitor_agent_with_hitl",
-    "run_monitor_agent",
-    "monitor_demo",
-    # P7: risk
-    "create_risk_agent",
-    "create_risk_agent_with_hitl",
-    "run_risk_agent",
-    "risk_demo",
+    # P6: monitor (通过 p6_monitor_agent 独立服务访问)
+    # P7: risk  (通过 A6 研判系统访问)
     # P8: disposition
     "create_disposition_agent",
     "create_disposition_agent_with_hitl",

@@ -18,7 +18,7 @@ from agents.p2_task_agent import run_task_agent
 from agents.p3_context_agent import run_context_agent
 from agents.p4_binding_agent import run_binding_agent
 from agents.p5_verify_agent import run_verify_agent
-from agents.p6_monitor_agent import run_monitor_agent
+from agents.p6_monitor_agent import run_a5_monitoring, map_a5_events_to_p6
 from agents.p7_risk_agent import run_risk_agent
 from agents.p8_disposition_agent import run_disposition_agent
 from agents.p9_closure_agent import run_closure_agent
@@ -358,39 +358,33 @@ def monitor():
 @click.argument("task_id")
 @click.pass_context
 def monitor_start(ctx, task_id):
-    """启动监测（幂等）"""
-    try:
-        result = run_monitor_agent(f"启动监测，task_id: {task_id}")
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """启动监测（P6 已集成到工作流，请使用 workflow run）"""
+    click.echo(json.dumps({
+        "error": "P6 已集成到 P1-P10 工作流，请使用 'python -m agents.cli workflow run' 命令"
+    }, ensure_ascii=False), err=True)
+    sys.exit(1)
 
 
 @monitor.command("stop")
 @click.argument("task_id")
 @click.pass_context
 def monitor_stop(ctx, task_id):
-    """停止监测"""
-    try:
-        result = run_monitor_agent(f"停止监测，task_id: {task_id}")
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """停止监测（P6 已集成到工作流）"""
+    click.echo(json.dumps({
+        "error": "P6 已集成到 P1-P10 工作流"
+    }, ensure_ascii=False), err=True)
+    sys.exit(1)
 
 
 @monitor.command("status")
 @click.argument("task_id")
 @click.pass_context
 def monitor_status(ctx, task_id):
-    """查看监测状态"""
-    try:
-        result = run_monitor_agent(f"查看监测状态，task_id: {task_id}")
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """查看监测状态（P6 已集成到工作流）"""
+    click.echo(json.dumps({
+        "error": "P6 已集成到 P1-P10 工作流，请通过 workflow state 查看状态"
+    }, ensure_ascii=False), err=True)
+    sys.exit(1)
 
 
 @monitor.command("events")
@@ -398,16 +392,11 @@ def monitor_status(ctx, task_id):
 @click.option("--since", help="ISO8601时间戳")
 @click.pass_context
 def monitor_events(ctx, task_id, since):
-    """获取候选风险事件"""
-    try:
-        msg = f"获取候选风险事件，task_id: {task_id}"
-        if since:
-            msg += f"，since: {since}"
-        result = run_monitor_agent(msg)
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """获取候选风险事件（P6 已集成到工作流）"""
+    click.echo(json.dumps({
+        "error": "P6 已集成到 P1-P10 工作流，事件结果在 p6_result.json 中"
+    }, ensure_ascii=False), err=True)
+    sys.exit(1)
 
 
 # ============================================================

@@ -172,8 +172,9 @@ main_agent.py: confirm_and_continue(thread_id, stage, decision)
           ↓ 用户确认
     ┌─────────────────────────────────────────────────────┐
     │ P6: execute_p6()                                    │
-    │  monitor_start + monitor_events                     │
-    │  → 保存 p6_result.json (无 HITL 点)                 │
+    │  run_a5_monitoring() → AsyncCollector + A5Agent     │
+    │  → 保存 p6_result.json + a5_logs/                   │
+    │  → 随机场景 A-E → 触发 A6 研判                       │
     └─────────────────────────────────────────────────────┘
           ↓
     ┌─────────────────────────────────────────────────────┐

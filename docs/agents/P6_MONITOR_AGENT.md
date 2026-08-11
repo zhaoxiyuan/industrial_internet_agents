@@ -1,61 +1,90 @@
-# P6: 作业过程动态监测 Agent (p6_monitor_agent)
+# P6: 作业过程动态监测 Agent (基于 A5)
 
 ## 概述
 
-**作业过程动态监测专家**，负责实时监测作业过程中的风险事件。
+**基于 A5 的作业过程动态监测**，完全替换原有 monitor_start/stop/status/events 工具，使用 A5 的 AsyncCollector + A5Agent 进行真实监测。
 
-## 主要功能
+## 架构
 
-1. 持续获取视频、传感器、定位数据
-2. 识别违章及条件变化
-3. 时序聚合避免单帧误报
-4. 跨镜头追踪同一目标
+```
+execute_p6(job_id)
+  ├── 1. 随机选择场景 A-E
+  ├── 2. AsyncCollector 生成 30 秒 snapshot 数据
+  │     └── 每秒生成: cv_*.json / sensor_*.json / position_*.json / snapshot_*.json
+  ├── 3. A5Agent 轮询处理 snapshot 文件
+  │     ├── processing_batch_*.json 标记处理中
+  │     ├── raw_event_*.json 处理成功
+  │     └── error_*.json 处理失败
+  ├── 4. 有事件时触发 A6 研判
+  └── 5. 汇总 raw_event_*.json 为 candidate_events
+```
+
+## 场景定义
+
+| 场景 | 违规类型 | 说明 |
+|------|----------|------|
+| A | 无 | 正常作业基线 |
+| B | 头盔缺失 | 工人 P7 摘头盔（单项 PPE） |
+| C | 气体上升 | 可燃气体浓度升高（环境） |
+| D | 监护人离岗 | 监护人 P11 离开岗位 |
+| E | 多人违规 | P7+P8+P11 同时多种违规 |
+
+## 日志文件结构
+
+```
+data/jobs/{job_id}/a5_logs/
+├── cv_*.json                  # CV 检测原始数据
+├── sensor_*.json              # 传感器数据
+├── position_*.json            # 定位数据
+├── snapshot_*.json            # 每秒聚合快照
+├── processing_batch_*.json    # Agent 处理中标记
+├── raw_event_*.json           # 处理完成（有事件）
+└── error_*.json               # 处理失败
+```
+
+## 状态机
+
+```
+snapshot_*.json → processing_batch_*.json → raw_event_*.json (成功)
+                                     ↓
+                                  error_*.json (失败)
+```
 
 ## 入口函数
 
 | 函数 | 说明 |
 |------|------|
-| `run_monitor_agent(message)` | 运行 P6 Agent |
-| `monitor_demo(message, history)` | Gradio ChatInterface 兼容格式 |
+| `run_a5_monitoring(job_id, work_permit, duration_sec)` | 运行 A5 完整监测流程（异步） |
+| `map_a5_events_to_p6(raw_events, job_id)` | 将 A5 事件映射为 P6 格式 |
+| `get_a5_log_dir(job_id)` | 获取 A5 日志目录路径 |
 
-## 工具定义
+## 输出格式
 
-| 工具 | 触发条件 | 说明 | HITL |
-|------|----------|------|------|
-| `monitor_start` | 用户启动监测 | 启动监测会话（幂等） | ✅ 需要确认 |
-| `monitor_stop` | 用户停止监测 | 停止监测会话 | ✅ 需要确认 |
-| `monitor_status` | 用户查看状态 | 查看监测状态 | ❌ 自动批准 |
-| `monitor_events` | 用户获取风险事件 | 获取候选风险事件（JSON Lines） | ❌ 自动批准 |
+`p6_result.json` 中的 `candidate_events` 字段：
 
-## HITL 支持
-
-```python
-hitl_middleware = HumanInTheLoopMiddleware(
-    interrupt_on={
-        "monitor_start": True,    # 启动监测需要确认
-        "monitor_stop": True,     # 停止监测需要确认
-        "monitor_status": False,   # 查询状态自动批准
-        "monitor_events": False,   # 查询事件自动批准
-    }
-)
+```json
+{
+  "event_type": "candidate_event",
+  "event_id": "A5-P7-...",
+  "description": "P7 在 ... 期间护目镜持续缺失...",
+  "confidence": 0.9,
+  "evidence": [{"source": "A5", "type": "PPE缺失", "person": {...}}],
+  "severity": "PENDING_A6",
+  "timestamp": "...",
+  "type": "PPE缺失",
+  "person": {"id": "P7", "name": "张师傅", "role": "焊工"}
+}
 ```
 
-## 采样策略
+**注意：** A5 不判定 severity 字段，设为 `"PENDING_A6"`，由 A6 研判后补充。
 
-| 状态 | 采样频率 |
-|------|----------|
-| 正常状态 | 1帧/秒 |
-| 异常检测 | 5帧/秒 + 全量存储 |
-| 告警触发 | 连续10帧异常才上报 |
+## A6 研判触发
 
-## 时序聚合
-
-- **单帧误报过滤**：同位置、同类型事件需连续N帧确认
-- **跨镜头追踪**：同一目标多摄像头追踪
-
-## 幂等性
-
-`monitor_start` 是幂等的，重复调用不会重启会话。
+当 A5 产生告警事件时，调用：
+```
+POST http://localhost:5002/api/a6/process/{event_id}
+Body: {"events": [event_data]}
+```
 
 ## 文件位置
 
