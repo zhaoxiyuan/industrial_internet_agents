@@ -181,22 +181,42 @@ class A6Agent:
         model: str = None,
     ):
         """构建 LLM 实例"""
-        # 尝试从环境变量或配置文件读取
+        # 尝试从项目根 .env 读取；字段优先级 OPENAI_* > A6_LLM_* > A5_LLM_*（旧 agent_config 兼容）
         from dotenv import dotenv_values
-        env_path = Path(__file__).resolve().parent.parent.parent / "agent_config" / ".env"
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
         env = {}
         if env_path.exists():
             env = dotenv_values(env_path)
         env.update({k: v for k, v in os.environ.items() if v})
 
-        protocol = provider or env.get("A6_LLM_PROTOCOL", "") or env.get("A5_LLM_PROTOCOL", "").lower()
+        protocol = (
+            provider
+            or env.get("OPENAI_PROVIDER", "")
+            or env.get("A6_LLM_PROTOCOL", "")
+            or env.get("A5_LLM_PROTOCOL", "")
+        ).lower()
         if not protocol:
             # 默认使用 openai
             protocol = "openai"
 
-        api_key = api_key or env.get("A6_LLM_API_KEY", "") or env.get("A5_LLM_API_KEY", "") or env.get("OPENAI_API_KEY", "")
-        base_url = base_url or env.get("A6_LLM_BASE_URL", "") or env.get("A5_LLM_BASE_URL", "") or env.get("OPENAI_BASE_URL", "")
-        model = model or env.get("A6_LLM_MODEL", "") or env.get("A5_LLM_MODEL", "gpt-4o")
+        api_key = (
+            api_key
+            or env.get("OPENAI_API_KEY", "")
+            or env.get("A6_LLM_API_KEY", "")
+            or env.get("A5_LLM_API_KEY", "")
+        )
+        base_url = (
+            base_url
+            or env.get("OPENAI_BASE_URL", "")
+            or env.get("A6_LLM_BASE_URL", "")
+            or env.get("A5_LLM_BASE_URL", "")
+        )
+        model = (
+            model
+            or env.get("OPENAI_MODEL", "")
+            or env.get("A6_LLM_MODEL", "")
+            or env.get("A5_LLM_MODEL", "gpt-4o")
+        )
 
         if protocol == "openai":
             # 如果没有 API key，返回 None（将使用规则分类）

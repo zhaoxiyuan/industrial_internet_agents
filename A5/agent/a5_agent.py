@@ -33,36 +33,40 @@ class A5Agent:
         self._last_tick_ms = 0.0
 
     def _build_llm(self):
-        # 从 agent_config/.env 读取(前端配置界面写入)
+        # 从项目根 .env 读取；兼容旧字段 A5_LLM_*（agent_config/.env 已废弃）
         from dotenv import dotenv_values
-        env_path = Path(__file__).resolve().parent.parent.parent / "agent_config" / ".env"
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
         env = {}
         if env_path.exists():
             env = dotenv_values(env_path)
         # 也读取 OS 环境变量(兜底)
         env.update({k: v for k, v in os.environ.items() if v})
 
-        protocol = env.get("A5_LLM_PROTOCOL", "").lower()
+        # 字段优先级：OPENAI_*（项目根 .env 标准字段）> A5_LLM_*（旧 agent_config 兼容）
+        def _get(key_openai: str, key_legacy: str, default: str = "") -> str:
+            return env.get(key_openai) or env.get(key_legacy) or default
+
+        protocol = _get("OPENAI_PROVIDER", "A5_LLM_PROTOCOL", "").lower()
         if not protocol:
             raise RuntimeError(
-                "LLM 未配置! 请先启动agent_config前端(端口5000)并选择模型,"
-                "或设置环境变量 A5_LLM_PROTOCOL/A5_LLM_API_KEY 等"
+                "LLM 未配置! 请在项目根 .env 中设置 OPENAI_API_KEY/OPENAI_BASE_URL/OPENAI_MODEL"
+                "(或 OPENAI_PROVIDER)，或设置同名环境变量。"
             )
 
         if protocol == "openai":
             from langchain_openai import ChatOpenAI
             return ChatOpenAI(
-                model=env.get("A5_LLM_MODEL", "gpt-4o"),
-                api_key=env.get("A5_LLM_API_KEY", ""),
-                base_url=env.get("A5_LLM_BASE_URL", None),
-                temperature=float(env.get("A5_LLM_TEMPERATURE", "0")),
+                model=_get("OPENAI_MODEL", "A5_LLM_MODEL", "gpt-4o"),
+                api_key=_get("OPENAI_API_KEY", "A5_LLM_API_KEY", ""),
+                base_url=_get("OPENAI_BASE_URL", "A5_LLM_BASE_URL", "") or None,
+                temperature=float(_get("OPENAI_TEMPERATURE", "A5_LLM_TEMPERATURE", "0")),
             )
         if protocol == "ollama":
             from langchain_community.chat_models import ChatOllama
             return ChatOllama(
-                model=env.get("A5_LLM_MODEL", "qwen2.5:7b"),
-                base_url=env.get("A5_LLM_BASE_URL", "http://localhost:11434"),
-                temperature=float(env.get("A5_LLM_TEMPERATURE", "0")),
+                model=_get("OPENAI_MODEL", "A5_LLM_MODEL", "qwen2.5:7b"),
+                base_url=_get("OPENAI_BASE_URL", "A5_LLM_BASE_URL", "http://localhost:11434"),
+                temperature=float(_get("OPENAI_TEMPERATURE", "A5_LLM_TEMPERATURE", "0")),
             )
         raise RuntimeError(f"不支持的 LLM 协议: {protocol}")
 
