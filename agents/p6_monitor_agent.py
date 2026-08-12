@@ -35,8 +35,6 @@ if _env_file.exists():
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -59,11 +57,6 @@ app = FastAPI(title="A5 作业过程监测 - P6 Monitor")
 
 # 日志根目录：固定在 A5/logs
 LOG_DIR = _ROOT / "A5" / "logs"
-
-# ── 静态文件 ────────────────────────────────────────────────────────────────
-static_dir = _ROOT / "frontend" / "static"
-static_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # ── 前端 HTML ───────────────────────────────────────────────────────────────
 INDEX_HTML = """<!DOCTYPE html>
