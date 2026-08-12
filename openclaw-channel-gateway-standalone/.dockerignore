@@ -1,0 +1,6 @@
+data/
+.git/
+*.zip
+*.log
+.env
+config/config.json

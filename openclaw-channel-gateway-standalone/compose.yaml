@@ -1,0 +1,19 @@
+services:
+  channel-gateway:
+    build: .
+    image: openclaw-channel-gateway-standalone:0.1.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - channel-gateway-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  channel-gateway-data:

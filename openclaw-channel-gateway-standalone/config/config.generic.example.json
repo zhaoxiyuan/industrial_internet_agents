@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "apiKey": "${CHANNEL_GATEWAY_API_KEY}"
+  },
+  "storage": {
+    "directory": "../data"
+  },
+  "delivery": {
+    "callbackUrl": null
+  },
+  "channels": {
+    "loopback": { "enabled": false, "accounts": {} },
+    "feishu": { "enabled": false, "accounts": {} },
+    "generic": {
+      "enabled": true,
+      "accounts": {
+        "default": {
+          "signatureRequired": true,
+          "webhookSecret": "${GENERIC_WEBHOOK_SECRET}",
+          "maxSkewSeconds": 300,
+          "outboundUrl": "http://127.0.0.1:9000/platform/send",
+          "outboundBearerToken": "${GENERIC_OUTBOUND_TOKEN}",
+          "timeoutMs": 15000
+        }
+      }
+    }
+  }
+}

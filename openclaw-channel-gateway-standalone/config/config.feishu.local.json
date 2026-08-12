@@ -1,0 +1,33 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "apiKey": "${CG_API_KEY}",
+    "maxBodyBytes": 1048576,
+    "allowQueryToken": false
+  },
+  "storage": {
+    "directory": "../data"
+  },
+  "delivery": {
+    "callbackUrl": null
+  },
+  "channels": {
+    "loopback": { "enabled": false, "accounts": {} },
+    "generic": { "enabled": false, "accounts": {} },
+    "feishu": {
+      "enabled": true,
+      "accounts": {
+        "default": {
+          "domain": "feishu",
+          "appId": "${FEISHU_APP_ID}",
+          "appSecret": "${FEISHU_APP_SECRET}",
+          "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
+          "maxSkewSeconds": 300,
+          "timeoutMs": 15000,
+          "maxResponseBytes": 1048576
+        }
+      }
+    }
+  }
+}

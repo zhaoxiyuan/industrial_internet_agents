@@ -1,0 +1,5 @@
+# Pin exact versions in your production lock file.
+fastapi
+uvicorn[standard]
+langgraph
+langchain-core

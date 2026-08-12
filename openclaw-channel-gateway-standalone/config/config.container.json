@@ -1,0 +1,29 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "apiKey": "${CHANNEL_GATEWAY_API_KEY}",
+    "maxBodyBytes": 1048576,
+    "requestTimeoutMs": 15000,
+    "allowQueryToken": false
+  },
+  "storage": {
+    "directory": "../data",
+    "stateFile": "gateway-state.json"
+  },
+  "delivery": {
+    "callbackUrl": null
+  },
+  "channels": {
+    "loopback": {
+      "enabled": true,
+      "accounts": {
+        "default": {
+          "webhookToken": "${LOOPBACK_WEBHOOK_TOKEN}"
+        }
+      }
+    },
+    "generic": { "enabled": false, "accounts": {} },
+    "feishu": { "enabled": false, "accounts": {} }
+  }
+}
