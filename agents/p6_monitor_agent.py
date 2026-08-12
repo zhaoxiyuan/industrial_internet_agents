@@ -13,6 +13,8 @@ P6: 作业过程动态监测 - 基于 A5 实现（完整 Web 服务）
 启动方式：
     python agents/p6_monitor_agent.py
     python agents/p6_monitor_agent.py --port 8080
+    然后访问 http://localhost:5002/ 或 http://localhost:8080/ 或 http://localhost:自定义的端口号/
+    以及 http://localhost:5002/a6
 """
 import asyncio
 import json
@@ -492,10 +494,14 @@ function renderQueue(pending) {
     const first_wt = wts[0] || batch_key;
     const wallTime = first_wt.replace(/-/g,":").replace(/_/g,".");
     const status = info.status || "processing";
-    const cls = status === "processing" ? "processing" : "processing";
-    const label = status === "retryable" ? "重试中" : "处理中";
+    const clsMap = { processing: "processing", retryable: "processing" };
+    const iconMap = { processing: "🔄", retryable: "🔄" };
+    const labelMap = { processing: "处理中", retryable: "重试中" };
+    const cls = clsMap[status] || "processing";
+    const icon = iconMap[status] || "🔄";
+    const label = labelMap[status] || "处理中";
     html += "<div class=\\"queue-item " + cls + "\\">" +
-      "<span class=\\"qicon\\">🔄</span>" +
+      "<span class=\\"qicon\\">" + icon + "</span>" +
       "<span class=\\"qkey\\">" + wallTime.slice(11,23) + " (" + count + "条)</span>" +
       "<span class=\\"qms\\">" + label + "</span>" +
       "</div>";
@@ -905,12 +911,12 @@ def get_a6_agent() -> A6Agent:
     """获取或创建 A6Agent 单例（延迟初始化）"""
     global _a6_agent, _a5_tools, _output_tools, _prompt_manager
     if _a6_agent is None:
-        _a5_tools = A5DataTools(a5_log_dir=str(LOG_DIR))
-        _output_tools = OutputTools(output_dir=str(_ROOT / "A6" / "logs"))
+        _a5_tools = A5DataTools()
+        _output_tools = OutputTools()
         _prompt_manager = PromptManager()
         _a6_agent = A6Agent(
-            a5_log_dir=str(LOG_DIR),
-            a6_output_dir=str(_ROOT / "A6" / "logs"),
+            a5_log_dir="A5/logs",
+            a6_output_dir="A6/logs",
         )
     return _a6_agent
 
@@ -951,18 +957,12 @@ def _remove_batch(log_dir: Path, batch_key: str):
 
 async def _on_success(log_dir: Path, wall_time: str, result: dict):
     key = _sanitize_wall_time(wall_time)
-    processing = log_dir / f"processing_{key}.json"
-    if processing.exists():
-        processing.unlink()
     json.dump(result, open(log_dir / f"raw_event_{key}.json", "w",
                            encoding="utf-8"), ensure_ascii=False, indent=2)
 
 
 async def _on_error(log_dir: Path, wall_time: str, error: Exception, current_retry: int):
     key = _sanitize_wall_time(wall_time)
-    processing = log_dir / f"processing_{key}.json"
-    if processing.exists():
-        processing.unlink()
     json.dump({
         "error": str(error),
         "failed_at": datetime.now().isoformat(timespec="milliseconds"),
@@ -1030,36 +1030,29 @@ def _count_log_files(log_dir: str) -> dict:
 # A6 研判触发
 # ============================================================
 
+# A6 研判 API（自身端口，作为被调用方时使用）
+A6_API_BASE = "http://localhost:5002"
+
+
 async def _trigger_a6_assessment(event_id: str, event_data: dict):
-    """单个事件触发 A6 研判（直接函数调用，同进程内）"""
+    """
+    当 A5 产生告警事件时，触发 A6 进行风险研判。
+    通过 HTTP 调用 A6 的手动研判接口，与 frontend/app_a5.py 保持一致。
+    """
     if not event_data.get("events"):
         return
     try:
-        agent = get_a6_agent()
-        result = await agent.process_event(event_id, event_data)
-        if result.get("status") in ("success", "updated"):
-            print(f"[A5→A6] 事件 {event_id} 研判完成: {result.get('assessment', {}).get('risk_level_name', '')}")
-        else:
-            print(f"[A5→A6] 事件 {event_id} 研判失败: {result.get('message', '')}")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{A6_API_BASE}/api/a6/process/{event_id}",
+                json=event_data,
+            )
+            if response.status_code == 200:
+                print(f"[A5→A6] 事件 {event_id} 已触发 A6 研判")
+            else:
+                print(f"[A5→A6] 事件 {event_id} 触发失败: {response.status_code}")
     except Exception as e:
         print(f"[A5→A6] 事件 {event_id} 调用异常: {e}")
-
-
-async def _trigger_a6_assessment_batch(all_events: list):
-    """整批事件一次性触发 A6 研判（避免 7 条报警触发 7 次）"""
-    if not all_events:
-        return
-    try:
-        agent = get_a6_agent()
-        # 遍历每个事件，逐个触发 A6（event_id 去重）
-        seen_ids = set()
-        for ev in all_events:
-            ev_id = ev.get("event_id", "")
-            if ev_id and ev_id not in seen_ids:
-                seen_ids.add(ev_id)
-                await _trigger_a6_assessment(ev_id, {"events": [ev]})
-    except Exception as e:
-        print(f"[A5→A6] 批量触发异常: {e}")
 
 
 # ============================================================
@@ -1161,19 +1154,15 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
                 results = await agent.tick_batch(items)
                 _remove_batch(log_path, bk)
 
-                # 收集整个批次的 events，整批调一次 A6（避免 7 条报警触发 7 次）
-                all_batch_events = []
-
                 for wt, snap in items:
                     inflight_wts.discard(wt)
                     result = results.get(wt, {"wall_time": wt, "events": []})
                     await _on_success(log_path, wt, result)
+                    # 有告警事件时触发 A6 研判（每个事件单独触发，与 frontend/app_a5.py 保持一致）
                     if result.get("events"):
-                        all_batch_events.extend(result["events"])
-
-                # 整批一次性触发 A6（而非逐条触发）
-                if all_batch_events:
-                    asyncio.create_task(_trigger_a6_assessment_batch(all_batch_events))
+                        for ev in result["events"]:
+                            ev_id = ev.get("event_id") or wt
+                            asyncio.create_task(_trigger_a6_assessment(ev_id, {"events": [ev]}))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
