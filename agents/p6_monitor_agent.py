@@ -1042,7 +1042,7 @@ async def _trigger_a6_assessment(event_id: str, event_data: dict):
     if not event_data.get("events"):
         return
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{A6_API_BASE}/api/a6/process/{event_id}",
                 json=event_data,
@@ -1052,7 +1052,9 @@ async def _trigger_a6_assessment(event_id: str, event_data: dict):
             else:
                 print(f"[A5→A6] 事件 {event_id} 触发失败: {response.status_code}")
     except Exception as e:
-        print(f"[A5→A6] 事件 {event_id} 调用异常: {e}")
+        import traceback
+        print(f"[A5→A6] 事件 {event_id} 调用异常: {type(e).__name__}: {e}")
+        traceback.print_exc()
 
 
 # ============================================================
@@ -1158,11 +1160,9 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
                     inflight_wts.discard(wt)
                     result = results.get(wt, {"wall_time": wt, "events": []})
                     await _on_success(log_path, wt, result)
-                    # 有告警事件时触发 A6 研判（每个事件单独触发，与 frontend/app_a5.py 保持一致）
+                    # 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
                     if result.get("events"):
-                        for ev in result["events"]:
-                            ev_id = ev.get("event_id") or wt
-                            asyncio.create_task(_trigger_a6_assessment(ev_id, {"events": [ev]}))
+                        asyncio.create_task(_trigger_a6_assessment(wt, result))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
@@ -1224,6 +1224,9 @@ async def get_assessments(start: str = None, end: str = None, risk_level: int = 
                 if end and data.get("timestamp", "") > end:
                     continue
                 if risk_level and data.get("risk_level") != risk_level:
+                    continue
+                # 自动过滤无风险记录（risk_level=0），前端不展示
+                if data.get("risk_level", 0) == 0:
                     continue
                 results.append({
                     "a6_event_id": data.get("a6_event_id"),
@@ -1323,9 +1326,15 @@ async def reset_prompt(prompt_name: str):
 @app.post("/api/a6/process/{event_id}")
 async def process_a6_event(event_id: str, body: Optional[dict] = None):
     """手动触发 A6 研判"""
-    agent = get_a6_agent()
-    result = await agent.process_event(event_id, event_data=body)
-    return result
+    import traceback
+    try:
+        agent = get_a6_agent()
+        result = await agent.process_event(event_id, event_data=body)
+        return result
+    except Exception as e:
+        print(f"[A6 API] process_a6_event({event_id}) 异常: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return {"status": "error", "message": f"{type(e).__name__}: {e}", "event_id": event_id}
 
 
 @app.post("/api/a6/clear_logs")
