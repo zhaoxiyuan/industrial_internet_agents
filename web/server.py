@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+import requests
 from agents.main_agent import run_workflow, confirm_and_continue, list_pending_confirmations, get_workflow_state, set_broadcast_callback
 from agents.utils.logging_handler import set_logs_broadcast_queue
 from agents.utils.system_prompt import load_system_prompt, save_system_prompt
@@ -35,6 +36,7 @@ PORT = 8080
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(os.path.dirname(WEB_DIR), ".env")
 SYSTEM_PROMPT_DIR = os.path.join(os.path.dirname(WEB_DIR), "agents", "system_prompt")
+MODEL_PROFILES_FILE = os.path.join(os.path.dirname(WEB_DIR), "model_profiles.json")
 
 # WebSocket 端口配置
 WS_STATUS_PORT = PORT + 1   # 状态通道端口
@@ -281,33 +283,130 @@ def run_logs_websocket_server():
 
 
 def load_env_config():
-    config = {"api_key": "", "base_url": "", "model": ""}
+    """读取 .env 完整配置"""
+    config = {"api_key": "", "base_url": "", "model": "",
+              "protocol": "openai", "temperature": "", "max_tokens": ""}
     if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "r") as f:
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     if "=" in line:
                         key, val = line.split("=", 1)
+                        val = val.strip().strip('"').strip("'")
                         if key == "OPENAI_API_KEY":
                             config["api_key"] = val
                         elif key == "OPENAI_BASE_URL":
                             config["base_url"] = val
                         elif key == "OPENAI_MODEL":
                             config["model"] = val
+                        elif key == "OPENAI_PROVIDER":
+                            config["protocol"] = val
+                        elif key == "OPENAI_TEMPERATURE":
+                            config["temperature"] = val
+                        elif key == "OPENAI_MAX_TOKENS":
+                            config["max_tokens"] = val
     return config
 
 
 def save_env_config(data):
+    """保存完整配置到 .env"""
     lines = [
         "# OpenAI Configuration",
         f"OPENAI_API_KEY={data.get('api_key', '')}",
         f"OPENAI_BASE_URL={data.get('base_url', '')}",
         f"OPENAI_MODEL={data.get('model', '')}",
+        f"OPENAI_PROVIDER={data.get('protocol', 'openai')}",
         "MODEL_PROVIDER=openai",
     ]
-    with open(ENV_FILE, "w") as f:
+    temp = data.get("temperature", "").strip()
+    maxt = data.get("max_tokens", "").strip()
+    if temp:
+        lines.append(f"OPENAI_TEMPERATURE={temp}")
+    if maxt:
+        lines.append(f"OPENAI_MAX_TOKENS={maxt}")
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+
+def test_llm_connection(data):
+    """测试 LLM 连通性，返回 ok + reply 或 ok=False + error"""
+    protocol = (data.get("protocol") or "openai").strip().lower()
+    base_url = (data.get("base_url") or "").strip()
+    api_key  = (data.get("api_key")  or "").strip()
+    model    = (data.get("model")    or "").strip()
+    if not base_url or not api_key or not model:
+        return {"ok": False, "error": "base_url、api_key、model 均不能为空"}
+    try:
+        if protocol == "anthropic":
+            url = base_url.rstrip("/") + "/v1/messages"
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {"messages": [{"role": "user", "content": "请只回复:OK"}], "max_tokens": 20}
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        else:
+            url = base_url.rstrip("/") + "/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {"model": model, "messages": [{"role": "user", "content": "请只回复:OK"}], "max_tokens": 20}
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        result = resp.json()
+        # 提取回复
+        reply = None
+        if protocol == "anthropic":
+            for block in (result.get("content") or []):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    reply = block.get("text", "").strip()
+        else:
+            choices = result.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or {}
+                reply = msg.get("content", "").strip()
+        return {"ok": True, "reply": reply or "(空)", "protocol": protocol.upper()}
+    except requests.RequestException as e:
+        return {"ok": False, "error": f"网络异常: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def list_model_profiles():
+    """返回所有已保存的配置快照"""
+    if not os.path.exists(MODEL_PROFILES_FILE):
+        return []
+    with open(MODEL_PROFILES_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_model_profile(name, data):
+    """保存一条配置快照（不写入 .env，仅存储快照）"""
+    profiles = list_model_profiles()
+    # 脱敏 api_key 后再存储
+    safe = {k: (v if k != "api_key" else mask_api_key(v)) for k, v in data.items()}
+    safe["name"] = name
+    # 移除同名
+    profiles = [p for p in profiles if p.get("name") != name]
+    profiles.insert(0, safe)
+    with open(MODEL_PROFILES_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=2)
+    return profiles
+
+
+def delete_model_profile(name):
+    """删除指定快照"""
+    profiles = [p for p in list_model_profiles() if p.get("name") != name]
+    with open(MODEL_PROFILES_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=2)
+    return profiles
+
+
+def mask_api_key(key):
+    if not key or len(key) <= 4:
+        return "****"
+    return key[:4] + "*" * min(len(key) - 4, 16)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -327,6 +426,37 @@ class Handler(SimpleHTTPRequestHandler):
             save_env_config(data)
             logger.info(f"[POST] /api/config 响应: status=ok")
             self.send_json({"status": "ok"})
+
+        elif path == "/api/test/llm":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            data = json.loads(body)
+            logger.info(f"[POST] /api/test/llm 进入: protocol={data.get('protocol')}, base_url={data.get('base_url')}, model={data.get('model')}")
+            result = test_llm_connection(data)
+            logger.info(f"[POST] /api/test/llm 响应: ok={result.get('ok')}")
+            self.send_json(result)
+
+        elif path == "/api/config/profiles/save":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            data = json.loads(body)
+            name = data.get("name", "").strip()
+            config_data = data.get("config", {})
+            if not name:
+                self.send_json({"status": "error", "error": "name 不能为空"})
+                return
+            profiles = save_model_profile(name, config_data)
+            logger.info(f"[POST] /api/config/profiles/save 响应: name={name}, total={len(profiles)}")
+            self.send_json({"status": "ok", "profiles": profiles})
+
+        elif path == "/api/config/profiles/delete":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            data = json.loads(body)
+            name = data.get("name", "").strip()
+            profiles = delete_model_profile(name)
+            logger.info(f"[POST] /api/config/profiles/delete 响应: name={name}, total={len(profiles)}")
+            self.send_json({"status": "ok", "profiles": profiles})
 
         elif path.startswith("/api/prompt/"):
             stage = path.split("/")[-1]
@@ -480,6 +610,13 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # --- 模型配置快照 ---
+        if path == "/api/config/profiles":
+            profiles = list_model_profiles()
+            logger.info(f"[GET] /api/config/profiles 响应: {len(profiles)} 条")
+            self.send_json(profiles)
+            return
+
         if path == "/api/config":
             config = load_env_config()
             logger.info(f'[GET] /api/config 响应: config={{"api_key": "***", "base_url": "{config.get("base_url")}", "model": "{config.get("model")}"}}')
@@ -549,6 +686,10 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    # 解决 Windows 控制台无法显示 emoji 的问题
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     # 设置日志 WebSocket 队列（供 logging_handler 使用）
     set_logs_broadcast_queue(logs_broadcast_queue)
     logger.info("[WS-LOGS] 日志广播队列已设置")

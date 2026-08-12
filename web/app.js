@@ -65,12 +65,12 @@ const STAGE_INFO = {
         intelligence: '按作业类型生成检查清单，调用人员资质、现场视频、气体检测和规则执行工具逐项核验；输出"符合、待确认、不符合、不适用"四态结果和证据。'
     },
     P6: {
-        name: '作业过程动态监测', icon: '📡', color: '#E91E63', humanConfirm: null,
-        tools: ['monitor_start', 'monitor_stop', 'monitor_status', 'monitor_events'],
-        activity: '持续获取视频、传感器、定位和作业状态，识别违章及条件变化',
-        inputs: '视频流、传感器、定位、规则',
+        name: '作业过程动态监测(A5)', icon: '📡', color: '#E91E63', humanConfirm: null,
+        tools: [],
+        activity: '基于 A5 实时CV检测、传感器监测和定位追踪，识别 PPE 缺失、传感器告警和监护人离岗事件',
+        inputs: '作业票、CV模型、传感器、UWB定位',
         outputs: '候选风险事件、证据片段',
-        intelligence: '根据作业类型和上下文动态选择CV/VL模型、提示词和采样策略；对连续帧结果进行时序聚合，避免单帧误报。'
+        intelligence: 'A5 场景 A-E 随机触发：正常作业/头盔缺失/气体上升/监护人离岗/多人违规。80%阈值判定违规，处理后触发 A6 研判。'
     },
     P7: {
         name: '风险研判与分级', icon: '⚠️', color: '#FF5722', humanConfirm: '高风险判断确认',
@@ -144,34 +144,84 @@ function initMenu() {
             state.selectedMenu = panel;
         });
     });
+    // 初始化时默认激活 model-config
+    const defaultItem = document.querySelector('.menu-item[data-panel="model-config"]');
+    if (defaultItem) defaultItem.click();
 }
 
 // ========== 配置相关 ==========
+
+// 协议预设 URL
+const PROTOCOL_PRESETS = {
+    openai:     "",
+    anthropic:  "https://api.anthropic.com",
+};
+// 厂商速查
+const PROVIDER_HINTS = {
+    openai: {
+        "MiniMax 中国站":     "https://api.minimaxi.com/v1",
+        "DeepSeek":          "https://api.deepseek.com/v1",
+        "阿里百炼 DashScope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "智谱 GLM":           "https://open.bigmodel.cn/api/paas/v4",
+        "月之暗面 Kimi":      "https://api.moonshot.cn/v1",
+        "OpenAI 官方":       "https://api.openai.com/v1",
+        "Ollama 本地":       "http://localhost:11434/v1",
+    },
+    anthropic: {
+        "Anthropic 官方":    "https://api.anthropic.com",
+    },
+};
+
+// 当前配置的原始数据（用于保存 profile 时取真实 api_key）
+let currentConfigRaw = {};
+
 function loadModelConfig() {
-    fetch('/api/config')
-        .then(r => {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        })
-        .then(data => {
-            console.log('[loadModelConfig] Received data:', {api_key: data.api_key ? '***' : '', base_url: data.base_url, model: data.model});
-            // API Key 用 * 号展示
-            const apiKey = data.api_key || '';
-            document.getElementById('config-api-key').value = maskString(apiKey);
-            document.getElementById('config-api-key').dataset.rawValue = apiKey;
-            document.getElementById('config-base-url').value = data.base_url || '';
-            document.getElementById('config-model').value = data.model || '';
-            console.log('[loadModelConfig] Fields populated, apiKey masked:', maskString(apiKey));
-        })
-        .catch(err => {
-            console.error('[loadModelConfig] Error:', err);
-        });
+    Promise.all([
+        fetch('/api/config').then(r => r.json()),
+        fetch('/api/config/profiles').then(r => r.json()).catch(() => []),
+    ]).then(([config, profiles]) => {
+        currentConfigRaw = config;
+        // 填表单
+        const apiKey = config.api_key || '';
+        document.getElementById('config-api-key').value = maskString(apiKey);
+        document.getElementById('config-api-key').dataset.rawValue = apiKey;
+        document.getElementById('config-base-url').value = config.base_url || '';
+        document.getElementById('config-model').value = config.model || '';
+        document.getElementById('config-protocol').value = config.protocol || 'openai';
+        document.getElementById('config-temperature').value = config.temperature || '';
+        document.getElementById('config-max-tokens').value = config.max_tokens || '';
+        renderProviderHints(config.protocol || 'openai');
+        // 渲染历史
+        renderProfiles(profiles);
+    }).catch(err => {
+        console.error('[loadModelConfig] Error:', err);
+    });
+}
+
+function onProtocolChange() {
+    const proto = document.getElementById('config-protocol').value;
+    const url = PROTOCOL_PRESETS[proto];
+    if (url !== undefined) document.getElementById('config-base-url').value = url;
+    renderProviderHints(proto);
+}
+
+function renderProviderHints(protocol) {
+    const el = document.getElementById('provider-hints');
+    if (!el) return;
+    const hints = PROVIDER_HINTS[protocol] || {};
+    const entries = Object.entries(hints);
+    if (entries.length === 0) { el.innerHTML = ''; return; }
+    let html = '<span style="font-size:12px;color:#888;margin-right:8px;">快速:</span>';
+    for (const [name, url] of entries) {
+        html += `<button type="button" class="btn btn-secondary" style="padding:2px 8px;font-size:11px;margin:1px;" onclick="document.getElementById('config-base-url').value='${url}';">${name}</button>`;
+    }
+    el.innerHTML = html;
 }
 
 function maskString(str) {
     if (!str) return '';
     if (str.length <= 4) return '****';
-    return str.substring(0, 4) + '*'.repeat(Math.min(str.length - 4, 20));
+    return str.substring(0, 4) + '*'.repeat(Math.min(str.length - 4, 16));
 }
 
 function toggleApiKeyVisibility() {
@@ -179,14 +229,11 @@ function toggleApiKeyVisibility() {
     const eyeOpen = document.getElementById('eye-open');
     const eyeClosed = document.getElementById('eye-closed');
     if (input.type === 'password') {
-        // 切换到显示模式：使用 raw-value 显示明文
-        const rawValue = input.dataset.rawValue || '';
-        input.value = rawValue;
+        input.value = input.dataset.rawValue || '';
         input.type = 'text';
         eyeOpen.style.display = 'none';
         eyeClosed.style.display = 'inline';
     } else {
-        // 切换到隐藏模式：保存当前明文值，重新显示掩码
         input.dataset.rawValue = input.value;
         input.value = maskString(input.value);
         input.type = 'password';
@@ -195,27 +242,162 @@ function toggleApiKeyVisibility() {
     }
 }
 
-function saveModelConfig() {
-    // 保存时使用原始值（如果当前是显示状态，需要从 input.value 获取；如果隐藏状态从 dataset.rawValue 获取）
+function testLlmConnection() {
     const apiKeyInput = document.getElementById('config-api-key');
-    const apiKey = apiKeyInput.type === 'password' ? apiKeyInput.dataset.rawValue : apiKeyInput.value;
-
+    const apiKey = apiKeyInput.type === 'password' ? (apiKeyInput.dataset.rawValue || '') : apiKeyInput.value;
     const data = {
-        api_key: apiKey,
-        base_url: document.getElementById('config-base-url').value,
-        model: document.getElementById('config-model').value
+        protocol: document.getElementById('config-protocol').value,
+        base_url: document.getElementById('config-base-url').value.trim(),
+        api_key:  apiKey.trim(),
+        model:    document.getElementById('config-model').value.trim(),
+    };
+    if (!data.base_url || !data.api_key || !data.model) {
+        showTestResult('err', 'ERR: base_url、api_key、model 均不能为空');
+        return;
+    }
+    const btn = document.getElementById('btn-test-llm');
+    btn.disabled = true; btn.textContent = '...';
+    fetch('/api/test/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }).then(r => r.json()).then(res => {
+        if (res.ok) showTestResult('ok', `OK (${res.protocol}) 回复: ${res.reply}`);
+        else showTestResult('err', `ERR: ${res.error}`);
+    }).catch(e => {
+        showTestResult('err', `ERR: ${e.message}`);
+    }).finally(() => {
+        btn.disabled = false; btn.textContent = '🔌 测试连接';
+    });
+}
+
+function showTestResult(type, msg) {
+    const el = document.getElementById('test-result');
+    el.style.display = 'block';
+    el.style.background = type === 'ok' ? '#e8f5e9' : '#ffebee';
+    el.style.color = type === 'ok' ? '#2e7d32' : '#c62828';
+    el.style.border = `1px solid ${type === 'ok' ? '#a5d6a7' : '#ef9a9a'}`;
+    el.textContent = msg;
+}
+
+function saveModelConfig() {
+    const apiKeyInput = document.getElementById('config-api-key');
+    const apiKey = apiKeyInput.type === 'password' ? (apiKeyInput.dataset.rawValue || '') : apiKeyInput.value;
+    const data = {
+        api_key:     apiKey.trim(),
+        base_url:    document.getElementById('config-base-url').value.trim(),
+        model:       document.getElementById('config-model').value.trim(),
+        protocol:    document.getElementById('config-protocol').value,
+        temperature: document.getElementById('config-temperature').value.trim(),
+        max_tokens:  document.getElementById('config-max-tokens').value.trim(),
     };
     fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    }).then(() => {
-        document.getElementById('config-status').textContent = '✅ 已保存';
-        setTimeout(() => {
-            document.getElementById('config-status').textContent = '';
-        }, 2000);
+        body: JSON.stringify(data),
+    }).then(r => r.json()).then(res => {
+        document.getElementById('config-status').textContent = res.status === 'ok' ? '✅ 已保存' : '❌ 失败';
+        setTimeout(() => { document.getElementById('config-status').textContent = ''; }, 2000);
+    }).catch(() => {
+        document.getElementById('config-status').textContent = '❌ 失败';
     });
 }
+
+function showSaveProfileModal() {
+    document.getElementById('save-profile-modal').style.display = 'block';
+    document.getElementById('profile-name-input').focus();
+}
+
+function hideSaveProfileModal() {
+    document.getElementById('save-profile-modal').style.display = 'none';
+    document.getElementById('profile-name-input').value = '';
+}
+
+function doSaveProfile() {
+    const name = document.getElementById('profile-name-input').value.trim();
+    if (!name) { alert('请输入配置名称'); return; }
+    const apiKeyInput = document.getElementById('config-api-key');
+    const apiKey = apiKeyInput.type === 'password' ? (apiKeyInput.dataset.rawValue || '') : apiKeyInput.value;
+    const config = {
+        api_key:     apiKey.trim(),
+        base_url:    document.getElementById('config-base-url').value.trim(),
+        model:       document.getElementById('config-model').value.trim(),
+        protocol:    document.getElementById('config-protocol').value,
+        temperature: document.getElementById('config-temperature').value.trim(),
+        max_tokens:  document.getElementById('config-max-tokens').value.trim(),
+    };
+    fetch('/api/config/profiles/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, config }),
+    }).then(r => r.json()).then(res => {
+        if (res.status === 'ok') {
+            renderProfiles(res.profiles);
+            hideSaveProfileModal();
+            document.getElementById('config-status').textContent = '✅ 已另存';
+            setTimeout(() => { document.getElementById('config-status').textContent = ''; }, 2000);
+        }
+    });
+}
+
+function loadProfileToForm(profile) {
+    const apiKeyInput = document.getElementById('config-api-key');
+    apiKeyInput.value = maskString(profile.api_key || '');
+    apiKeyInput.dataset.rawValue = profile.api_key || '';
+    apiKeyInput.type = 'password';
+    document.getElementById('eye-open').style.display = 'inline';
+    document.getElementById('eye-closed').style.display = 'none';
+    document.getElementById('config-base-url').value = profile.base_url || '';
+    document.getElementById('config-model').value = profile.model || '';
+    document.getElementById('config-protocol').value = profile.protocol || 'openai';
+    document.getElementById('config-temperature').value = profile.temperature || '';
+    document.getElementById('config-max-tokens').value = profile.max_tokens || '';
+    renderProviderHints(profile.protocol || 'openai');
+    document.getElementById('config-status').textContent = '已加载: ' + profile.name;
+    setTimeout(() => { document.getElementById('config-status').textContent = ''; }, 2000);
+}
+
+function deleteProfile(name, event) {
+    event.stopPropagation();
+    if (!confirm('删除配置「' + name + '」？')) return;
+    fetch('/api/config/profiles/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+    }).then(r => r.json()).then(res => {
+        if (res.status === 'ok') renderProfiles(res.profiles);
+    });
+}
+
+function renderProfiles(profiles) {
+    const container = document.getElementById('profiles-list');
+    if (!profiles || profiles.length === 0) {
+        container.innerHTML = '<span style="color:#999;font-size:13px;">暂无保存的配置</span>';
+        return;
+    }
+    container.innerHTML = profiles.map(p => `
+        <div onclick="loadProfileToForm(${escapeHtml(JSON.stringify(p))})"
+             style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;cursor:pointer;min-width:200px;max-width:260px;transition:box-shadow 0.2s;">
+            <div style="font-weight:bold;font-size:14px;margin-bottom:6px;color:#333;">${escapeHtml(p.name || '')}</div>
+            <div style="font-size:12px;color:#666;margin-bottom:3px;">模型: ${escapeHtml(p.model || '-')}</div>
+            <div style="font-size:12px;color:#888;margin-bottom:3px;">协议: ${escapeHtml(p.protocol || 'openai')}</div>
+            <div style="font-size:12px;color:#888;margin-bottom:3px;word-break:break-all;">URL: ${escapeHtml(p.base_url || '-')}</div>
+            <div style="font-size:12px;color:#888;">Key: ${escapeHtml(p.api_key || '****')}</div>
+            <div style="margin-top:8px;display:flex;gap:6px;">
+                <button onclick="loadProfileToForm(${escapeHtml(JSON.stringify(p))})"
+                        style="background:#FF9800;color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:12px;">应用</button>
+                <button onclick="deleteProfile('${escapeHtml(p.name || '')}', event)"
+                        style="background:#f5f5f5;color:#999;border:1px solid #ddd;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;">删除</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 
 function loadAllPrompts() {
     // 映射 stage ID 到 API 路径
@@ -416,6 +598,7 @@ function renderWorkflowNodeDetail(stage) {
     else statusBadge = '<span class="status-badge" style="background: #ccc;">⏹️ 待执行</span>';
 
     const panel = document.getElementById('detail-panel');
+    if (!panel) return;
     panel.innerHTML = `
         <div class="detail-header">
             <span class="detail-icon">${info.icon}</span>
@@ -677,17 +860,23 @@ function resetWorkflow() {
 }
 
 function updateControlPanel() {
-    const { confirmed, pending, currentStage, status } = state.workflowState;
+    const { confirmed = [], pending = [], currentStage = '', status = 'idle' } = state.workflowState;
     const panel = document.getElementById('control-panel');
+    if (!panel) return;
 
+    // confirmed 可能是 dict 或 array，转换为数组长度
+    const confirmedCount = Array.isArray(confirmed) ? confirmed.length : Object.keys(confirmed || {}).length;
+
+    let html = '';
     if (status === 'idle') {
-        panel.innerHTML = '<span style="color: #999;">就绪</span>';
+        html = '<span style="color: #999;">就绪</span>';
     } else if (pending.length > 0) {
-        panel.innerHTML = `<span style="color: #FFC107;">⏸️ 等待人工确认: ${pending.join(', ')}</span>`;
+        html = `<span style="color: #FFC107;">⏸️ 等待人工确认: ${pending.join(', ')}</span>`;
     } else if (currentStage) {
-        panel.innerHTML = `<span style="color: #FF9800;">⏳ 执行中: ${currentStage}</span>`;
+        html = `<span style="color: #FF9800;">⏳ 执行中: ${currentStage}</span>`;
     }
-    panel.innerHTML += `<div style="margin-top: 10px;">已完成: ${confirmed.length}/${ALL_STAGES.length}</div>`;
+    html += `<div style="margin-top: 10px;">已完成: ${confirmedCount}/${ALL_STAGES.length}</div>`;
+    panel.innerHTML = html;
 }
 
 // ========== 日志 ==========
@@ -961,7 +1150,9 @@ function showNodeTooltip(stage, event) {
     `;
 
     // 定位
-    const rect = event.target.closest('.workflow-s-card, .workflow-s-card-main').getBoundingClientRect();
+    const targetEl = event.target.closest('.workflow-s-card, .workflow-s-card-main, .main-dispatch-content');
+    if (!targetEl) return;
+    const rect = targetEl.getBoundingClientRect();
     let left = rect.right + 10;
     let top = rect.top;
 

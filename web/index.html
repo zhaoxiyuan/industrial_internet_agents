@@ -1057,7 +1057,7 @@
                         <div class="menu-item" data-panel="agent-p3">P3 上下文理解</div>
                         <div class="menu-item" data-panel="agent-p4">P4 摄像数据</div>
                         <div class="menu-item" data-panel="agent-p5">P5 条件核验</div>
-                        <div class="menu-item" data-panel="agent-p6">P6 动态监测</div>
+                        <div class="menu-item" data-panel="agent-p6">P6 动态监测(A5)</div>
                         <div class="menu-item" data-panel="agent-p7">P7 风险研判</div>
                         <div class="menu-item" data-panel="agent-p8">P8 人机协同</div>
                         <div class="menu-item" data-panel="agent-p9">P9 闭环跟踪</div>
@@ -1069,29 +1069,67 @@
                 <div class="content">
                     <!-- 模型配置面板 -->
                     <div id="panel-model-config" class="panel active">
-                        <div class="panel-title">🤖 模型配置</div>
-                        <div class="form-group">
-                            <label class="form-label">API Key</label>
-                            <div style="position: relative; display: flex; align-items: center;">
-                                <input type="password" class="form-input" id="config-api-key" placeholder="输入 API Key" style="padding-right: 40px;">
-                                <span onclick="toggleApiKeyVisibility()" id="toggle-api-key" style="position: absolute; right: 12px; cursor: pointer; font-size: 16px;">
-                                    <svg id="eye-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                                    <svg id="eye-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-                                </span>
+                        <div class="panel-title">🤖 当前配置</div>
+
+                        <!-- 当前配置卡片 -->
+                        <div style="background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div>
+                                    <label class="form-label">协议</label>
+                                    <select class="form-input" id="config-protocol" onchange="onProtocolChange()">
+                                        <option value="openai">OpenAI / OpenAI 兼容</option>
+                                        <option value="anthropic">Anthropic Claude</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label">模型名</label>
+                                    <input type="text" class="form-input" id="config-model" placeholder="MiniMax-M3 / gpt-4o ...">
+                                </div>
+                                <div style="grid-column: 1 / -1;">
+                                    <label class="form-label">Base URL</label>
+                                    <input type="text" class="form-input" id="config-base-url" placeholder="https://api.minimaxi.com/v1">
+                                    <div id="provider-hints" style="margin-top: 4px;"></div>
+                                </div>
+                                <div style="grid-column: 1 / -1;">
+                                    <label class="form-label">API Key</label>
+                                    <div style="position: relative;">
+                                        <input type="password" class="form-input" id="config-api-key" placeholder="sk-..." style="padding-right: 40px;">
+                                        <span onclick="toggleApiKeyVisibility()" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer;">
+                                            <svg id="eye-open" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg id="eye-closed" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="form-label">Temperature</label>
+                                    <input type="number" class="form-input" id="config-temperature" placeholder="0.2" step="0.1" min="0" max="2">
+                                </div>
+                                <div>
+                                    <label class="form-label">Max Tokens</label>
+                                    <input type="number" class="form-input" id="config-max-tokens" placeholder="2048" step="1" min="1">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top: 14px;">
+                                <button class="btn btn-primary" id="btn-test-llm" onclick="testLlmConnection()">🔌 测试连接</button>
+                                <button class="btn btn-secondary" onclick="saveModelConfig()">💾 保存到 .env</button>
+                                <button class="btn btn-secondary" onclick="showSaveProfileModal()">💾 另存为</button>
+                                <span id="config-status" style="color: #4CAF50; margin-left: 12px; line-height: 40px;"></span>
+                            </div>
+                            <div id="test-result" style="margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: none; white-space: pre-wrap;"></div>
+                        </div>
+
+                        <!-- 另存弹窗（隐藏） -->
+                        <div id="save-profile-modal" style="display: none; background: #fff8e1; border: 1px solid #ffcc02; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px;">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="text" class="form-input" id="profile-name-input" placeholder="给这个配置起个名字，如：MiniMax-生产" style="flex: 1;">
+                                <button class="btn btn-primary" onclick="doSaveProfile()">确认保存</button>
+                                <button class="btn btn-secondary" onclick="hideSaveProfileModal()">取消</button>
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Base URL</label>
-                            <input type="text" class="form-input" id="config-base-url" placeholder="https://api.minimax.chat/v1">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Model</label>
-                            <input type="text" class="form-input" id="config-model" placeholder="MiniMax-M3">
-                        </div>
-                        <div class="btn-group">
-                            <button class="btn btn-primary" onclick="saveModelConfig()">💾 保存配置</button>
-                            <span id="config-status" style="color: #4CAF50; margin-left: 15px; line-height: 40px;"></span>
-                        </div>
+
+                        <!-- 历史配置 -->
+                        <div class="panel-title" style="font-size: 14px;">📁 配置历史</div>
+                        <div id="profiles-list" style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px;"></div>
                     </div>
 
                     <!-- Agent 提示词面板 (MAIN, P1-P10) -->
@@ -1174,7 +1212,7 @@
                         </div>
                     </div>
                     <div id="panel-agent-p6" class="panel">
-                        <div class="panel-title">📝 P6 作业过程动态监测 - 系统提示词</div>
+                        <div class="panel-title">📝 P6 作业过程动态监测(A5) - 系统提示词</div>
                         <div class="md-editor">
                             <div class="md-input">
                                 <textarea class="form-input" id="prompt-p6" rows="15" oninput="updatePreview('p6')"></textarea>
@@ -1309,8 +1347,11 @@
                         </div>
                     </div>
 
-                    <!-- 右侧：日志 + 控制面板 -->
+                    <!-- 右侧：控制面板 + 日志 -->
                     <div class="execute-right">
+                        <div id="control-panel" style="background: white; border-radius: 8px; padding: 10px 15px; margin-bottom: 10px; flex: 0 0 auto;">
+                            <span style="color: #999;">就绪</span>
+                        </div>
                         <div class="log-container execute-right-middle" id="log-container">
                             <div class="log-entry"><span class="log-time">[--:--:--]</span> 就绪</div>
                         </div>
