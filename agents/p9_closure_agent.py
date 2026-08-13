@@ -11,8 +11,21 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
+
+# 配置日志
+import logging
+logger = logging.getLogger("p9_closure_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -268,3 +281,70 @@ def run_closure_agent(message: str) -> str:
 def closure_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_closure_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P9 阶段执行入口：闭环跟踪与报告
+
+    读取 P8 结果中的 task_id，执行闭环跟踪
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P9")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P9",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p8_result = read_json_file(get_stage_result_path(job_id, "p8"))
+        task_id = p8_result.get("task_id", "")
+        logger.info(f"[P9] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P9] 调用 closure_status: task_id={task_id}")
+        status_result = json.loads(closure_status.invoke(task_id))
+        log.log_tool_call("closure_status", {"task_id": task_id}, status_result)
+        if "result" in status_result:
+            result["closure_status"] = status_result["result"]
+
+        logger.info(f"[P9] 调用 closure_verify: task_id={task_id}")
+        verify_result = json.loads(closure_verify.invoke(task_id))
+        log.log_tool_call("closure_verify", {"task_id": task_id}, verify_result)
+        if "result" in verify_result:
+            result["verify_result"] = verify_result["result"]
+
+        logger.info(f"[P9] 调用 closure_report: task_id={task_id}")
+        report_result = json.loads(closure_report.invoke(task_id))
+        log.log_tool_call("closure_report", {"task_id": task_id}, report_result)
+        if "result" in report_result:
+            result["report"] = report_result["result"]
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "closure_close",
+            "message": "请确认是否关闭事件和作业"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p9"), result)
+    add_job_log(job_id, {"action": "execute_p9", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

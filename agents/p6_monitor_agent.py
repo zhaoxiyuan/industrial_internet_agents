@@ -1769,3 +1769,69 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"A5 作业过程监测 P6 启动: http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P6 阶段执行入口：作业过程动态监测
+
+    读取 P5 结果中的 task_id，启动监测会话并获取事件
+    注意：P6 是 FastAPI 应用，实际监测逻辑通过独立服务运行
+    """
+    import json
+    import logging
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    logger = logging.getLogger("p6_monitor_agent")
+    log = get_stage_logger("P6")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P6",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p5_result = read_json_file(get_stage_result_path(job_id, "p5"))
+        task_id = p5_result.get("task_id", "")
+        logger.info(f"[P6] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P6] 调用 monitor_start: task_id={task_id}")
+        monitor_result = json.loads(monitor_start.invoke(task_id))
+        log.log_tool_call("monitor_start", {"task_id": task_id}, monitor_result)
+        if "result" in monitor_result:
+            result["session_id"] = monitor_result["result"].get("session_id", "")
+
+        logger.info(f"[P6] 调用 monitor_events: task_id={task_id}")
+        events_str = monitor_events.invoke(task_id)
+        events = []
+        for line in events_str.strip().split("\n"):
+            if line:
+                try:
+                    events.append(json.loads(line))
+                except:
+                    pass
+        log.log_tool_call("monitor_events", {"task_id": task_id}, {"events_count": len(events)})
+
+        result["candidate_events"] = events
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p6"), result)
+    add_job_log(job_id, {"action": "execute_p6", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

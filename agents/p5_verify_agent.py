@@ -13,6 +13,19 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p5_verify_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -240,3 +253,65 @@ def run_verify_agent(message: str) -> str:
 def verify_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_verify_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P5 阶段执行入口：开工前条件核验
+
+    读取 P4 结果中的 task_id，执行条件核验
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P5")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P5",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p4_result = read_json_file(get_stage_result_path(job_id, "p4"))
+        task_id = p4_result.get("task_id", "")
+        logger.info(f"[P5] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P5] 调用 verify_execute: task_id={task_id}")
+        verify_result = json.loads(verify_execute.invoke(task_id))
+        log.log_tool_call("verify_execute", {"task_id": task_id}, verify_result)
+        if "result" in verify_result:
+            result["verification_result"] = verify_result["result"]
+
+        logger.info(f"[P5] 调用 verify_recommendation: task_id={task_id}")
+        rec_result = json.loads(verify_recommendation.invoke(task_id))
+        log.log_tool_call("verify_recommendation", {"task_id": task_id}, rec_result)
+        if "result" in rec_result:
+            result["recommendation"] = rec_result["result"]
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "verification_approve",
+            "decision": rec_result.get("result", {}).get("decision", ""),
+            "message": "请确认开工条件核验结果"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p5"), result)
+    add_job_log(job_id, {"action": "execute_p5", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result
