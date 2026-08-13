@@ -459,7 +459,8 @@ class A5Agent:
                             if not ev.get("first_seen"):
                                 ev["first_seen"] = batch_start
                             if not ev.get("last_seen"):
-                                ev["last_seen"] = ev.get("wall_time") or batch_start
+                                # 默认到 batch 末端，反映该 batch 的最大可观测时间范围
+                                ev["last_seen"] = wall_times[-1] if wall_times else batch_start
                             results.append(ev)
                         return results
             # 策略3: 直接正则提取 {...} 对象
@@ -480,7 +481,8 @@ class A5Agent:
                         if not ev.get("first_seen"):
                             ev["first_seen"] = batch_start
                         if not ev.get("last_seen"):
-                            ev["last_seen"] = ev.get("wall_time") or batch_start
+                            # 默认到 batch 末端，反映该 batch 的最大可观测时间范围
+                            ev["last_seen"] = wall_times[-1] if wall_times else batch_start
                         results.append(ev)
                 except Exception:
                     pass
@@ -562,7 +564,7 @@ class A5Agent:
             pi = p.get("person", {}); pid = pi.get("id","?")
             results.append({"source":"A5","event_id":p.get("event_id",f"A5-{pid}-{int(time_module.time()*1000)}"),
                      "type":p.get("type","未分类"),"person":pi,"wall_time":wall_time,
-                     "first_seen":p.get("first_seen",wall_time),"last_seen":wall_time,
+                     "first_seen":p.get("first_seen",wall_time),"last_seen":p.get("last_seen",wall_time),
                      "status":p.get("status","ongoing"),"evidence":p.get("evidence",{}),
                      "explanation":p.get("explanation",""),"note":"A5不判定risk_level,由A6完成"})
         return results

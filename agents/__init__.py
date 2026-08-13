@@ -63,7 +63,7 @@ from .p5_verify_agent import (
     verify_recommendation,
 )
 
-# p6_monitor_agent 承载 A5 前端 + A6 前端，作为统一入口
+# p6_monitor_agent 承载 A5 前端 + A6 前端（由 p7_risk_agent.register_a6_routes 挂载），共享端口 5002
 # 实际使用的 A5/A6 路由函数无需在此导出
 
 from .p8_disposition_agent import (
@@ -75,6 +75,7 @@ from .p8_disposition_agent import (
     disposition_confirm,
     disposition_status,
     disposition_list,
+    recall_jobs,    # 长期记忆 LLM 入口（罗盘长期记忆）
 )
 
 from .p9_closure_agent import (
@@ -174,8 +175,8 @@ __all__ = [
     "create_verify_agent_with_hitl",
     "run_verify_agent",
     "verify_demo",
-    # P6: monitor (通过 p6_monitor_agent 独立服务访问)
-    # P7: risk  (通过 A6 研判系统访问)
+    # P6: monitor (通过 p6_monitor_agent 独立服务访问，含 A5 前端 + 共享端口 5002)
+    # P7: risk  (p7_risk_agent 暴露 risk_analyze/risk_list 工具，A6 路由通过 register_a6_routes 挂载到 P6)
     # P8: disposition
     "create_disposition_agent",
     "create_disposition_agent_with_hitl",

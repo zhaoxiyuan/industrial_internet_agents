@@ -80,12 +80,28 @@ snapshot_*.json → processing_batch_*.json → raw_event_*.json (成功)
 
 ## A6 研判触发
 
-当 A5 产生告警事件时，调用：
+当 A5 产生告警事件时，**in-process 调用** P7 的 `trigger_a6_assessment`：
+
+```python
+from agents.p7_risk_agent import trigger_a6_assessment
+
+# P6 _run_agent_loop 内部：
+if result.get("events"):
+    asyncio.create_task(trigger_a6_assessment(wt, result))
 ```
-POST http://localhost:5002/api/a6/process/{event_id}
-Body: {"events": [event_data]}
-```
+
+`trigger_a6_assessment` 直接 `await A6Agent.process_event(event_id, event_data=...)`，
+不再走 HTTP 自调用。
+
+> **历史变更**：早期版本通过 `POST http://localhost:5002/api/a6/process/{event_id}` 自调用，
+> 已改为 in-process 调用以减少网络开销。
+>
+> `/api/a6/process/{event_id}` 路由仍保留在 P7 模块，作为外部触发入口。
 
 ## 文件位置
 
 `agents/p6_monitor_agent.py`
+
+## 相关文档
+
+- [P7_RISK_AGENT.md](P7_RISK_AGENT.md) — A6 路由、工具、共享端口 5002 的实现细节
