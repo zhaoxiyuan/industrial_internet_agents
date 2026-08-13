@@ -11,9 +11,9 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model
+from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
-from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log
+from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log, get_agent_config
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.system_prompt import load_system_prompt
 
@@ -286,10 +286,10 @@ _permit_checkpointer = MemorySaver()
 _agent_registry: Dict[str, Any] = {}
 
 
-def create_permit_agent():
+def create_permit_agent(job_id: str = "*"):
     """创建 P1 作业许可 Agent（基础版本，无 HITL）"""
     logger.info("[create_permit_agent] 创建 P1 Permit Agent（无 HITL）")
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P1", job_id)
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
     return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
 
@@ -308,7 +308,7 @@ def create_permit_agent_with_hitl(thread_id: str = "default"):
         return _agent_registry[thread_id]
 
     logger.info(f"[create_permit_agent_with_hitl] 创建新 Agent: thread_id={thread_id}")
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P1", thread_id)
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
 
     # 创建 HITL Middleware - 所有工具都需要人工确认
@@ -355,11 +355,12 @@ def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume:
         push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] 第一阶段：执行 JSA 分析并输出日志")
         logger.info(f"[run_permit_agent_with_hitl] 第一阶段：非 HITL 执行获取日志")
         # 创建非 HITL agent 完整执行（用于输出日志）
-        llm = create_chat_model()
+        llm = create_chat_model_with_logging("P1-LOGGING", thread_id)
         tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
         logging_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
         # 非 HITL 执行，工具会完整执行并输出日志
-        logging_result = logging_agent.invoke({"messages": [HumanMessage(content=message)]})
+        logging_config = get_agent_config(thread_id, "P1-LOGGING", get_llm_params())
+        logging_result = logging_agent.invoke({"messages": [HumanMessage(content=message)]}, logging_config)
         push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] JSA 分析完成，开始等待人工确认")
         logger.info(f"[run_permit_agent_with_hitl] 第一阶段完成，继续 HITL 执行")
 
@@ -390,10 +391,11 @@ def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume:
         # 不设置 checkpointer，因为不需要中断恢复
         logger.info(f"[run_permit_agent_with_hitl] 创建非 HITL Agent 重新执行")
         push_websocket_log(thread_id, "INFO", "AGENT", f"创建非 HITL Agent 重新执行")
-        llm = create_chat_model()
+        llm = create_chat_model_with_logging("P1-FRESH", thread_id)
         tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
         fresh_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
-        result = fresh_agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+        fresh_config = get_agent_config(thread_id, "P1-FRESH", get_llm_params())
+        result = fresh_agent.invoke({"messages": [HumanMessage(content=message)]}, fresh_config)
 
         # 非 HITL agent 不会中断，直接返回结果
         logger.info(f"[run_permit_agent_with_hitl] <<< 非 HITL Agent 执行完成")
@@ -419,14 +421,15 @@ def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume:
 
     # 检查是否有中断点可恢复
     state = agent.get_state(config)
+    hitl_config = get_agent_config(thread_id, "P1-HITL", get_llm_params())
     if state and state.next:
         logger.info(f"[run_permit_agent_with_hitl] 从中断点恢复执行: next={list(state.next)}")
         push_websocket_log(thread_id, "INFO", "AGENT", f"从中断点恢复执行", {"next": list(state.next)})
-        result = agent.invoke(None, config)
+        result = agent.invoke(None, hitl_config)
     else:
         logger.info(f"[run_permit_agent_with_hitl] 正常执行新消息")
         push_websocket_log(thread_id, "INFO", "AGENT", f"正常执行新消息")
-        result = agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+        result = agent.invoke({"messages": [HumanMessage(content=message)]}, hitl_config)
 
     # 检查是否中断
     final_state = agent.get_state(config)
@@ -478,7 +481,8 @@ def clear_agent_registry(thread_id: str = None):
 def run_permit_agent(message: str) -> str:
     """运行 P1 作业许可 Agent"""
     agent = create_permit_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P1", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 

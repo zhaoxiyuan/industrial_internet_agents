@@ -802,6 +802,37 @@
             text-overflow: ellipsis;
         }
 
+        /* LLM 日志 JSON 展示 */
+        .llm-log-data {
+            margin-left: 20px;
+            margin-top: 4px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            background: rgba(0,0,0,0.3);
+            border-radius: 4px;
+            padding: 6px 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .json-key { color: #9CDCFE; }
+        .json-string { color: #CE9178; }
+        .json-number { color: #B5CEA8; }
+        .json-boolean { color: #569CD6; }
+        .json-null { color: #569CD6; }
+        .json-bracket { color: #FFD700; }
+        .json-toggle {
+            cursor: pointer;
+            color: #FF9800;
+            margin-right: 4px;
+            user-select: none;
+        }
+        .json-toggle:hover { color: #FFB74D; }
+        .json-collapsed { color: #888; font-style: italic; }
+        .json-expanded { display: block; }
+
         /* 弹窗 */
         .modal-overlay {
             display: none;

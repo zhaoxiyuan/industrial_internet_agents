@@ -399,11 +399,6 @@ function renderSnapshots(snapshots) {
     `).join('');
 }
 
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
 
 function loadAllPrompts() {
     // 映射 stage ID 到 API 路径
@@ -949,16 +944,25 @@ function displayWorkflowLog(msg) {
     entry.className = 'log-entry';
     entry.innerHTML = entryHtml;
 
-    // 如果有附加数据，显示数据摘要
+    // 如果有附加数据，显示数据（根据来源决定展示方式）
     if (data && Object.keys(data).length > 0) {
-        const dataSummary = formatDataSummary(data);
-        if (dataSummary) {
-            const dataDiv = document.createElement('div');
-            dataDiv.style.marginLeft = '20px';
-            dataDiv.style.color = '#888';
-            dataDiv.style.fontSize = '11px';
-            dataDiv.textContent = dataSummary;
-            entry.appendChild(dataDiv);
+        // LLM 日志：显示可展开的 JSON 视图
+        if (source === 'LLM') {
+            const jsonDiv = document.createElement('div');
+            jsonDiv.className = 'llm-log-data';
+            jsonDiv.innerHTML = formatJsonView(data);
+            entry.appendChild(jsonDiv);
+        } else {
+            // 其他日志：显示简单摘要
+            const dataSummary = formatDataSummary(data);
+            if (dataSummary) {
+                const dataDiv = document.createElement('div');
+                dataDiv.style.marginLeft = '20px';
+                dataDiv.style.color = '#888';
+                dataDiv.style.fontSize = '11px';
+                dataDiv.textContent = dataSummary;
+                entry.appendChild(dataDiv);
+            }
         }
     }
 
@@ -972,6 +976,87 @@ function displayWorkflowLog(msg) {
 
     // P1 步骤检测与更新
     detectAndUpdateP1Steps(msg);
+}
+
+// 格式化 JSON 视图（带语法高亮和折叠）
+function formatJsonView(data, indent = 0) {
+    const pad = '  '.repeat(indent);
+    const nextPad = '  '.repeat(indent + 1);
+
+    if (data === null) {
+        return `<span class="json-null">null</span>`;
+    }
+    if (data === undefined) {
+        return `<span class="json-null">undefined</span>`;
+    }
+    if (typeof data === 'boolean') {
+        return `<span class="json-boolean">${data}</span>`;
+    }
+    if (typeof data === 'number') {
+        return `<span class="json-number">${data}</span>`;
+    }
+    if (typeof data === 'string') {
+        // 判断是否是 JSON 字符串
+        if (data.length > 200) {
+            return `<span class="json-string">"${escapeHtml(data.substring(0, 200))}..."</span>`;
+        }
+        return `<span class="json-string">"${escapeHtml(data)}"</span>`;
+    }
+    if (Array.isArray(data)) {
+        if (data.length === 0) {
+            return `<span class="json-bracket">[]</span>`;
+        }
+        if (data.length <= 3 && data.every(item => typeof item !== 'object')) {
+            return `<span class="json-bracket">[${data.map(v => formatJsonView(v, indent + 1)).join(', ')}]</span>`;
+        }
+        let html = `<span class="json-bracket">[</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">...${data.length}项</span><span class="json-expanded" style="display:none;">\n`;
+        data.forEach((item, i) => {
+            html += `${nextPad}${formatJsonView(item, indent + 1)}${i < data.length - 1 ? ',' : ''}\n`;
+        });
+        html += `${pad}</span><span class="json-bracket">]</span>`;
+        return html;
+    }
+    if (typeof data === 'object') {
+        const keys = Object.keys(data);
+        if (keys.length === 0) {
+            return `<span class="json-bracket">{}</span>`;
+        }
+        if (keys.length <= 2 && keys.every(k => typeof data[k] !== 'object')) {
+            return `<span class="json-bracket">{${keys.map(k => `<span class="json-key">"${k}"</span>: ${formatJsonView(data[k], indent + 1)}`).join(', ')}}</span>`;
+        }
+        let html = `<span class="json-bracket">{</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">...${keys.length}字段</span><span class="json-expanded" style="display:none;">\n`;
+        keys.forEach((k, i) => {
+            html += `${nextPad}<span class="json-key">"${k}"</span>: ${formatJsonView(data[k], indent + 1)}${i < keys.length - 1 ? ',' : ''}\n`;
+        });
+        html += `${pad}</span><span class="json-bracket">}</span>`;
+        return html;
+    }
+    return String(data);
+}
+
+// 切换 JSON 块的展开/折叠状态
+function toggleJsonBlock(toggleEl) {
+    const entry = toggleEl.closest('.llm-log-data');
+    const collapsed = entry.querySelector('.json-collapsed');
+    const expanded = entry.querySelector('.json-expanded');
+
+    if (expanded.style.display === 'none') {
+        // 展开
+        collapsed.style.display = 'none';
+        expanded.style.display = '';
+        toggleEl.textContent = '▼';
+    } else {
+        // 折叠
+        expanded.style.display = 'none';
+        collapsed.style.display = '';
+        toggleEl.textContent = '▶';
+    }
+}
+
+// HTML 转义
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // P1 步骤状态管理
