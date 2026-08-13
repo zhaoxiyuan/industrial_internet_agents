@@ -12,8 +12,9 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from .model.chat_model import create_chat_model
+from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils import extract_output, get_stage_logger, push_websocket_log
+from .utils.logging_handler import get_agent_config
 
 # 导入 Workflow 模块
 from .workflow import (
@@ -927,7 +928,7 @@ def list_pending_tool(job_id: str) -> str:
 def create_main_agent():
     """创建主 Agent"""
     logger.info("[create_main_agent] 创建主 Agent")
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("MAIN")
     tools = [
         start_workflow_tool,
         execute_stage_tool,
@@ -943,8 +944,8 @@ def run_main_agent(message: str, thread_id: str = "default") -> str:
     """运行主 Agent"""
     logger.info(f"[run_main_agent] >>> Agent 入口: thread_id={thread_id}, message={message[:100]}...")
     agent = create_main_agent()
-    config = {"configurable": {"thread_id": thread_id}}
-    result = agent.invoke({"messages": [HumanMessage(content=message)]}, config)
+    agent_config = get_agent_config(thread_id, "MAIN", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     output = extract_output(result)
     logger.info(f"[run_main_agent] <<< Agent 出口: output={output[:100] if output else 'None'}...")
     return output

@@ -9,9 +9,10 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model
+from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
 
 
 # ============================================================
@@ -182,7 +183,7 @@ def context_history(task_id: str) -> str:
 
 def create_context_agent():
     """创建 P3 上下文理解 Agent（基础版本，无 HITL）"""
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P3")
     tools = [context_build, context_validate, context_history]
     return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P3"))
 
@@ -192,7 +193,7 @@ def create_context_agent_with_hitl():
 
     使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
     """
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P3")
     tools = [context_build, context_validate, context_history]
 
     # 创建 HITL Middleware
@@ -216,7 +217,8 @@ def create_context_agent_with_hitl():
 def run_context_agent(message: str) -> str:
     """运行 P3 上下文理解 Agent"""
     agent = create_context_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P3", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 

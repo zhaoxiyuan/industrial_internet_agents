@@ -73,10 +73,11 @@ class AgentLoggingCallback(BaseCallbackHandler):
     4. Agent 入口/出口
     """
 
-    def __init__(self, agent_name: str = "Agent"):
+    def __init__(self, agent_name: str = "Agent", llm_params: dict = None):
         super().__init__()
         self.agent_name = agent_name
         self._indent = 0
+        self._llm_params = llm_params or {}
 
     def _log(self, level: int, msg: str, data: Dict = None):
         """内部日志方法"""
@@ -107,24 +108,52 @@ class AgentLoggingCallback(BaseCallbackHandler):
     def on_llm_start(
         self, serialized: Dict[str, Any], prompts: List[str], **kwargs
     ) -> None:
-        """LLM 调用入口"""
-        self._log(logging.INFO, ">>> LLM 调用开始", {"prompts": _truncate_content(prompts, 300)})
+        """LLM 调用入口 - 记录完整参数和提示词"""
+        # 提取 LLM 配置信息
+        llm_config = {
+            "model": serialized.get("name", "unknown"),
+            "model_type": serialized.get("type", "unknown"),
+        }
+        # 从 kwargs 中提取额外配置
+        if "invocation_params" in kwargs:
+            params = kwargs["invocation_params"]
+            llm_config.update({
+                "temperature": params.get("temperature"),
+                "max_tokens": params.get("max_tokens"),
+                "top_p": params.get("top_p"),
+                "frequency_penalty": params.get("frequency_penalty"),
+                "presence_penalty": params.get("presence_penalty"),
+                "stop": params.get("stop"),
+            })
+        # 合并初始化时的 LLM 参数
+        if self._llm_params:
+            llm_config.update(self._llm_params)
+
+        self._log(logging.INFO, ">>> LLM 调用开始", {
+            "llm_config": llm_config,
+            "prompts": prompts
+        })
 
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
-        """LLM 调用结束"""
+        """LLM 调用结束 - 记录完整响应"""
         try:
             outputs = []
             for generations in response.generations:
                 for gen in generations:
                     if isinstance(gen, ChatGeneration):
                         outputs.append({
-                            "text": _truncate_content(gen.text, 500),
-                            "message": _truncate_content(str(gen.message), 500) if hasattr(gen, 'message') else None
+                            "text": gen.text,
+                            "message": str(gen.message) if hasattr(gen, 'message') else None,
+                            "generation_info": gen.generation_info if hasattr(gen, 'generation_info') else None
                         })
                     else:
-                        outputs.append({"text": _truncate_content(gen.text, 500)})
+                        outputs.append({
+                            "text": gen.text,
+                            "generation_info": gen.generation_info if hasattr(gen, 'generation_info') else None
+                        })
             self._log(logging.INFO, "<<< LLM 调用结束", {"outputs": outputs})
         except Exception as e:
+            logger.exception(f"[{self.agent_name}] LLM 响应解析异常: {e}")
             self._log(logging.INFO, f"<<< LLM 调用结束 (解析失败: {e})")
 
     def on_llm_error(self, error: Exception, **kwargs) -> None:
@@ -291,11 +320,36 @@ def push_websocket_log(job_id: str, level: str, source: str, message: str, data:
         pass  # 队列满，跳过
 
 
-def get_logging_callback(agent_name: str = "Agent") -> Optional[AgentLoggingCallback]:
-    """获取日志回调处理器"""
+def get_logging_callback(agent_name: str = "Agent", llm_params: dict = None) -> Optional[AgentLoggingCallback]:
+    """获取日志回调处理器
+
+    Args:
+        agent_name: Agent 名称，用于日志标识
+        llm_params: LLM 配置参数，会在每次 LLM 调用时记录
+    """
     if AGENT_LOGGING_ENABLED:
-        return AgentLoggingCallback(agent_name)
+        return AgentLoggingCallback(agent_name, llm_params)
     return None
+
+
+def get_agent_config(thread_id: str = "default", agent_name: str = "Agent", llm_params: dict = None, extra_config: dict = None) -> dict:
+    """生成带日志回调的 agent config
+
+    Args:
+        thread_id: 线程ID
+        agent_name: Agent 名称
+        llm_params: LLM 配置参数
+        extra_config: 额外的配置项
+    """
+    callback = get_logging_callback(agent_name, llm_params)
+    config = {
+        "configurable": {"thread_id": thread_id},
+    }
+    if callback:
+        config["callbacks"] = [callback]
+    if extra_config:
+        config.update(extra_config)
+    return config
 
 
 def get_stage_logger(stage_name: str) -> StageLoggingCallback:

@@ -9,9 +9,10 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model
+from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
 
 
 # ============================================================
@@ -197,7 +198,7 @@ def verify_recommendation(task_id: str) -> str:
 
 def create_verify_agent():
     """创建 P5 作业前条件核验 Agent（基础版本，无 HITL）"""
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P5")
     tools = [verify_checklist, verify_execute, verify_recommendation]
     return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P5"))
 
@@ -207,7 +208,7 @@ def create_verify_agent_with_hitl():
 
     使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
     """
-    llm = create_chat_model()
+    llm = create_chat_model_with_logging("P5")
     tools = [verify_checklist, verify_execute, verify_recommendation]
 
     # 创建 HITL Middleware
@@ -231,7 +232,8 @@ def create_verify_agent_with_hitl():
 def run_verify_agent(message: str) -> str:
     """运行 P5 作业前条件核验 Agent"""
     agent = create_verify_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P5", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
