@@ -1,8 +1,0 @@
-{
-  "job_id": "20260812230803001",
-  "stage": "P1",
-  "started_at": "2026-08-12T15:08:03.771963+00:00",
-  "completed": true,
-  "completed_at": "2026-08-12T15:08:39.276084+00:00",
-  "permit_file": "/Users/zhaohong/Documents/中石油数智工作学习/5. repository/industrial_internet_agents/agents/data/jobs/20260812230803001/permit.json"
-}

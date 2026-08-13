@@ -14,7 +14,7 @@ def get_agents_dir():
 def get_jobs_dir():
     """获取作业根目录"""
     return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data", "jobs"
     )
 
