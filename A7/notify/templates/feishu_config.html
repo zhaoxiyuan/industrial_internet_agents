@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>A7/notify — 飞书通道配置</title>
+  <style>
+    :root {
+      --bg: #f5f6fa;
+      --card-bg: #ffffff;
+      --border: #e0e3eb;
+      --primary: #3370ff;
+      --primary-hover: #2858d9;
+      --danger: #e54545;
+      --warn: #f59e0b;
+      --ok: #16a34a;
+      --text: #1f2329;
+      --text-muted: #646a73;
+      --code-bg: #f0f2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .container { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .subtitle { color: var(--text-muted); margin: 0 0 20px; font-size: 13px; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .field {
+      display: grid;
+      grid-template-columns: 200px 1fr auto;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .field label { font-size: 13px; color: var(--text); }
+    .field label .key { font-family: monospace; color: var(--text-muted); font-size: 12px; }
+    .field input, .field textarea, .field select {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 13px;
+      background: #fff;
+    }
+    .field textarea { min-height: 90px; resize: vertical; }
+    .field .help { font-size: 11px; color: var(--text-muted); }
+    .btn {
+      padding: 7px 14px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn:hover { background: #f0f2f7; }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    .btn-danger { color: var(--danger); border-color: var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    th { color: var(--text-muted); font-weight: 500; }
+    input[type="text"] { font-family: monospace; }
+    .status { font-size: 13px; padding: 8px 12px; border-radius: 4px; margin-top: 8px; }
+    .status-ok { background: #ecfdf5; color: var(--ok); border: 1px solid #a7f3d0; }
+    .status-fail { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+    .status-info { background: #eff6ff; color: var(--primary); border: 1px solid #bfdbfe; }
+    .toast {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      z-index: 9999;
+      animation: fade-in 0.2s ease-out;
+    }
+    .toast-ok { background: var(--ok); color: #fff; }
+    .toast-fail { background: var(--danger); color: #fff; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+    pre.code-block {
+      background: var(--code-bg);
+      padding: 10px 12px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 4px 0 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 11px;
+      border-radius: 3px;
+      background: var(--code-bg);
+      color: var(--text-muted);
+    }
+    .badge-sens { background: #fef3c7; color: #92400e; }
+    .add-row {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+    }
+    .add-row input { flex: 1; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📡 飞书通道配置</h1>
+  <p class="subtitle">
+    A7/notify → Channel Gateway → 飞书 Open API ·
+    写入 <span id="env-path-display" class="badge">…</span>
+    （备份到 .env.bak）
+  </p>
+
+  <!-- ============ Gateway 连接 ============ -->
+  <div class="card">
+    <div class="card-title">① Channel Gateway 连接</div>
+    <div class="field">
+      <label>GATEWAY_HOST <span class="key">(URL)</span></label>
+      <input id="gateway-host" type="text" placeholder="http://127.0.0.1:8787">
+      <button class="btn" onclick="testGateway()">测试连接</button>
+    </div>
+    <div class="field">
+      <label>CG_API_KEY <span class="key">(敏感)</span>
+        <span class="badge badge-sens">敏感</span>
+      </label>
+      <input id="cg-api-key" type="password" placeholder="(保持原值请留空；*** 表示不修改)">
+      <button class="btn" onclick="toggleSecret('cg-api-key')">显示</button>
+    </div>
+    <div id="gateway-test-result"></div>
+  </div>
+
+  <!-- ============ 飞书 App 凭据 ============ -->
+  <div class="card">
+    <div class="card-title">② 飞书 App 凭据 <span class="badge">可选 — 仅在直接调飞书 Open API 时使用</span></div>
+    <div class="field">
+      <label>FEISHU_APP_ID</label>
+      <input id="feishu-app-id" type="text" placeholder="cli_xxxxxxxxxxxx">
+    </div>
+    <div class="field">
+      <label>FEISHU_APP_SECRET <span class="key">(敏感)</span>
+        <span class="badge badge-sens">敏感</span>
+      </label>
+      <input id="feishu-app-secret" type="password" placeholder="(保持原值请留空)">
+      <button class="btn" onclick="toggleSecret('feishu-app-secret')">显示</button>
+    </div>
+    <div class="field">
+      <label>FEISHU_DOMAIN</label>
+      <select id="feishu-domain">
+        <option value="feishu">feishu (中国站)</option>
+        <option value="lark">lark (国际版)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ============ 责任岗位映射 ============ -->
+  <div class="card">
+    <div class="card-title">③ 飞书收件人（FEISHU_USER_MAP）</div>
+    <p class="subtitle" style="margin-bottom:8px">
+      主键：<code>open_id</code>（飞书用户唯一 ID）。每个收件人四字段：
+      <code>chat_id</code>（群；空→走单聊）、<code>role</code>（责任岗位）、<code>name</code>（中文姓名）。
+      同一 <code>role</code> 可对应多人 → P8 推送时群发。
+    </p>
+
+    <table id="user-map-table" style="margin-top:8px">
+      <thead>
+        <tr>
+          <th style="width:24%">open_id <span class="key">(主键)</span></th>
+          <th style="width:24%">chat_id <span class="key">(群；空=单聊)</span></th>
+          <th style="width:18%">role <span class="key">(责任岗位)</span></th>
+          <th style="width:18%">name <span class="key">(中文姓名)</span></th>
+          <th style="width:80px">操作</th>
+        </tr>
+      </thead>
+      <tbody id="user-map-rows"></tbody>
+    </table>
+
+    <div class="add-row">
+      <input id="new-um-open-id" type="text" placeholder="ou_xxx（open_id）">
+      <input id="new-um-chat-id" type="text" placeholder="oc_xxx（可空）">
+      <input id="new-um-role" type="text" placeholder="作业负责人 / 车间主任">
+      <input id="new-um-name" type="text" placeholder="张三">
+      <button class="btn btn-primary" onclick="addUserMapRow()">+ 添加</button>
+    </div>
+
+    <div id="user-map-status" style="margin-top:8px;"></div>
+
+    <div id="legacy-warn" style="margin-top:8px; display:none;">
+      <div class="status status-warn">
+        ⚠ 检测到旧变量残留 <code id="legacy-list"></code>；
+        每次保存时会自动清理。
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 预演解析 ============ -->
+  <div class="card">
+    <div class="card-title">④ 预演 USER_MAP 收件人解析</div>
+    <div class="field">
+      <label>assignee_role <span class="key">(测试输入)</span></label>
+      <input id="test-assignee-role" type="text" placeholder="车间主任">
+      <button class="btn" onclick="testResolve()">解析</button>
+    </div>
+    <div id="resolve-result"></div>
+  </div>
+
+  <!-- ============ 实时监听：捕获 chat_id ============ -->
+  <div class="card" id="listener-card">
+    <div class="card-title">
+      ⑤ 实时捕获 chat_id
+      <span class="badge">前置：① + ② 已配置</span>
+    </div>
+
+    <p class="subtitle" style="margin: 0 0 12px;">
+      启动后端轮询 <code>Gateway /v1/events</code>，你去飞书群（或跟 Bot 单聊）发条消息，
+      这里会实时抓到 <code>chat_id</code>（群） / <code>open_id</code>（单聊），一键写入 <code>.env</code>。
+    </p>
+
+    <div class="btn-row" style="margin-bottom: 12px;">
+      <button class="btn btn-primary" id="btn-listener-start" onclick="startListener()">▶ 开始监听</button>
+      <button class="btn" id="btn-listener-refresh" onclick="refreshListener()">🔄 刷新</button>
+      <button class="btn btn-danger" id="btn-listener-stop" onclick="stopListener()">⏹ 停止</button>
+      <span id="listener-status-badge" class="badge" style="margin-left:8px;">未启动</span>
+    </div>
+
+    <div id="listener-info" class="status status-info" style="display:none;">
+      <span id="listener-info-text">点击「开始监听」启动</span>
+    </div>
+
+    <div id="listener-events" style="margin-top:12px;"></div>
+
+    <!-- 保存表单（事件被选中后才出现） -->
+    <div id="save-captured-form" style="margin-top:16px; display:none; border-top: 1px dashed var(--border); padding-top:12px;">
+      <strong style="font-size:13px;">💾 把捕获到的 ID 写入 FEISHU_USER_MAP</strong>
+      <div class="field" style="margin-top:8px;">
+        <label>已选事件</label>
+        <code id="selected-event-summary" style="font-size:12px; padding:6px 10px; background:var(--code-bg); border-radius:4px;">（未选）</code>
+      </div>
+      <div class="field">
+        <label>role（责任岗位名）</label>
+        <input id="captured-role" type="text" placeholder="作业负责人 / 车间主任 / HSE经理">
+      </div>
+      <div class="field">
+        <label>name（中文姓名 — 人只记得自己叫什么，不记得 ID）</label>
+        <input id="captured-name" type="text" placeholder="张三 / 李四">
+      </div>
+      <div class="field">
+        <label>推送通道</label>
+        <select id="captured-channel">
+          <option value="auto">自动（chat_id 优先；缺则 open_id）</option>
+          <option value="chat_id">强制群聊（要求 chat_id）</option>
+          <option value="open_id">强制单聊（只用 open_id）</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveCaptured()">💾 写入 .env</button>
+        <span style="color:var(--text-muted); font-size:12px;">写前会自动备份 .env.bak</span>
+      </div>
+      <div id="save-captured-status" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- ============ 保存 ============ -->
+  <div class="card">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveAll()">💾 保存到 .env</button>
+      <button class="btn" onclick="loadAll()">🔄 重新加载</button>
+      <span style="color:var(--text-muted); font-size:12px; margin-left:8px;">
+        保存前会自动备份到 .env.bak
+      </span>
+    </div>
+    <div id="save-status"></div>
+  </div>
+</div>
+
+<script>
+let _view = null;
+
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind === 'ok' ? 'toast-ok' : 'toast-fail');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+function toggleSecret(id) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function renderManaged(view) {
+  const m = view.managed;
+  document.getElementById('env-path-display').textContent = view.env_path;
+  document.getElementById('gateway-host').value = m.GATEWAY_HOST.value || m.GATEWAY_HOST.default || '';
+  document.getElementById('feishu-app-id').value = m.FEISHU_APP_ID.value || '';
+  document.getElementById('feishu-domain').value = m.FEISHU_DOMAIN.value || m.FEISHU_DOMAIN.default || 'feishu';
+  // 敏感字段：如果有值（has_value），占位符 "***"
+  const cgEl = document.getElementById('cg-api-key');
+  cgEl.value = m.CG_API_KEY.has_value ? '***' : '';
+  cgEl.placeholder = m.CG_API_KEY.has_value ? '(保持原值：*** ；输入新值覆盖)' : '(空 → 删除该 key)';
+  const fsEl = document.getElementById('feishu-app-secret');
+  fsEl.value = m.FEISHU_APP_SECRET.has_value ? '***' : '';
+  fsEl.placeholder = m.FEISHU_APP_SECRET.has_value ? '(保持原值：*** ；输入新值覆盖)' : '(空 → 删除该 key)';
+}
+
+function renderUserMapRows(user_map) {
+  const tbody = document.getElementById('user-map-rows');
+  tbody.innerHTML = '';
+  user_map.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" data-idx="${idx}" data-field="open_id" value="${escapeHtml(row.open_id || '')}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="chat_id" value="${escapeHtml(row.chat_id || '')}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="role"    value="${escapeHtml(row.role || '')}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="name"    value="${escapeHtml(row.name || '')}"></td>
+      <td><button class="btn btn-danger" onclick="deleteUserMapRow(${idx})">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  // 旧 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE> 残留提示
+  const legacy = (_view && _view.legacy_group_overrides) || [];
+  const legacyWarn = document.getElementById('legacy-warn');
+  if (legacy.length) {
+    legacyWarn.style.display = 'block';
+    document.getElementById('legacy-list').textContent =
+      ['FEISHU_CONVERSATION_MAP', ...legacy.map(g => g.key)]
+        .filter((v, i, arr) => arr.indexOf(v) === i)  // 去重
+        .join(', ');
+  } else {
+    legacyWarn.style.display = 'none';
+  }
+}
+
+function collectUserMap() {
+  const rows = document.querySelectorAll('#user-map-rows tr');
+  const out = [];
+  rows.forEach(tr => {
+    const inputs = tr.querySelectorAll('input');
+    const row = {
+      open_id: inputs[0].value.trim(),
+      chat_id: inputs[1].value.trim(),
+      role:    inputs[2].value.trim(),
+      name:    inputs[3].value.trim(),
+    };
+    out.push(row);
+  });
+  return out;
+}
+
+function addUserMapRow() {
+  const open_id = document.getElementById('new-um-open-id').value.trim();
+  const chat_id = document.getElementById('new-um-chat-id').value.trim();
+  const role    = document.getElementById('new-um-role').value.trim();
+  const name    = document.getElementById('new-um-name').value.trim();
+  if (!open_id || !role || !name) {
+    toast('open_id / role / name 必填；chat_id 可空', 'fail');
+    return;
+  }
+  const tbody = document.getElementById('user-map-rows');
+  const idx = tbody.children.length;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" data-idx="${idx}" data-field="open_id" value="${escapeHtml(open_id)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="chat_id" value="${escapeHtml(chat_id)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="role"    value="${escapeHtml(role)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="name"    value="${escapeHtml(name)}"></td>
+    <td><button class="btn btn-danger" onclick="deleteUserMapRow(${idx})">删除</button></td>
+  `;
+  tbody.appendChild(tr);
+  document.getElementById('new-um-open-id').value = '';
+  document.getElementById('new-um-chat-id').value = '';
+  document.getElementById('new-um-role').value = '';
+  document.getElementById('new-um-name').value = '';
+}
+
+function deleteUserMapRow(idx) {
+  const tbody = document.getElementById('user-map-rows');
+  if (tbody.children[idx]) tbody.children[idx].remove();
+}
+
+async function loadAll() {
+  try {
+    const r = await fetch('/api/feishu/config');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    _view = j.view;
+    renderManaged(_view);
+    renderUserMapRows(_view.user_map || []);
+    toast(`已加载：${(_view.user_map || []).length} 个收件人`, 'ok');
+  } catch (e) {
+    toast('加载失败：' + e.message, 'fail');
+  }
+}
+
+function collectManaged() {
+  return {
+    GATEWAY_HOST: document.getElementById('gateway-host').value.trim(),
+    CG_API_KEY: document.getElementById('cg-api-key').value,
+    FEISHU_APP_ID: document.getElementById('feishu-app-id').value.trim(),
+    FEISHU_APP_SECRET: document.getElementById('feishu-app-secret').value,
+    FEISHU_DOMAIN: document.getElementById('feishu-domain').value.trim(),
+  };
+}
+
+async function saveAll() {
+  const managed = collectManaged();
+  const user_map = collectUserMap();
+  const statusEl = document.getElementById('save-status');
+  statusEl.innerHTML = '<div class="status status-info">保存中…</div>';
+  try {
+    const r = await fetch('/api/feishu/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ managed, user_map }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    let msg = `已保存：updated=${(j.updated || []).join(', ') || '(无)'}`;
+    if (j.removed && j.removed.length) msg += `；removed=${j.removed.join(', ')}`;
+    if (typeof j.user_map_size === 'number') msg += `；USER_MAP 共 ${j.user_map_size} 条`;
+    if (j.backup) msg += `；备份：${j.backup}`;
+    statusEl.innerHTML = `<div class="status status-ok">${msg}</div>`;
+    toast('保存成功', 'ok');
+    setTimeout(loadAll, 500);
+  } catch (e) {
+    statusEl.innerHTML = `<div class="status status-fail">保存失败：${e.message}</div>`;
+    toast('保存失败：' + e.message, 'fail');
+  }
+}
+
+async function testGateway() {
+  const host = document.getElementById('gateway-host').value.trim();
+  const apiKeyRaw = document.getElementById('cg-api-key').value;
+  // 测试时如果还是 "***"，则不传 key（避免误用占位符）
+  const apiKey = (apiKeyRaw === '***' || !apiKeyRaw) ? '' : apiKeyRaw;
+  const resultEl = document.getElementById('gateway-test-result');
+  resultEl.innerHTML = '<div class="status status-info">探测中…</div>';
+  try {
+    const r = await fetch('/api/feishu/test/gateway', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ host, api_key: apiKey }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    const data = j.data;
+    const cls = j.ok ? 'status-ok' : 'status-fail';
+    const pretty = data && typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+    resultEl.innerHTML = `
+      <div class="status ${cls}">
+        <strong>${j.ok ? '✓ 连接成功' : '✗ 连接失败'}</strong> · status=${j.status ?? 'n/a'} · url=${j.url}
+        <pre class="code-block">${escapeHtml(pretty)}</pre>
+      </div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="status status-fail">探测异常：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function testResolve() {
+  const role = document.getElementById('test-assignee-role').value.trim();
+  const userMapRows = collectUserMap();
+  // 序列化当前 UI 表为 JSON 字符串（与 .env 格式一致）
+  const userMapJson = JSON.stringify(
+    Object.fromEntries(
+      userMapRows
+        .filter(r => r.open_id && r.role)
+        .map(r => [r.open_id, {chat_id: r.chat_id, role: r.role, name: r.name}])
+    )
+  );
+  const resultEl = document.getElementById('resolve-result');
+  resultEl.innerHTML = '<div class="status status-info">解析中…</div>';
+  try {
+    const r = await fetch('/api/feishu/test/resolve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        assignee_role: role,
+        user_map_json: userMapJson,
+      }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    const sourceBadge = {
+      USER_MAP: 'USER_MAP（FEISHU_USER_MAP）',
+      DEV_FALLBACK: 'DEV_FALLBACK（兜底占位符）',
+    }[j.source] || j.source;
+    let html = `<div class="status ${j.source === 'DEV_FALLBACK' ? 'status-info' : 'status-ok'}">
+      <strong>${j.source === 'DEV_FALLBACK' ? '⚠ 命中兜底（建议补全配置）' : '✓ 命中'}</strong>
+      · 来源：${sourceBadge} · 共 ${j.count} 个收件人<br>
+      <ul style="margin:6px 0 0 0; padding-left:20px;">
+        ${(j.recipients || []).map(rc => `
+          <li>
+            <code>${escapeHtml(rc.chat_id || rc.open_id)}</code>
+            <span style="color:var(--text-muted);font-size:11px;">
+              (${escapeHtml(rc.receive_id_type)} · ${escapeHtml(rc.name || '(无姓名)')} · open_id=${escapeHtml(rc.open_id || '(空)')})
+            </span>
+          </li>`).join('')}
+      </ul>
+    </div>`;
+    if (!j.map_valid_json) {
+      html += `<div class="status status-fail" style="margin-top:6px">⚠ FEISHU_USER_MAP JSON 解析失败：${escapeHtml(j.map_error)}</div>`;
+    }
+    const umStatus = document.getElementById('user-map-status');
+    if (umStatus) {
+      umStatus.innerHTML = !j.map_valid_json
+        ? `<div class="status status-fail">⚠ JSON 不合法：${escapeHtml(j.map_error)}</div>`
+        : '<div class="status status-ok">✓ JSON 合法</div>';
+    }
+    resultEl.innerHTML = html;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="status status-fail">解析异常：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// ============================================================
+// ⑤ 实时监听
+// ============================================================
+let _listenerId = null;
+let _selectedSequence = null;
+let _pollTimer = null;
+
+function setListenerBadge(text, kind) {
+  const el = document.getElementById('listener-status-badge');
+  el.textContent = text;
+  const colors = {
+    idle:    {bg: '#e0e3eb', fg: '#646a73'},
+    active:  {bg: '#dcfce7', fg: '#16a34a'},
+    error:   {bg: '#fee2e2', fg: '#dc2626'},
+    stopped: {bg: '#fef3c7', fg: '#92400e'},
+  };
+  const c = colors[kind] || colors.idle;
+  el.style.background = c.bg;
+  el.style.color = c.fg;
+}
+
+function startPolling() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(refreshListener, 1500);
+}
+
+function stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+async function startListener() {
+  const infoEl = document.getElementById('listener-info');
+  infoEl.style.display = 'block';
+  infoEl.className = 'status status-info';
+  infoEl.innerHTML = '启动中…';
+
+  try {
+    const r = await fetch('/api/feishu/listener/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({poll_interval_sec: 2.0, idle_timeout_sec: 600}),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+
+    _listenerId = j.listener_id;
+    setListenerBadge(`监听中 · ${_listenerId}`, 'active');
+    infoEl.className = 'status status-ok';
+    infoEl.innerHTML = `<strong>✓ ${j.instruction}</strong><br>listener_id: <code>${_listenerId}</code> · 轮询间隔 ${j.snapshot.poll_interval_sec}s`;
+    startPolling();
+  } catch (e) {
+    setListenerBadge('启动失败', 'error');
+    infoEl.className = 'status status-fail';
+    infoEl.innerHTML = `启动失败：${escapeHtml(e.message)}<br><span style="color:var(--text-muted);font-size:12px;">请确认 ① GATEWAY_HOST + CG_API_KEY 已配置并保存</span>`;
+  }
+}
+
+async function stopListener() {
+  try {
+    const r = await fetch('/api/feishu/listener/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({listener_id: _listenerId || ''}),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    setListenerBadge(`已停止 · ${j.stopped.length} 个`, 'stopped');
+    stopPolling();
+  } catch (e) {
+    toast('停止失败：' + e.message, 'fail');
+  }
+}
+
+async function refreshListener() {
+  try {
+    const r = await fetch('/api/feishu/listener/status');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    renderListener(j);
+  } catch (e) {
+    // ignore
+  }
+}
+
+function renderListener(j) {
+  const snap = j.snapshot;
+  if (!snap) {
+    setListenerBadge('未启动', 'idle');
+    return;
+  }
+  _listenerId = snap.listener_id;
+  // status badge
+  if (snap.status === 'listening' || snap.status === 'starting') {
+    setListenerBadge(`监听中 · ${snap.listener_id}`, 'active');
+  } else if (snap.status === 'error') {
+    setListenerBadge('错误', 'error');
+  } else if (snap.status === 'stopped') {
+    setListenerBadge(`已停止（${snap.error || ''}）`, 'stopped');
+    stopPolling();
+  }
+
+  // info panel
+  const infoEl = document.getElementById('listener-info');
+  infoEl.style.display = 'block';
+  const statusBadge = snap.status === 'listening' ? 'status-ok'
+                    : snap.status === 'error' ? 'status-fail'
+                    : 'status-info';
+  infoEl.className = 'status ' + statusBadge;
+  const convTypes = {};
+  snap.events.forEach(e => {
+    const t = e.conversation_type || '?';
+    convTypes[t] = (convTypes[t] || 0) + 1;
+  });
+  const typeSummary = Object.entries(convTypes).map(([t,n]) => `${t}=${n}`).join(', ') || '(none)';
+  infoEl.innerHTML = `
+    <strong>状态：${snap.status}</strong> ·
+    累计轮询 ${snap.poll_count} 次 ·
+    新捕获 ${snap.new_count} 条 ·
+    last_seq=${snap.last_sequence}
+    ${snap.error ? `<br><span style="color:var(--danger);">⚠ ${escapeHtml(typeof snap.error === 'object' ? JSON.stringify(snap.error) : snap.error)}</span>` : ''}
+    <br><span style="color:var(--text-muted);font-size:12px;">会话类型分布：${typeSummary}</span>
+  `;
+
+  // events list
+  const eventsEl = document.getElementById('listener-events');
+  if (!snap.events.length) {
+    eventsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">暂无事件。点击「▶ 开始监听」后到飞书群/单聊里发条消息。</div>';
+    return;
+  }
+  // 倒序：最新在最上
+  const rows = [...snap.events].reverse().map(evt => {
+    const isSelected = _selectedSequence === evt.sequence;
+    const convIcon = evt.conversation_type === 'group' ? '👥'
+                    : evt.conversation_type === 'direct' ? '💬' : '❓';
+    const chatShort = (evt.chat_id || '').slice(0, 12) || '(empty)';
+    const openShort = (evt.open_id || '').slice(0, 12) || '(empty)';
+    const textShort = (evt.text || '').slice(0, 40) || '(no text)';
+    return `
+      <tr style="cursor:pointer; ${isSelected ? 'background:#eef4ff;' : ''}"
+          onclick="selectEvent(${evt.sequence})">
+        <td style="width:30px;">
+          <input type="radio" name="selected-event" ${isSelected ? 'checked' : ''}
+                 onclick="event.stopPropagation(); selectEvent(${evt.sequence})">
+        </td>
+        <td style="width:50px;">${convIcon}</td>
+        <td>
+          <div style="font-size:12px;"><strong>${escapeHtml(evt.sender_name || '匿名')}</strong> · seq=${evt.sequence}</div>
+          <div style="font-size:11px;color:var(--text-muted);">${escapeHtml(textShort)}</div>
+        </td>
+        <td style="font-family:monospace;font-size:11px;">
+          <div>chat_id: ${escapeHtml(chatShort)}${evt.chat_id && evt.chat_id.length > 12 ? '…' : ''}</div>
+          <div>open_id: ${escapeHtml(openShort)}${evt.open_id && evt.open_id.length > 12 ? '…' : ''}</div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  eventsEl.innerHTML = `
+    <table style="width:100%;">
+      <thead><tr><th></th><th></th><th>发送者 / 消息</th><th>捕获 ID</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function selectEvent(seq) {
+  _selectedSequence = seq;
+  // 显示保存表单
+  const form = document.getElementById('save-captured-form');
+  form.style.display = 'block';
+
+  // 从最近一次 snapshot 找
+  fetch('/api/feishu/listener/status').then(r => r.json()).then(j => {
+    if (!j.ok || !j.snapshot) return;
+    const evt = (j.snapshot.events || []).find(e => e.sequence === seq);
+    if (!evt) return;
+    document.getElementById('selected-event-summary').innerHTML =
+      `seq=${evt.sequence} · ${escapeHtml(evt.sender_name || '匿名')} · ` +
+      `text="${escapeHtml((evt.text || '').slice(0, 30))}"<br>` +
+      `chat_id: <code>${escapeHtml(evt.chat_id || '(empty)')}</code> · ` +
+      `open_id: <code>${escapeHtml(evt.open_id || '(empty)')}</code>`;
+    // 自动根据 conversation_type 切换 channel
+    const chSel = document.getElementById('captured-channel');
+    if (evt.conversation_type === 'direct') {
+      chSel.value = 'open_id';
+    } else if (evt.conversation_type === 'group') {
+      chSel.value = 'chat_id';
+    } else {
+      chSel.value = 'auto';
+    }
+    refreshListener();   // 刷新高亮
+  });
+}
+
+async function saveCaptured() {
+  if (!_listenerId || _selectedSequence === null) {
+    toast('请先选中一个事件', 'fail');
+    return;
+  }
+  const role = document.getElementById('captured-role').value.trim();
+  const name = document.getElementById('captured-name').value.trim();
+  const channel = document.getElementById('captured-channel').value;
+  if (!role) {
+    toast('请填 role（责任岗位名）', 'fail');
+    return;
+  }
+  if (!name) {
+    toast('请填 name（中文姓名）', 'fail');
+    return;
+  }
+  const statusEl = document.getElementById('save-captured-status');
+  statusEl.innerHTML = '<div class="status status-info">写入中…</div>';
+  try {
+    const r = await fetch('/api/feishu/listener/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        listener_id: _listenerId,
+        sequence: _selectedSequence,
+        role, name, channel,
+      }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    const s = j.saved;
+    const cap = j.captured || {};
+    statusEl.innerHTML = `<div class="status status-ok">
+      ✓ 已写入 <code>FEISHU_USER_MAP[${escapeHtml(s.open_id)}]</code>
+        = {chat_id: "${escapeHtml(cap.chat_id || '')}",
+           role: "${escapeHtml(role)}",
+           name: "${escapeHtml(name)}"}<br>
+      USER_MAP 现共 <strong>${s.user_map_size}</strong> 条
+      ${s.existed ? '（已覆盖旧条目）' : '（新增）'}
+      ${(s.legacy_removed && s.legacy_removed.length) ? `<br>🧹 已清理旧变量：${s.legacy_removed.map(escapeHtml).join(', ')}` : ''}
+      <br><span style="font-size:11px;color:var(--text-muted);">备份：${escapeHtml(s.backup || '(无)')}</span>
+    </div>`;
+    toast('已写入 .env', 'ok');
+    // 同步刷新主视图
+    setTimeout(loadAll, 500);
+  } catch (e) {
+    statusEl.innerHTML = `<div class="status status-fail">写入失败：${escapeHtml(e.message)}</div>`;
+    toast('写入失败：' + e.message, 'fail');
+  }
+}
+
+window.addEventListener('DOMContentLoaded', loadAll);
+window.addEventListener('DOMContentLoaded', refreshListener);   // 恢复上次 listener 状态
+</script>
+</body>
+</html>
