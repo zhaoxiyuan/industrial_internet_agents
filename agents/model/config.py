@@ -2,6 +2,8 @@
 共享配置模块
 """
 from pathlib import Path
+
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -11,8 +13,8 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = ""
     MODEL_PROVIDER: str = ""
-    TEMPERATURE: float = 0.7
-    MAX_TOKENS: int = 2048
+    TEMPERATURE: float = Field(default=0.7, validation_alias="OPENAI_TEMPERATURE")
+    MAX_TOKENS: int = Field(default=8192, validation_alias="OPENAI_MAX_TOKENS")
 
     class Config:
         env_file = Path(__file__).parent.parent.parent / ".env"
