@@ -14,6 +14,19 @@ from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
 
+# ★★★ 长期记忆接入（罗盘长期记忆） ★★★
+#   P8 长期记忆后端 = A7.storage.p8_long_term
+#   - 索引层（轻量；LLM 每次 invoke 看）：get_index_entry / search_archived_descriptions / load_all_index_entries
+#   - 数据层（按需精确加载）：get_archived_job / search_archived_jobs / load_all_archived_jobs
+#   写入入口（仅 P8ArchiveMiddleware 调用）：save_archived_job
+#   详见 A7/storage/p8_long_term.py 顶部"长期记忆接口（罗盘长期记忆）"注释块
+from A7.storage import (
+    search_archived_descriptions,   # 索引层：子串搜索（LLM "两步走" 第一步）
+    get_archived_job,              # 数据层：精确查询（LLM "两步走" 第二步）
+    load_all_index_entries,        # 索引层：列出全部（前端面板 / LLM "列出所有归档"）
+    INDEX_FILE, ARCHIVE_FILE,      # 路径常量（诊断用）
+)
+
 
 # ============================================================
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
@@ -218,6 +231,85 @@ def disposition_list(task_id: str) -> str:
     return json.dumps(make_response("disposition list", result), ensure_ascii=False)
 
 
+# ============================================================================
+# 工具 5：recall_jobs — 长期记忆查询（罗盘长期记忆 LLM 工具入口）
+# ============================================================================
+#
+# ★★★ 长期记忆 LLM 入口（罗盘长期记忆） ★★★
+#   本工具是 P8 "长期记忆" 的 LLM 唯一入口 ——
+#   LLM 不直接访问 A7/storage；只能通过本工具发起检索。
+#   "两步走" 检索模式：
+#     step 1. recall_jobs(query) → 命中索引层（轻量；一句话描述）
+#     step 2. LLM 选 p8_job_id → get_archived_job(p8_job_id)（数据层；完整）
+#   本工具默认只返回索引层（节省 token）；如用户明确要求"看详情"，
+#   LLM 应再调一次（约定俗成：LLM 自主决策）。
+# ============================================================================
+@tool(description=(
+    "从长期记忆查询历史 P8_job。仅在用户明确要求时调用（如 '昨天那个事件最后怎么处理的'）。"
+    "query: 关键词（如 '昨天可燃气体' / 'P8J-20260813-180000-001'）。"
+    "默认返回索引层一句话描述（轻量；最多 20 条）；如需完整归档详情，"
+    "请告知用户并再发起精确查询（p8_job_id）。"
+    "★ 长期记忆入口（罗盘长期记忆）：数据源 = A7/storage/p8_long_term.py"
+))
+def recall_jobs(query: str, detail_p8_job_id: Optional[str] = None) -> str:
+    """
+    从长期记忆查询历史 P8_job（罗盘长期记忆 LLM 工具入口）。
+
+    ★★★ 长期记忆 LLM 入口（罗盘长期记忆） ★★★
+    本函数调用 A7/storage/p8_long_term.py 的索引层 + 数据层接口，
+    LLM 通过本工具访问长期记忆。
+
+    参数:
+        query: 关键词（用于索引层子串搜索；如 '可燃气体' / 'HIGH' / p8_job_id）
+        detail_p8_job_id: 可选；指定后直接走数据层精确查询（"两步走" 第二步）
+    返回:
+        标准 JSON 响应：detail_p8_job_id 给定时返回单条完整 archived P8Job；
+        否则返回 [(p8_job_id, 一句话描述), ...] 列表
+    """
+    import json
+
+    if not query and not detail_p8_job_id:
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message="recall_jobs: query 与 detail_p8_job_id 至少给一个",
+            recoverable=False,
+        ), ensure_ascii=False)
+
+    # === 路径 A：精确查询（"两步走" 第二步 — 拿详情） ===
+    if detail_p8_job_id:
+        archived = get_archived_job(detail_p8_job_id)
+        if archived is None:
+            return json.dumps(make_error(
+                code="LONG_TERM_NOT_FOUND",
+                message=f"长期记忆无 p8_job_id={detail_p8_job_id}",
+                recoverable=False,
+            ), ensure_ascii=False)
+        return json.dumps(make_response(
+            "recall_jobs (detail)",
+            {"p8_job_id": detail_p8_job_id, "archived_job": archived},
+        ), ensure_ascii=False)
+
+    # === 路径 B：索引层子串搜索（"两步走" 第一步 — 拿概览） ===
+    # 调用 A7.storage 的索引层接口 ——
+    # ★ 罗盘长期记忆（索引层）接口: search_archived_descriptions
+    hits = search_archived_descriptions(query, limit=20)
+    # 也带上"列出全部"分支（用户说"列出所有归档"且 query 为空）
+    if not query:
+        hits = load_all_index_entries()
+
+    return json.dumps(make_response(
+        "recall_jobs (index)",
+        {
+            "query": query,
+            "hits": [{"p8_job_id": pid, "description": desc} for pid, desc in hits],
+            "count": len(hits),
+            "next_step_hint": (
+                "若用户要看某条详情，请再用 detail_p8_job_id='<p8_job_id>' 再调一次"
+            ),
+        },
+    ), ensure_ascii=False)
+
+
 # ============================================================
 # Agent 工厂
 # ============================================================
@@ -225,7 +317,8 @@ def disposition_list(task_id: str) -> str:
 def create_disposition_agent():
     """创建 P8 人机协同处置 Agent（基础版本，无 HITL）"""
     llm = create_chat_model_with_logging("P8")
-    tools = [disposition_create, disposition_confirm, disposition_status, disposition_list]
+    tools = [disposition_create, disposition_confirm, disposition_status,
+             disposition_list, recall_jobs]   # recall_jobs = 长期记忆入口（罗盘长期记忆）
     return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P8"))
 
 
@@ -235,7 +328,8 @@ def create_disposition_agent_with_hitl():
     使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
     """
     llm = create_chat_model_with_logging("P8")
-    tools = [disposition_create, disposition_confirm, disposition_status, disposition_list]
+    tools = [disposition_create, disposition_confirm, disposition_status,
+             disposition_list, recall_jobs]   # recall_jobs 自动批准（只读）
 
     # 创建 HITL Middleware
     hitl_middleware = HumanInTheLoopMiddleware(
@@ -244,6 +338,7 @@ def create_disposition_agent_with_hitl():
             "disposition_confirm": True,        # 确认处置需要确认
             "disposition_status": False,        # 查询状态自动批准
             "disposition_list": False,          # 查询列表自动批准
+            "recall_jobs": False,               # 长期记忆只读 — 自动批准（不阻塞）
         }
     )
 

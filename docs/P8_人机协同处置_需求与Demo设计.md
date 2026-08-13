@@ -380,43 +380,62 @@ pending → notified → waiting_decision → {completed | rejected | escalated 
 - 聚合 P8_job 必须记录"聚合依据"到 `note` 字段（追溯要求）
 - 所有 HITL 决策必须记录决策者 ID（`note` 字段）
 
-## 7. 何时调 `read_p7_events`（拉取 P7 数据）
+## 7. 新数据进入 P8 的两个唯一入口
 
 > P8 工作期间 P6/A6/P7 是持续运行的，`p7_result.json.risk_events[]` 会被持续追加。
-> LLM 应按触发模式区分对待（详见 § 7.8）。
+> **P8 不存在后台守护进程**——什么时候把新 P7 数据给 P8 的 Agent，
+> 取决于以下**两个唯一入口**，除此以外没有第三种：
+
+1. **主流程调用**：`main` 调 `execute_p8(job_id, p7_data=...)`（`p7_data` 可选；不传则 P8 Agent 自行 `read_p7_events`）
+2. **用户明确要求**：用户在对话中明确说"刚才还有新的吗？"等 → LLM 主动调 `read_p7_events`
+
+> 当前实现：本期 **不改 main_agent.py**；`execute_p8` 仍按旧签名运行，
+> `p7_data` 参数仅作为后续统一改造的前向兼容预留。
 
 | 触发模式 | 调 `read_p7_events`？ | 时机 |
 |---------|---------------------|------|
-| **用户正常对话** | ✅ **按需** | 仅当用户消息隐含或明确需要 P7 数据时（见下） |
-| **主流程自动调用** | ⚠️ **不归 LLM 管** | `execute_p8` 后台线程负责；LLM 不调此工具 |
+| **主流程调用 `execute_p8`** | ⚠️ **看 `p7_data` 是否传入** | 传了 → LLM 直接用传入的 p7_data；未传 → LLM 自行 `read_p7_events(job_id)` |
 | **用户明确要求** | ✅ **立即调** | 用户问"刚才还有新的吗？"时立即拉取 |
 
-### 7.1 用户正常对话 — 调 `read_p7_events` 的判定
+### 7.1 主流程调用 — `p7_data` 透传 vs `read_p7_events`
 
-✅ **应该调**（隐含需要 P7 数据）：
+**未来 `execute_p8` 的新签名（本期不改 main_agent.py，仅做接口预留）**：
 
-- 用户问"现在有哪些 P8_job？" → 调（看 P7 是否有未入队的 risk_event）
-- 用户说"为 X 创建 P8_job" → 调（X 是 a6_event_id，需要确认已在 P7）
-- 用户问"刚才那批噪声超标处理了吗？" → 调（找噪声相关 risk_event 状态）
-- 用户问"现在还有未处置的吗？" → 调（看 P7 是否有遗漏的）
+```python
+# agents/main_agent.py（未来）
+def execute_p8(job_id: str, p7_data: dict | None = None) -> dict:
+    """主流程 P8 入口。
 
-❌ **不应该调**（用户已有上下文）：
+    ✅ 若 main 已在更上层读到 P7，可通过 p7_data 透传（避免重复 IO）。
+    ✅ 若 p7_data 为 None，则 P8 Agent 自行 read_p7_events(job_id) 拉取。
+    ❌ 不在 execute_p8 内启动后台线程 / 轮询 worker。
+    """
+    walltime = datetime.now(timezone.utc).isoformat()
+    agent = create_disposition_agent(walltime=walltime)
+    initial_msg = HumanMessage(
+        content=(
+            f"处理作业 {job_id} 的 P7 风险事件"
+            + (f"\n\n【P7 数据已注入】\n{json.dumps(p7_data, ensure_ascii=False)}" if p7_data else "")
+        )
+    )
+    config = {"configurable": {"thread_id": f"p8-{job_id}"}}
+    return agent.invoke({"messages": [initial_msg]}, config=config)
+```
 
-- 用户在确认/推进某个已知 P8_job（"RE-001 批准"）
-- 用户查询某个 P8_job 状态（"RE-002 进展如何？"）
-- 用户在说无关的事（"今天天气怎么样"）
-- 用户在做反思/总结（"今天哪些高风险？")
-
-### 7.2 主流程自动调用 — 不调 `read_p7_events`
-
-- LLM **不调** `read_p7_events`，由 `execute_p8` 后台线程负责
-- LLM 通过 HumanMessage 接收"【P7 增量】"通知，自主决定是否入队
-- 若 LLM 主动调 `read_p7_events`，工具会返回"主流程模式下请等待后台注入"提示（避免与后台线程冲突）
-
-### 7.3 用户明确要求 — 立即调
+### 7.2 用户明确要求 — LLM 主动调 `read_p7_events`
 
 - 用户消息包含"新的"、"最新"、"现在"、"刚才"、"增量"等关键词 → LLM 立即调
 - 用户消息包含"全部"、"所有"、"列表" → LLM 立即调
+- ✅ **应该调**（隐含需要 P7 数据）：
+  - 用户问"现在有哪些 P8_job？" → 调（看 P7 是否有未入队的 risk_event）
+  - 用户说"为 X 创建 P8_job" → 调（X 是 a6_event_id，需要确认已在 P7）
+  - 用户问"刚才那批噪声超标处理了吗？" → 调（找噪声相关 risk_event 状态）
+  - 用户问"现在还有未处置的吗？" → 调（看 P7 是否有遗漏的）
+- ❌ **不应该调**（用户已有上下文）：
+  - 用户在确认/推进某个已知 P8_job（"RE-001 批准"）
+  - 用户查询某个 P8_job 状态（"RE-002 进展如何？"）
+  - 用户在说无关的事（"今天天气怎么样"）
+  - 用户在做反思/总结（"今天哪些高风险？")
 ```
 
 ### 5.4 动态注入区（[3] 框架侧）
@@ -474,7 +493,7 @@ def build_system_prompt(walltime: str | None = None) -> str:
 | 2 | `update_job` | `(a6_event_ids: list[str], p8_job_id=None, status=None, channel=None, note=None)` → `str` | ❌ | 新建 / 更新工作记忆中某 P8_job 的字段；`a6_event_ids` 是关联的 A6 输出 ID 数组（支持聚合） |
 | 3 | `hitl_decide` | `(p8_job_id, options: list[str])` → `str` | ✅ | HITL 中断等人工决策 |
 | 4 | `notify_feishu` | `(p8_job_id, message)` → `str` | ❌ | 飞书单通道推送 |
-| 5 | `recall_jobs` | `(query: str)` → `str` | ❌ | 从长期记忆查询历史 P8_job |
+| 5 | `recall_jobs` | `(query: str, detail_p8_job_id=None)` → `str` | ❌ | 从长期记忆查询历史 P8_job（罗盘长期记忆 LLM 入口；两步走：索引 → 数据） |
 
 > **❌ `archive_job` 不再作为 LLM 工具**
 >
@@ -536,11 +555,13 @@ def notify_feishu(p8_job_id: str, message: str) -> str: ...
 
 
 @tool(description=(
-    "从长期记忆查询历史 P8_job。仅在用户明确要求时调用。"
-    "query: 关键词（如'昨天可燃气体'或 p8_job_id）。结果作为临时返回，不写入工作记忆。"
-    "可同时返回 P8_job 关联的 a6_event_ids[] 数组。"
+    "从长期记忆查询历史 P8_job（罗盘长期记忆 LLM 入口）。仅在用户明确要求时调用。"
+    "query: 关键词（如'昨天可燃气体'或 p8_job_id）。默认走索引层子串搜索（轻量；一句话描述）。"
+    "如需精确查询某条详情，传 detail_p8_job_id='<p8_job_id>'（数据层；完整 archived P8Job）。"
+    "两步走模式：先 query 找 p8_job_id，再 detail_p8_job_id 取详情。"
+    "数据源：A7/storage/p8_long_term.py（仓库级双层 JSON；索引层 + 数据层）。"
 ))
-def recall_jobs(query: str) -> str: ...
+def recall_jobs(query: str, detail_p8_job_id: str | None = None) -> str: ...
 ```
 
 > LLM 通过这 5 个 `description` + 用户自然语言 + 工作记忆，**自主决定调用哪个工具**——不写死 if/else。
@@ -557,8 +578,8 @@ def recall_jobs(query: str) -> str: ...
                 │  │  = [P8_job, P8_job, ...]    │ ◄─┐ 自动注入 context
                 │  └─────────────────────────────┘   │
                 │  ┌─────────────────────────────┐   │
-                │  │  long_term_memory           │ ◄─┼─ recall_jobs（按需）
-                │  │  = [archived P8_job, ...]   │   │
+                │  │  long_term_memory           │ ◄─┼─ recall_jobs（按需；两步走）
+                │  │  = [archived P8_job, ...]   │   │   (索引 → 数据层)
                 │  └─────────────────────────────┘   │
                 └─────────────────────────────────────┘
                                 ▲    ▲    ▲    ▲
@@ -569,13 +590,15 @@ def recall_jobs(query: str) -> str: ...
         │   update_job      ───► 改 working_memory                 │
         │   hitl_decide     ───► 中断 → 决策到达 → 唤醒 LLM       │
         │   notify_feishu   ───► 推飞书（不阻塞）                 │
-        │   recall_jobs     ───► long_term → 临时返回（不污染）   │
+        │   recall_jobs     ───► A7/storage.p8_long_term          │
+        │                       索引 + 数据层 → 临时返回（不污染）│
         └──────────────────────────────────────────────────────────┘
 
         ┌──────────────────────────────────────────────────────────┐
         │ 框架机制（非 LLM 工具）：                                 │
         │   _p8_archive_middleware ──► 监听到 P8_job 进入终态 →  │
-        │                            自动 working → long_term     │
+        │                            自动调 save_archived_job()    │
+        │                            (A7/storage/p8_long_term.py) │
         │                            + 从 working_memory 移除     │
         └──────────────────────────────────────────────────────────┘
 ```
@@ -618,6 +641,7 @@ _TERMINAL_STATUSES = {"completed", "rejected", "escalated", "resumed"}
 # agents/p8_disposition_agent.py
 from datetime import datetime, timezone
 
+# 终态集合（与 A7/schema/p8_state._TERMINAL_STATUSES 保持同步）
 _TERMINAL_STATUSES = {"completed", "rejected", "escalated", "resumed"}
 
 
@@ -634,7 +658,15 @@ def _summarize_p8_job(job: dict) -> str:
 
 
 def _p8_archive_middleware(state):
-    """LangGraph middleware：P8_job 终态 → 自动归档。"""
+    """LangGraph middleware：P8_job 终态 → 自动归档。
+
+    ★★★ 长期记忆写入入口（罗盘长期记忆） ★★★
+    本函数调用 A7/storage/p8_long_term.save_archived_job() —
+    LLM 不调此函数；仅 P8ArchiveMiddleware 调用。
+    """
+    # ★ 罗盘长期记忆（写入）接口: save_archived_job
+    from A7.storage import save_archived_job
+
     working = state.get("working_memory", [])
     long_term = state.get("long_term_memory", {})
 
@@ -645,6 +677,9 @@ def _p8_archive_middleware(state):
                 "summary": _summarize_p8_job(job),
                 "archived_at": datetime.now(timezone.utc).isoformat(),
             }
+            # 1) 写长期记忆后端（双层 JSON 自动同步索引 + 数据层）
+            save_archived_job(job["p8_job_id"], archived_job)
+            # 2) 更新 LangGraph state（in-memory long_term_memory 字段）
             long_term[job["p8_job_id"]] = archived_job
         else:
             new_working.append(job)
@@ -878,94 +913,49 @@ LLM 检查其他 P8_job → 继续处理或输出完成总结
 
 ### 7.8 何时关注新的 a6_event（事件关注策略）
 
-> P8 工作期间 P6 监测 → A6 评估 → P7 研判是**持续运行**的，`p7_result.json.risk_events[]` 会被**持续追加**。
-> P8 何时主动拉取新增 a6_event，按触发模式区分。
+> P8 **不存在后台守护进程**——何时把新 P7 数据给 P8 的 Agent，
+> 完全取决于以下**两个唯一入口**，除此以外没有第三种：
+
+1. **主流程调用**：`main` 调 `execute_p8(job_id, p7_data=...)`（`p7_data` 可选；本期不改 main_agent.py）
+2. **用户明确要求**：用户在对话中明确询问时 → LLM 主动调 `read_p7_events`
 
 | 触发模式 | 关注新 a6_event？ | 实现机制 | 理由 |
 |---------|-----------------|---------|------|
-| **用户正常对话** | ❌ **不主动关注** | LLM 不主动调 `read_p7_events` 拉增量；只处理用户消息中提到的 P8_job / a6_event | 用户是来**操作**的（创建 / 确认 / 查询），不是来**监控**的；监控是 P6/P7 的事；新事件会污染工作记忆，分散用户当前对话注意力 |
-| **主流程自动调用**（`execute_p8(job_id)`） | ✅ **全量关注** | 启动时**一次性** `read_p7_events(job_id)` 拉全量；处理期间由 `execute_p8` **周期性快照**触发增量拉取（默认 30s，可由 `p8_runtime.yaml` 配置） | 流程触发的批量处理有 SLA 要求（HIGH 风险 1h 内必须响应）；不关注会遗漏；启动全量 + 周期增量的组合保证初始 + 增量全覆盖 |
+| **主流程调用 `execute_p8(job_id, p7_data=...)`** | ✅ **按 `p7_data` 决定** | ① `p7_data` 传入 → LLM 直接用注入的数据；② `p7_data=None` → LLM 自行 `read_p7_events(job_id)` 一次性拉全量 | 当前实现：一次性拉全量即可，不轮询；`p7_data` 透传为后续 main 优化预留 |
 | **用户明确要求**（"刚才还有新的吗？"） | ✅ **按需关注** | 用户消息触发 LLM 调 `read_p7_events(job_id)`；LLM 通过对比工作记忆中已有的 `a6_event_ids[]` 与最新 `risk_events[*]` 发现增量 | 用户主动询问 → LLM 被动响应；不预先订阅、不轮询 |
 
 **实现细节**：
 
-#### A. 用户正常对话（不关注）
+#### A. 主流程调用 — `execute_p8(job_id, p7_data=None)`
 
 ```python
-# users/services/disposition_demo(message, history)
-def disposition_demo(message: str, history: list = None) -> str:
-    """独立对话入口。
-
-    ❌ 不在入口拉取 P7 数据。
-    ❌ 不启动任何轮询线程。
-    ✅ 只把用户消息原样传给 LLM，由 LLM 自主决定是否调 read_p7_events。
-    """
-    return run_disposition_agent(message)
-```
-
-- LLM 在 prompt 中被规则提示词告知："用户正常对话场景下不要主动订阅新事件；用户明确询问时才拉取"
-- 工作记忆不包含"订阅"或"轮询"状态
-
-#### B. 主流程自动调用（全量关注）
-
-```python
-# agents/main_agent.py
-def execute_p8(job_id: str) -> dict:
+# agents/main_agent.py（未来，本期仅做接口预留）
+def execute_p8(job_id: str, p7_data: dict | None = None) -> dict:
     """主流程 P8 入口。
 
-    ✅ 启动时全量读 P7（一次性）。
-    ✅ 处理期间周期快照 + 增量拉取（增量去重：跳过已在 a6_event_ids[] 里的）。
-    ✅ 工作记忆持续更新；新 event 触发 LLM 再次决策。
+    ✅ 若 main 已在更上层读到 P7，可通过 p7_data 透传（避免重复 IO）。
+    ✅ 若 p7_data 为 None，则 P8 Agent 自行 read_p7_events(job_id) 拉取。
+    ❌ 不在 execute_p8 内启动后台线程 / 轮询 worker / 守护进程。
     """
     walltime = datetime.now(timezone.utc).isoformat()
     agent = create_disposition_agent(walltime=walltime)
-    # 触发 LLM 启动 + 全量读 P7
-    initial_msg = HumanMessage(content=f"处理作业 {job_id} 的 P7 风险事件")
+    initial_msg = HumanMessage(
+        content=(
+            f"处理作业 {job_id} 的 P7 风险事件"
+            + (f"\n\n【P7 数据已注入】\n{json.dumps(p7_data, ensure_ascii=False)}" if p7_data else "")
+        )
+    )
     config = {"configurable": {"thread_id": f"p8-{job_id}"}}
-
-    result = agent.invoke({"messages": [initial_msg]}, config=config)
-
-    # ⚠️ 增量快照周期由 execute_p8 启动后台线程；不在 LLM 内决策
-    # （避免 LLM 工具集膨胀；轮询是运行时关注点，不是 LLM 关注点）
-    return result
+    return agent.invoke({"messages": [initial_msg]}, config=config)
 ```
 
-**为什么主流程轮询在 `execute_p8` 而不在 LLM 工具里？**
+**关键设计决策**：
 
-- **职责分离**：LLM 决策"如何处置"；轮询是"何时把新数据塞进来"
-- **避免 LLM 工具集膨胀**：不增加 `poll_p7_events` 工具
-- **确定性 SLA**：轮询周期由配置控制（30s / 1min / 5min），不依赖 LLM 自主决定
-- **幂等去重**：后台线程维护"已读 a6_event_id 集合"，新 event 增量写入工作记忆时跳过已读
+- **无后台线程**：P8 不轮询 P7；新数据必须由外部（main 或用户）主动注入
+- **`p7_data` 透传**：避免重复 IO；main 可以在上层合并多次 P7 增量再下发
+- **`p7_data=None` 兼容**：LLM 自行拉取；保留 main_agent.py 旧调用方式的兼容性
 
-**主流程增量推送机制**（`execute_p8` 内部启动的后台线程）：
-
-```python
-# agents/main_agent.py
-import threading, time, json
-from pathlib import Path
-
-def _p8_poll_worker(job_id, agent, config, seen_event_ids, interval_sec=30):
-    """后台线程：每 interval_sec 秒扫描 p7_result.json 增量。"""
-    p7_path = Path(f"data/jobs/{job_id}/p7_result.json")
-    while True:
-        time.sleep(interval_sec)
-        if not p7_path.exists():
-            continue
-        events = json.loads(p7_path.read_text()).get("risk_events", [])
-        new_events = [e for e in events if e["a6_event_id"] not in seen_event_ids]
-        if not new_events:
-            continue
-        # 把新事件注入到 LLM context（通过增量 HumanMessage）
-        msg = HumanMessage(content=(
-            f"【P7 增量】检测到 {len(new_events)} 个新 risk_event：\n"
-            + "\n".join(f"- {e['a6_event_id']} ({e['level']})" for e in new_events)
-        ))
-        seen_event_ids.update(e["a6_event_id"] for e in new_events)
-        # 在主 thread 调 agent.invoke（按 LangGraph 约定）
-        agent.invoke({"messages": [msg]}, config=config)
-```
-
-#### C. 用户明确要求（按需关注）
+#### B. 用户明确要求（按需关注）
 
 LLM 规则提示词明确：
 
@@ -976,19 +966,19 @@ LLM 规则提示词明确：
 - ✅ 用户要求刷新 P8_job 列表时（"看看现在有哪些事件"）
 - ✅ 用户要求创建新 P8_job 时（隐含：需要最新 P7 数据决定是否已有 P8_job）
 - ❌ 用户在确认/查询/推进某个已知 P8_job 时（不主动订阅）
+- ❌ 没有用户消息时（不轮询、不订阅、不监听文件变化）
 ```
 
-#### 三种模式的对比矩阵
+#### 两种入口的对比矩阵
 
-| 维度 | 用户正常对话 | 主流程自动调用 | 用户明确要求 |
-|------|------------|--------------|------------|
-| 启动拉取 | ❌ | ✅ 全量 | ❌（等用户问） |
-| 期间拉取 | ❌ | ✅ 周期增量 | ❌ |
-| 触发拉取的主体 | LLM（用户消息驱动） | `execute_p8` 后台线程 | LLM（用户消息驱动） |
-| 拉取范围 | 全量（按用户指令） | 启动全量 + 期间增量 | 全量（按用户指令） |
-| 去重机制 | 工作记忆 `a6_event_ids[]` | 后台线程 `seen_event_ids` 集合 | 工作记忆 `a6_event_ids[]` |
-| 工作记忆影响 | 用户问时合并 | 持续更新 | 用户问时合并 |
-| 适用场景 | 调试、问答、操作 | 流程 SLA | 临时查询 |
+| 维度 | 主流程调用 | 用户明确要求 |
+|------|----------|------------|
+| 触发主体 | main / 外部调度 | 用户消息驱动 LLM |
+| 数据来源 | `execute_p8(p7_data=...)` 注入 | LLM 调 `read_p7_events(job_id)` |
+| 拉取范围 | 单次（全量或透传） | 单次（按用户指令） |
+| 触发时机 | 按 main 流程需要时 | 用户主动询问时 |
+| 后台线程 | ❌ 无 | ❌ 无 |
+| 适用场景 | 流程 SLA（main 调度） | 临时查询 / 调试 |
 
 ---
 
@@ -1051,11 +1041,16 @@ LLM 规则提示词明确：
 
 | 项 | 说明 |
 |----|------|
-| 调用入口 | `agents/channel_gateway_client.py:send_message()` |
-| 通道 | 固定 `channel="feishu"` |
-| 接收方 | `conversation_id` 来自 `RISK_PUSH_STRATEGY[risk_level]` 对应的岗位群组 |
+| 调用入口 | `A7/notify/send_feishu(p8_job, job_id)` |
+| 通道 | 固定 `channel="feishu"`（由 `A7/notify/p8_feishu_adapter.py` 内部指定） |
+| 接收方 | `conversation_id` 由 `_resolve_conversation_id(assignee_role)` 从环境变量解析（`FEISHU_CONVERSATION_MAP` 优先 / `FEISHU_GROUP_<KEY>` 单条 / `feishu_dev_<role>` 兜底） |
 | 幂等键 | `idempotency_key = p8_job_id`（同一 P8_job 重复发送只产生一条） |
-| 失败回执 | 飞书推送失败 → 仅记日志，**不阻塞** P8_job 推进；LLM 据此决定是否重试 |
+| gateway metadata | `{p8_job_id, job_id, risk_level, assignee_role, channel_decision: "PUSH", a6_event_count}` |
+| 失败回执 | 飞书推送失败 → 仅记日志 + 返回 `FeishuNotifyResult(status="failed")`，**不阻塞** P8_job 推进；LLM 据此决定是否重试 |
+
+**实现位置**：[`A7/notify/p8_feishu_adapter.py`](../../A7/notify/p8_feishu_adapter.py)
+（包装 `agents/channel_gateway_client.send_message()`，加 P8 业务语义；
+详见文件组织文档 § 7）。
 
 ---
 
@@ -1424,19 +1419,58 @@ LLM 通过 `read_p7_events(job_id)` 工具读入。
 }
 ```
 
-> 工作记忆实时在 LangGraph state；本文件由 `execute_p8` 周期性快照，供 P9 / 重启恢复使用。
+> 工作记忆实时在 LangGraph state；本文件由 `execute_p8` 在阶段结束时落盘（`p8_result.json`），供 P9 / 重启恢复使用。
+>
+> **无后台守护进程**：P8 不会周期性快照工作记忆；只在 `execute_p8` 完整执行完毕后一次性写盘。
 >
 > **`a6_event_ids` 数组始终非空**（N≥1）；N=1 即单事件 P8_job，N>1 即聚合 P8_job（风险叠加）。
 > P9 消费时按 `a6_event_ids[]` 反查 A6 文件，**不会丢失任何 risk_event 的追溯链**。
 
-### 11.3 长期记忆（`_MOCK_ARCHIVE` 模块级 dict）
+### 11.3 长期记忆（`A7/storage/p8_long_term.py` — 双层 JSON 持久化）
 
-```python
-_MOCK_ARCHIVE: dict[str, dict] = {}  # p8_job_id → archived P8_job 完整记录
+**实现位置**：[`A7/storage/p8_long_term.py`](../A7/storage/p8_long_term.py)
+
+**核心设计：双层 JSON 结构**
+
+| 层 | 文件 | 内容 | 加载方式 | LLM 访问 |
+|----|------|------|---------|---------|
+| **索引层** | `data/jobs/_long_term/p8_archive.index.json` | `p8_job_id → 一句话描述`（约 80 字） | 每次 invoke 都在 context | `search_archived_descriptions` / `load_all_index_entries` |
+| **数据层** | `data/jobs/_long_term/p8_archive.json` | `p8_job_id → 完整 archived P8Job dict` | 按需精确加载 | `get_archived_job` / `search_archived_jobs` / `load_all_archived_jobs` |
+
+**9 个公共函数**（详见源码顶部"长期记忆接口（罗盘长期记忆）"注释块）：
+
+| # | 函数 | 层级 | 用途 |
+|---|------|------|------|
+| 1 | `save_archived_job(p8_job_id, archived_job)` | 写入 | P8ArchiveMiddleware 调用；同步更新两层 |
+| 2 | `get_archived_job(p8_job_id)` | 数据层 | 按 ID 取完整归档 |
+| 3 | `search_archived_jobs(query, limit)` | 数据层 | 子串搜索完整 dict（重） |
+| 4 | `load_all_archived_jobs()` | 数据层 | 全量快照（按 p8_job_id 排序） |
+| 5 | `get_index_entry(p8_job_id)` | 索引层 | 按 ID 取一句话描述 |
+| 6 | `search_archived_descriptions(query, limit)` | 索引层 | 子串搜索一句话描述（轻；LLM "两步走" 第一步） |
+| 7 | `load_all_index_entries()` | 索引层 | 全量索引快照 |
+| 8 | `reset_archive()` | 维护 | 清空两层（仅测试） |
+| - | `_make_index_entry(archived_job)` | 内部 | 自动生成一句话描述 |
+
+**索引条目格式**：
+
+```
+[<max_level>] <risk_basis 前 30 字>；<decision> by <decider> @ <archived_at 截 YYYY-MM-DD HH:MM>
 ```
 
-- 进程重启时由 `p8_result.json.archived_jobs` 加载
-- 真实生产可替换为 SQLite / 文件存储
+例：`[HIGH] 可燃气体浓度超标（CH4 4.8%）；rectify by operator:zhang @ 2026-08-13 18:30`
+
+**LLM 两步走检索模式**（`recall_jobs` 工具内部实现）：
+
+1. **第一步（轻量）**：`recall_jobs(query="可燃气体")` → 命中索引层 `[(p8_job_id, desc), ...]`
+2. **第二步（精确）**：用户要看详情 → `recall_jobs(detail_p8_job_id="P8J-...")` → 拿完整 `archived_job`
+
+**关键特性**：
+- ✅ **双写一致**：save_archived_job 同时写两层；任一写盘失败抛 RuntimeError
+- ✅ **线程安全**：模块级 `threading.Lock` 包裹所有 IO
+- ✅ **进程重启可恢复**：模块导入时 `_init()` 从 JSON 加载到内存 dict
+- ✅ **JSON 损坏检测**：加载时损坏抛 RuntimeError（不让 LLM 看到脏数据）
+- ✅ **原子写**：tmp + `os.replace` 同分区原子替换
+- ✅ **索引条目自动生成**：基于 archived_job 字段（max_level / risk_basis / decision / note / archived_at）
 
 ---
 
@@ -1453,6 +1487,7 @@ _MOCK_ARCHIVE: dict[str, dict] = {}  # p8_job_id → archived P8_job 完整记�
 | ❌ 不主动预加载 P7 输出到 system prompt | 保持"所有外部数据通过工具读入"的一致架构 |
 | ❌ 不让 LLM 主动轮询决策 | HITL 决策由框架事件自动唤醒 LLM |
 | ❌ 不在 context 直接放长期记忆 | 按需 `recall_jobs` 调取，避免污染 |
+| ❌ **不在 P8 内启动后台守护进程 / 轮询线程** | 何时把新 P7 数据给 P8 完全取决于：(a) `execute_p8(p7_data=...)` 透传；(b) 用户明确要求（LLM 调 `read_p7_events`） |
 | ❌ 跨阶段问题不擅自处理 | 提示词明确：风险评估/监测/验证转交 P6/P7/P9 |
 
 ---
@@ -1470,14 +1505,13 @@ _MOCK_ARCHIVE: dict[str, dict] = {}  # p8_job_id → archived P8_job 完整记�
 | P7 输出加载时机 | 启动时不预注入；LLM 通过 `read_p7_events` 工具按需读 | 架构一致性：所有外部数据通过工具进入 |
 | 工具数量 | 6 个（读/写/中断/推送/归档/回忆） | 按职责分维度；LLM 工具选择负担可控 |
 | 查询走 REST API | 状态查询走 `GET /api/jobs/:job_id/working-memory`，不下沉到工具 | 工具 = 动作；REST API = 查询 |
-| 存储后端 | `_MOCK_ARCHIVE` 模块级 dict | 与 P2/P4 既有约定一致；进程重启由 `execute_p8` 写 `p8_result.json` 兜底 |
+| 存储后端 | `A7/storage/p8_long_term.py` 双层 JSON（索引 + 数据） | 仓库级全局；进程重启可恢复；线程安全；索引层支持 LLM "两步走"检索（避免 token 浪费） |
 | 推送通道 | Demo 阶段只走飞书单通道 | 当前只做 demo，不实现真实短信 / 电话 |
 | 工作记忆的物理实现 | LangGraph state 字段 + `MemorySaver` checkpointer | 跨 invoke 自动保持；HITL 唤醒天然兼容 |
 | **工厂签名** | `create_disposition_agent(walltime=None)`，**不接收 job_id** | 主流程 `job_id` 与 P8 内部 `P8_job` 是两个不同层次的概念；混用会导致命名冲突与职责越界。job_id 由调用方通过 HumanMessage 内容传入；thread_id 由 `invoke(config={...})` 指定 |
 | **废弃极简版提示词** | 删除代码内 `SYSTEM_PROMPT` 常量；所有提示词通过 markdown 文件加载 | 避免代码常量与文档脱节；统一从 `system_prompt/` 和 `rules/` 加载，便于审计与版本控制 |
 | **提示词分两类（系统 / 规则）** | 系统提示词面向开发（schema / 工具 / 状态机），规则提示词面向业务（叠加规则 / 责任岗位 / 通道决策 / due_at / 合规） | schema 与规则解耦；业务规则调整无需开发介入；演进隔离；可审计；未来可走配置中心热加载 |
-| **新 a6_event 关注策略** | 三种触发模式区分对待：用户正常对话❌不关注；主流程自动调用✅全量+周期增量；用户明确要求✅按需关注 | 主流程有 SLA 必须覆盖；用户操作模式不应被新事件打扰；查询模式被动响应。详见 § 7.8 |
-| **主流程轮询职责归属** | 增量拉取由 `execute_p8` 后台线程执行，**不**作为 LLM 工具 | 职责分离：LLM 决策"如何处置"，轮询是"何时塞新数据"；避免 LLM 工具集膨胀；周期由配置（`p8_runtime.yaml`）控制而非 LLM 自主 |
+| **新 a6_event 关注策略** | 两种入口：(a) 主流程调 `execute_p8(job_id, p7_data=...)`；(b) 用户明确要求时 LLM 调 `read_p7_events`。**无后台守护进程 / 轮询 worker** | 避免无谓复杂度；按需触发而非持续拉取；`p7_data` 透传为后续 main 优化预留。详见 § 7.8 |
 | **`archive_job` 机制化** | 从 LLM 工具集**移除**，改为 LangGraph middleware `P8ArchiveMiddleware` 监听状态变更自动触发 | "完成 → 归档"是确定性副作用，不应由 LLM 决策。改造后：LLM 工具数从 6 → 5；归档时机确定；summary 框架自动汇总；不会出现"忘记归档"或"重复归档"。详见 § 6.4 |
 | **walltime 注入方式** | 工厂调用时取一次 ISO8601 字符串，写入 system prompt | 比 `now()` 工具更轻量（每 P8_job 决策无需多调一次）；适合 due_at 这种全局基准时间 |
 | **主流程 job_id 传递路径** | HumanMessage 内容（LLM 自取） + invoke config thread_id | 解耦：内容层携带业务标识，配置层携带 LangGraph 状态标识 |
@@ -1488,6 +1522,7 @@ _MOCK_ARCHIVE: dict[str, dict] = {}  # p8_job_id → archived P8_job 完整记�
 | **P8_job 与 risk_event 关系** | **N:1（风险叠加）**，不是 1:1 | 同一时刻多个 risk_event 合并为 1 个 P8_job；HITL 决策一次性处理多个事件；飞书推送合并；由 LLM 自主判断聚合 |
 | **聚合决策权** | LLM 自主决定 N=1 / 部分聚合 / 全聚合（基于 first_seen/last_seen/区域/人员） | 不写死 if/else；保留 LLM 对场景的灵活判断 |
 | **P8_job 队列存储** | LangGraph state.working_memory（in-context） | LLM 自主决策入队/推进/阻塞/出队；并发由 LangGraph state 序列化保证 |
+| **长期记忆存储** | `A7/storage/p8_long_term.py` 双层 JSON（索引 + 数据层） | 仓库级 `data/jobs/_long_term/`；LLM 两步走检索（索引 → 数据）；线程安全 + 进程重启可恢复；不依赖 mock dict |
 
 ---
 
@@ -1496,7 +1531,9 @@ _MOCK_ARCHIVE: dict[str, dict] = {}  # p8_job_id → archived P8_job 完整记�
 | 文档 | 视角 | 用途 |
 |------|------|------|
 | **本文档**（P8_人机协同处置_需求与Demo设计.md） | **需求视角** | 职责边界 / **Agent 内部架构（双层记忆 + P8_job + LLM 自主决策 + N:1 风险叠加）** / 工具集 / 激活流程 / Demo 场景 / 边界 / **a6_event_id 与 P8_job 队列契约（11.0 节）** / **两类提示词架构（§ 5）** |
-| [docs/agents/P8_DISPOSITION_AGENT.md](agents/P8_DISPOSITION_AGENT.md) | 工具视角 | **6 工具接口**（含 `update_job(a6_event_ids)` 数组参数） / HITL 中断策略 / 推送策略表 |
+| [docs/agents/P8_DISPOSITION_AGENT.md](agents/P8_DISPOSITION_AGENT.md) | 工具视角 | **5 工具接口**（含 `update_job(a6_event_ids)` 数组参数 / `recall_jobs` 两步走） / HITL 中断策略 / 推送策略表 / 长期记忆后端说明 |
+| [A7/storage/p8_long_term.py](../A7/storage/p8_long_term.py) | 长期记忆后端（罗盘长期记忆） | 双层 JSON 持久化（索引 + 数据）；9 函数；线程安全；进程重启可恢复 |
+| [docs/P8_人机协同处置_文件组织与职责.md](P8_人机协同处置_文件组织与职责.md) | 文件组织 | A7 模块目录结构 / 实施顺序 / 边界表 / 决策表 |
 | `agents/system_prompt/P8_SYSTEM_PROMPT.md` | 系统提示词（面向开发） | 数据 schema / 工具签名 / 状态机；与代码同步 |
 | `agents/rules/P8_RULES.md`（或 `config/p8_rules.yaml`） | 规则提示词（面向业务） | 风险叠加规则 / 责任岗位 / 通道决策阈值 / due_at 计算 / 行业合规；业务可独立修改 |
 | [docs/spec/CLI-SPEC/contract.yaml](spec/CLI-SPEC/contract.yaml) | 契约视角 | 工具输入输出 schema 权威定义 |
