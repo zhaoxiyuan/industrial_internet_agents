@@ -34,7 +34,6 @@ _env_file = _ROOT / ".env"
 if _env_file.exists():
     load_dotenv(_env_file)
 
-import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
@@ -49,16 +48,19 @@ from A5.agent.system_prompt import (
 from A5.scenario_data.mock_work_permit import WORK_PERMIT
 from A5.stream_players.async_collector import AsyncCollector
 
-# A6 核心组件
-from A6.agent.a6_agent import A6Agent
-from A6.agent.tools import A5DataTools, OutputTools
-from A6.agent.prompt_manager import PromptManager
+# P7 提供 A6 Agent + A6 路由（共享端口 5002，P6 启动时通过 register_a6_routes 挂载）
+# 使用绝对导入以兼容 `python agents/p6_monitor_agent.py` 直接调用（__main__ 模式下相对导入会失败）
+from agents.p7_risk_agent import trigger_a6_assessment, register_a6_routes
 
 # ── FastAPI 应用 ─────────────────────────────────────────────────────────────
 app = FastAPI(title="A5 作业过程监测 - P6 Monitor")
 
 # 日志根目录：固定在 A5/logs
 LOG_DIR = _ROOT / "A5" / "logs"
+
+# ── 挂载 A6 路由（P7 模块提供，共享端口 5002）───────────────────────────────
+# 包括 /a6 页面 + /api/a6/* 全部接口
+register_a6_routes(app, a5_log_dir=str(LOG_DIR))
 
 # ── 前端 HTML ───────────────────────────────────────────────────────────────
 INDEX_HTML = """<!DOCTYPE html>
@@ -651,200 +653,8 @@ startLogPoll();
 """
 
 
-# ── A6 前端 HTML ────────────────────────────────────────────────────────────
-INDEX_A6_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A6 风险研判看板</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh}
-.header{background:#16213e;padding:16px 24px;border-bottom:1px solid #0f3460;display:flex;justify-content:space-between;align-items:center}
-.header h1{font-size:20px;color:#e94560}
-.header .status{font-size:14px;color:#888}
-.tabs{display:flex;background:#16213e;border-bottom:1px solid #0f3460}
-.tab-btn{padding:12px 24px;background:none;border:none;color:#888;cursor:pointer;font-size:14px;border-bottom:2px solid transparent}
-.tab-btn:hover{color:#e0e0e0}
-.tab-btn.active{color:#e94560;border-bottom-color:#e94560}
-.tab-content{display:none;padding:24px}
-.tab-content.active{display:block}
-.card{background:#16213e;border-radius:8px;padding:20px;margin-bottom:20px;border:1px solid #0f3460}
-.card-title{font-size:14px;color:#888;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px}
-.stats{display:flex;gap:24px;flex-wrap:wrap}
-.stat-item{text-align:center}
-.stat-value{font-size:36px;font-weight:bold;color:#e94560}
-.stat-label{font-size:12px;color:#888;margin-top:4px}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #0f3460}
-th{color:#888;font-size:12px;text-transform:uppercase}
-tr:hover{background:#1a1a2e}
-.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:bold}
-.badge-1{background:#4caf50;color:#fff}
-.badge-2{background:#ff9800;color:#fff}
-.badge-3{background:#ff5722;color:#fff}
-.badge-4{background:#f44336;color:#fff}
-.badge-5{background:#9c27b0;color:#fff}
-button{padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:13px}
-button.primary{background:#e94560;color:#fff}
-button.danger{background:#c62828;color:#fff}
-button:hover{opacity:0.9}
-.empty{color:#555;font-size:14px;padding:40px;text-align:center}
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>A6 风险研判看板</h1>
-  <span class="status" id="totalCount">共 0 条研判</span>
-  <button class="btn-red" style="padding:4px 12px;font-size:12px;margin-left:12px" onclick="clearA6Logs()">🗑 清理日志</button>
-</div>
-
-<div class="tabs">
-  <button class="tab-btn active" onclick="showTab(this,'tab0')">研判列表</button>
-  <button class="tab-btn" onclick="showTab(this,'tab1')">提示词配置</button>
-</div>
-
-<div id="tab0" class="tab-content active">
-  <div class="card">
-    <div class="card-title">统计概览</div>
-    <div class="stats" id="statsRow">
-      <div class="stat-item"><div class="stat-value" id="statTotal">0</div><div class="stat-label">总数</div></div>
-      <div class="stat-item"><div class="stat-value" id="statLv1" style="color:#4caf50">0</div><div class="stat-label">轻微</div></div>
-      <div class="stat-item"><div class="stat-value" id="statLv2" style="color:#ff9800">0</div><div class="stat-label">一般</div></div>
-      <div class="stat-item"><div class="stat-value" id="statLv3" style="color:#ff5722">0</div><div class="stat-label">较重</div></div>
-      <div class="stat-item"><div class="stat-value" id="statLv4" style="color:#f44336">0</div><div class="stat-label">严重</div></div>
-      <div class="stat-item"><div class="stat-value" id="statLv5" style="color:#9c27b0">0</div><div class="stat-label">危急</div></div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-title">研判记录</div>
-    <div id="assessmentsList"><div class="empty">暂无研判数据，请先启动 A5 场景播放和 Agent</div></div>
-  </div>
-</div>
-
-<div id="tab1" class="tab-content">
-  <div class="card">
-    <div class="card-title">风险分级提示词</div>
-    <textarea id="riskPrompt" rows="10" style="width:100%;background:#0f3460;color:#e0e0e0;border:1px solid #1a1a2e;border-radius:4px;padding:10px;font-family:monospace;font-size:13px"></textarea>
-    <div style="margin-top:10px;display:flex;gap:8px">
-      <button class="primary" onclick="savePrompt('risk_classification')">💾 保存</button>
-      <button onclick="resetPrompt('risk_classification')">↺ 重置</button>
-      <button onclick="loadPrompt('risk_classification')">↻ 刷新</button>
-    </div>
-  </div>
-</div>
-
-<script>
-function showTab(btn, id) {
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById(id).classList.add('active');
-}
-
-let pollTimer = null;
-
-function startPoll() {
-  if (pollTimer) return;
-  pollTimer = setInterval(loadAssessments, 2000);
-}
-
-async function loadAssessments() {
-  try {
-    const r = await fetch("/api/a6/assessments?limit=100");
-    const d = await r.json();
-    document.getElementById("totalCount").textContent = "共 " + d.total + " 条研判";
-    renderAssessments(d.items || []);
-    updateStats(d.items || []);
-  } catch(e) { console.error("loadAssessments:", e); }
-}
-
-function updateStats(items) {
-  const counts = {1:0,2:0,3:0,4:0,5:0};
-  items.forEach(it => counts[it.risk_level] = (counts[it.risk_level]||0) + 1);
-  document.getElementById("statTotal").textContent = items.length;
-  document.getElementById("statLv1").textContent = counts[1];
-  document.getElementById("statLv2").textContent = counts[2];
-  document.getElementById("statLv3").textContent = counts[3];
-  document.getElementById("statLv4").textContent = counts[4];
-  document.getElementById("statLv5").textContent = counts[5];
-}
-
-function renderAssessments(items) {
-  const el = document.getElementById("assessmentsList");
-  if (!items.length) { el.innerHTML = '<div class="empty">暂无研判数据</div>'; return; }
-  let html = '<div class="table-wrap"><table><thead><tr><th>事件类型</th><th>时间范围</th><th>涉及人员</th><th>风险等级</th><th>风险依据</th><th>建议</th><th>研判时间</th></tr></thead><tbody>';
-  items.forEach(it => {
-    const lv = it.risk_level || 2;
-    const lvname = it.risk_level_name || "一般";
-    html += '<tr>' +
-      '<td>' + (it.event_type||'') + '</td>' +
-      '<td>' + (it.first_seen||'') + ' ~ ' + (it.last_seen||'') + '</td>' +
-      '<td>' + ((it.involved_persons||[]).join(', ')) + '</td>' +
-      '<td><span class="badge badge-' + lv + '">' + lvname + '(' + lv + '级)</span></td>' +
-      '<td>' + (it.risk_basis||'').replace(/\\n/g,'<br>').substring(0,80) + '</td>' +
-      '<td>' + ((it.suggestions||[]).slice(0,2).join(', ')) + '</td>' +
-      '<td>' + (it.timestamp||'') + '</td>' +
-      '</tr>';
-  });
-  html += '</tbody></table></div>';
-  el.innerHTML = html;
-}
-
-async function loadPrompt(name) {
-  try {
-    const r = await fetch("/api/a6/prompts/" + name);
-    const d = await r.json();
-    const ta = document.getElementById("riskPrompt");
-    if (ta && d.content) ta.value = d.content;
-  } catch(e) { console.error("loadPrompt:", e); }
-}
-
-async function savePrompt(name) {
-  const text = document.getElementById("riskPrompt").value;
-  try {
-    await fetch("/api/a6/prompts/" + name, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({content:text})
-    });
-    alert("保存成功");
-  } catch(e) { alert("保存失败:"+e); }
-}
-
-async function resetPrompt(name) {
-  try {
-    await fetch("/api/a6/prompts/" + name + "/reset", {method:"POST"});
-    loadPrompt(name);
-  } catch(e) { console.error("resetPrompt:", e); }
-}
-
-async function clearA6Logs() {
-  if (!confirm("确定清理 A6 所有研判日志？")) return;
-  try {
-    const r = await fetch("/api/a6/clear_logs", {method:"POST"});
-    const d = await r.json();
-    alert("已清理 " + d.removed + " 个文件/目录");
-    loadAssessments();
-  } catch(e) { alert("清理失败: " + e); }
-}
-
-loadPrompt("risk_classification");
-loadAssessments();
-startPoll();
-</script>
-</body>
-</html>
-"""
-
-
 # ── 场景定义 A-E ─────────────────────────────────────────────────────────────
 SCENARIOS = ["A", "B", "C", "D", "E"]
-
-# A6 研判 API（自身端口，作为被调用方时使用）
-A6_API_BASE = "http://localhost:5002"
 
 
 # ============================================================
@@ -900,25 +710,8 @@ def monitor_events(task_id: str) -> str:
     return ""
 
 
-# ── A6 全局状态 ─────────────────────────────────────────────────────────────
-_a6_agent: Optional[A6Agent] = None
-_a5_tools = None
-_output_tools = None
-_prompt_manager = None
-
-
-def get_a6_agent() -> A6Agent:
-    """获取或创建 A6Agent 单例（延迟初始化）"""
-    global _a6_agent, _a5_tools, _output_tools, _prompt_manager
-    if _a6_agent is None:
-        _a5_tools = A5DataTools()
-        _output_tools = OutputTools()
-        _prompt_manager = PromptManager()
-        _a6_agent = A6Agent(
-            a5_log_dir="A5/logs",
-            a6_output_dir="A6/logs",
-        )
-    return _a6_agent
+# A6 单例 / A6 路由已迁移至 agents/p7_risk_agent.py，
+# 由本文件通过 register_a6_routes(app) 挂载到共享端口 5002。
 
 
 # ============================================================
@@ -1027,34 +820,9 @@ def _count_log_files(log_dir: str) -> dict:
 
 
 # ============================================================
-# A6 研判触发
+# A6 研判触发已迁移至 agents/p7_risk_agent.py::trigger_a6_assessment
+# 本文件由 `from .p7_risk_agent import trigger_a6_assessment` 直接调用
 # ============================================================
-
-# A6 研判 API（自身端口，作为被调用方时使用）
-A6_API_BASE = "http://localhost:5002"
-
-
-async def _trigger_a6_assessment(event_id: str, event_data: dict):
-    """
-    当 A5 产生告警事件时，触发 A6 进行风险研判。
-    通过 HTTP 调用 A6 的手动研判接口，与 frontend/app_a5.py 保持一致。
-    """
-    if not event_data.get("events"):
-        return
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{A6_API_BASE}/api/a6/process/{event_id}",
-                json=event_data,
-            )
-            if response.status_code == 200:
-                print(f"[A5→A6] 事件 {event_id} 已触发 A6 研判")
-            else:
-                print(f"[A5→A6] 事件 {event_id} 触发失败: {response.status_code}")
-    except Exception as e:
-        import traceback
-        print(f"[A5→A6] 事件 {event_id} 调用异常: {type(e).__name__}: {e}")
-        traceback.print_exc()
 
 
 # ============================================================
@@ -1150,6 +918,67 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
             except Exception:
                 snapshots_data.append({})
 
+        ###############################################################################
+        # ⚠️⚠️⚠️  P6 → P7 调用核心段（_process_batch） ⚠️⚠️⚠️
+        # -----------------------------------------------------------------------------#
+        # 下面这个内嵌协程是 P6（监测）调 P7（风险研判）的【唯一入口】。
+        # A5 抽取到事件后，会从这里异步把数据丢给 P7 的 A6Agent 做风险研判。
+        #
+        # 📌 调用链一览（请按行号阅读）：
+        #   921~925  准备与 A5 批量处理
+        #              - items   = [(wall_time_1, snap_1), (wall_time_2, snap_2), ...]
+        #              - results = await agent.tick_batch(items)
+        #                  └─ A5Agent 在一次 LLM 调用里同时抽多个 wall_time 的事件
+        #              - _remove_batch(log_path, bk)
+        #                  └─ 删除 processing_batch_<bk>.json（解除"处理中"标记，
+        #                     _run_agent_loop 下次轮询不会再把这个 batch 拉起来）
+        #
+        #   927~930  逐个 wall_time 收尾
+        #              - inflight_wts.discard(wt)
+        #                  └─ 从 in-flight 集合里移除（避免下次轮询重复处理）
+        #              - result = results.get(wt, {...})
+        #                  └─ 防御性 fallback：万一 A5 没产出这个 wt 的 result
+        #              - await _on_success(log_path, wt, result)
+        #                  └─ 写 A5/logs/result_<wt>.json（前端轮询用）+ 推 WebSocket
+        #
+        #   931~934  🚨【关键】触发 P7 A6 风险研判 🚨
+        #              - if result.get("events"):
+        #                  └─ 过滤：只有"抽到了告警事件"的 wt 才触发研判
+        #                     没有事件的空 batch 不浪费 P7 算力
+        #              - asyncio.create_task(trigger_a6_assessment(wt, result))
+        #                  └─ 🔑 三个核心要点：
+        #                      ① **in-process 调用**（不是 HTTP）
+        #                         P6 和 P7 共享同一个 FastAPI app + 同一个事件循环
+        #                         走 HTTP 等于绕 localhost，徒增延迟和故障点
+        #                         所以 P7 暴露 `trigger_a6_assessment` 这个 async 函数
+        #                         给 P6 直接 await（见 p7_risk_agent.py:284）
+        #                      ② **fire-and-forget**（不 await 当前 task）
+        #                         create_task 立即返回，不阻塞 P6 主循环
+        #                         下一批 snapshot 可以立刻继续处理
+        #                      ③ **每个 wall_time 触发一次**
+        #                         与 A5 批量输出对齐：1 个 wall_time → 1 次研判
+        #
+        #   935~939  异常分支：整批失败时的清理
+        #              - _remove_batch(log_path, bk)
+        #                  └─ 同样要删 processing_batch 标记（否则永远卡住）
+        #              - 逐个 wt 调 _on_error(...) 写错误日志
+        #                  └─ 第 4 个参数 0 表示"无重试次数"（一次失败就放下）
+        #
+        # 📌 调用关系总结：
+        #   P6._process_batch ──(create_task)──> P7.trigger_a6_assessment
+        #                                        └─> A6Agent.process_event
+        #                                            └─> 写 A6/logs/assessments/*.json
+        #
+        # 📌 与"另一条路径"的区别：
+        #   这条是【事件驱动】路径：A5 在监测循环里自动触发
+        #   main_agent 在 P7 阶段走【工作流驱动】路径：人工触发 → risk_analyze tool
+        #   两条路最终都落到 A6Agent.process_event
+        #
+        # 📌 改造时务必注意：
+        #   1. 不要把 create_task 改成 await — 会把 P6 主循环卡死
+        #   2. 不要把 in-process 改成 HTTP — 同进程内绕一圈无意义且脆弱
+        #   3. _on_success 必须先于 trigger_a6_assessment — 否则前端看不到事件就先收到研判
+        ###############################################################################
         async def _process_batch(bk, wts, snaps):
             try:
                 items = list(zip(wts, snaps))
@@ -1160,9 +989,10 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
                     inflight_wts.discard(wt)
                     result = results.get(wt, {"wall_time": wt, "events": []})
                     await _on_success(log_path, wt, result)
-                    # 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
+                    # 🚨 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
+                    #    P7 in-process 调用，跳过 HTTP — 详见上方注释块
                     if result.get("events"):
-                        asyncio.create_task(_trigger_a6_assessment(wt, result))
+                        asyncio.create_task(trigger_a6_assessment(wt, result))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
@@ -1189,173 +1019,8 @@ async def index():
     )
 
 
-@app.get("/a6", response_class=HTMLResponse)
-async def a6_page():
-    """A6 风险研判看板页面"""
-    return Response(
-        content=INDEX_A6_HTML,
-        media_type="text/html; charset=utf-8"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# A6 API 路由（/api/a6/*）
-# ═══════════════════════════════════════════════════════════════════════════
-
-@app.get("/api/a6/assessments")
-async def get_assessments(start: str = None, end: str = None, risk_level: int = None, limit: int = 100):
-    """获取研判结果列表"""
-    from A6.agent.tools import A5DataTools, OutputTools
-    from pathlib import Path
-
-    output_dir = Path(str(_ROOT / "A6" / "logs" / "assessments"))
-    if not output_dir.exists():
-        return {"total": 0, "items": []}
-
-    results = []
-    for date_dir in sorted(output_dir.iterdir(), reverse=True):
-        if not date_dir.is_dir():
-            continue
-        for f in sorted(date_dir.glob("a6_*.json"), reverse=True):
-            try:
-                data = json.load(open(f, encoding="utf-8"))
-                if start and data.get("timestamp", "") < start:
-                    continue
-                if end and data.get("timestamp", "") > end:
-                    continue
-                if risk_level and data.get("risk_level") != risk_level:
-                    continue
-                # 自动过滤无风险记录（risk_level=0），前端不展示
-                if data.get("risk_level", 0) == 0:
-                    continue
-                results.append({
-                    "a6_event_id": data.get("a6_event_id"),
-                    "event_type": data.get("event_type"),
-                    "first_seen": data.get("first_seen"),
-                    "last_seen": data.get("last_seen"),
-                    "duration_sec": data.get("duration_sec", 0),
-                    "involved_persons": data.get("involved_persons", []),
-                    "risk_level": data.get("risk_level"),
-                    "risk_level_name": data.get("risk_level_name"),
-                    "risk_basis": data.get("risk_basis"),
-                    "suggestions": data.get("suggestions", []),
-                    "reasoning": data.get("reasoning"),
-                    "timestamp": data.get("timestamp"),
-                })
-                if len(results) >= limit:
-                    break
-            except (json.JSONDecodeError, IOError):
-                continue
-        if len(results) >= limit:
-            break
-    return {"total": len(results), "items": results}
-
-
-@app.get("/api/a6/assessments/{a6_event_id}")
-async def get_assessment(a6_event_id: str):
-    """获取单条研判详情"""
-    from pathlib import Path
-    output_dir = Path(str(_ROOT / "A6" / "logs" / "assessments"))
-    if not output_dir.exists():
-        return {"error": "不存在"}
-    for date_dir in sorted(output_dir.iterdir(), reverse=True):
-        if not date_dir.is_dir():
-            continue
-        for f in sorted(date_dir.glob("a6_*.json"), reverse=True):
-            try:
-                data = json.load(open(f, encoding="utf-8"))
-                if data.get("a6_event_id") == a6_event_id:
-                    return data
-            except (json.JSONDecodeError, IOError):
-                continue
-    return {"error": "未找到"}
-
-
-@app.get("/api/a6/status")
-async def get_a6_status():
-    """获取 A6 状态"""
-    tools = A5DataTools(a5_log_dir=str(LOG_DIR))
-    status = tools._load_status()
-    return {
-        "event_id_map": status.get("event_id_map", {}),
-        "summary": status.get("summary", {}),
-    }
-
-
-@app.get("/api/a6/prompts")
-async def get_all_prompts():
-    """获取所有提示词"""
-    pm = get_a6_agent()
-    return _prompt_manager.get_all_prompts() if _prompt_manager else {}
-
-
-@app.get("/api/a6/prompts/{prompt_name}")
-async def get_prompt(prompt_name: str):
-    """获取指定提示词"""
-    pm = PromptManager()
-    prompt = pm.read_prompt(prompt_name)
-    if prompt.get("error"):
-        return {"error": prompt["error"]}
-    return prompt
-
-
-@app.post("/api/a6/prompts/{prompt_name}")
-async def update_prompt(prompt_name: str, body: dict):
-    """更新提示词"""
-    pm = PromptManager()
-    success = pm.update_prompt(prompt_name=prompt_name, new_content=body.get("content", ""), reason=body.get("reason"))
-    return {"status": "success" if success else "failed"}
-
-
-@app.post("/api/a6/prompts/{prompt_name}/save")
-async def save_prompt(prompt_name: str):
-    """保存提示词到文件"""
-    pm = PromptManager()
-    success = pm.save_to_file(prompt_name=prompt_name)
-    return {"status": "success" if success else "failed", "saved_at": datetime.now().isoformat()}
-
-
-@app.post("/api/a6/prompts/{prompt_name}/reset")
-async def reset_prompt(prompt_name: str):
-    """重置提示词为默认值"""
-    pm = PromptManager()
-    success = pm.reset_to_default(prompt_name)
-    return {"status": "success" if success else "failed"}
-
-
-@app.post("/api/a6/process/{event_id}")
-async def process_a6_event(event_id: str, body: Optional[dict] = None):
-    """手动触发 A6 研判"""
-    import traceback
-    try:
-        agent = get_a6_agent()
-        result = await agent.process_event(event_id, event_data=body)
-        return result
-    except Exception as e:
-        print(f"[A6 API] process_a6_event({event_id}) 异常: {type(e).__name__}: {e}")
-        traceback.print_exc()
-        return {"status": "error", "message": f"{type(e).__name__}: {e}", "event_id": event_id}
-
-
-@app.post("/api/a6/clear_logs")
-async def clear_a6_logs():
-    """清理 A6 日志"""
-    import shutil
-    log_dir = _ROOT / "A6" / "logs"
-    count = 0
-    if log_dir.exists():
-        for item in log_dir.iterdir():
-            try:
-                if item.is_file():
-                    item.unlink()
-                    count += 1
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    count += 1
-            except Exception:
-                pass
-    return {"status": "cleared", "removed": count}
-
+# ── A6 路由已迁移至 agents/p7_risk_agent.py::register_a6_routes ──
+# 启动时在 P6 文件底部统一挂载，保证共享端口 5002。
 
 # 作业票规则 + 系统提示词
 @app.get("/api/rules")
