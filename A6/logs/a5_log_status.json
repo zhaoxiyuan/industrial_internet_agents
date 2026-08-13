@@ -1,0 +1,24 @@
+{
+  "log_dir": "A5\\logs",
+  "last_updated": "2026-08-13T09:45:56.655240",
+  "files": {},
+  "event_id_map": {
+    "2026:08:13T09:44:59.700": {
+      "a6_output_id": "A6-20260813-094525-230",
+      "status": "completed",
+      "first_processed_at": "2026-08-13T09:45:25.231318"
+    },
+    "2026:08:13T09:45:08.700": {
+      "a6_output_id": "A6-20260813-094556-646",
+      "status": "completed",
+      "first_processed_at": "2026-08-13T09:45:56.655240"
+    }
+  },
+  "summary": {
+    "total": 0,
+    "unprocessed": 0,
+    "processing": 0,
+    "error": 0,
+    "processed": 0
+  }
+}
