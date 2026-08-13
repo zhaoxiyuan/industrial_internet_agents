@@ -1,0 +1,20 @@
+{
+  "task_id": null,
+  "permit_draft_id": null,
+  "application": {
+    "job_content": "",
+    "region": "",
+    "personnel": [
+      {
+        "name": "",
+        "badge_id": ""
+      }
+    ],
+    "planned_start": "",
+    "planned_end": "",
+    "job_id": "20260812225856237"
+  },
+  "jsa_result": null,
+  "permit_content": null,
+  "saved_at": "2026-08-12T14:59:57.302018+00:00"
+}

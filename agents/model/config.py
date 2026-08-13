@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = ""
     MODEL_PROVIDER: str = ""
+    TEMPERATURE: float = 0.7
+    MAX_TOKENS: int = 2048
 
     class Config:
         env_file = Path(__file__).parent.parent.parent / ".env"

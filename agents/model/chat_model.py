@@ -12,6 +12,8 @@ def create_chat_model():
         model=settings.OPENAI_MODEL,
         api_key=settings.OPENAI_API_KEY,
         base_url=settings.OPENAI_BASE_URL,
-        model_provider=settings.MODEL_PROVIDER
+        model_provider=settings.MODEL_PROVIDER,
+        temperature=settings.TEMPERATURE,
+        max_tokens=settings.MAX_TOKENS
     )
     return llm

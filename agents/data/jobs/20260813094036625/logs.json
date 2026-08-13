@@ -1,0 +1,96 @@
+[
+  {
+    "action": "workflow_start",
+    "message": "开始执行作业 20260813094036625",
+    "timestamp": "2026-08-13T01:40:36.366905+00:00"
+  },
+  {
+    "action": "execute_p1",
+    "message": "开始执行 P1",
+    "timestamp": "2026-08-13T01:40:36.375217+00:00"
+  },
+  {
+    "action": "execute_p1_hitl_interrupt",
+    "next_tools": [
+      "HumanInTheLoopMiddleware.after_model"
+    ],
+    "timestamp": "2026-08-13T01:41:02.817777+00:00"
+  },
+  {
+    "action": "workflow_pending",
+    "stage": "P1",
+    "message": "P1 Agent 工具调用需要人工确认",
+    "timestamp": "2026-08-13T01:41:02.824869+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P1",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-13T01:41:05.612838+00:00"
+  },
+  {
+    "action": "p1_hitl_resume",
+    "message": "P1 阶段 HITL 中断恢复执行",
+    "timestamp": "2026-08-13T01:41:05.615269+00:00"
+  },
+  {
+    "action": "execute_p1",
+    "result": "success",
+    "timestamp": "2026-08-13T01:41:21.118586+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "message": "继续执行 P2",
+    "timestamp": "2026-08-13T01:41:21.119775+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "result": "success",
+    "timestamp": "2026-08-13T01:41:21.124158+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P2",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-13T01:41:23.946442+00:00"
+  },
+  {
+    "action": "execute_p3",
+    "message": "继续执行 P3",
+    "timestamp": "2026-08-13T01:41:23.947464+00:00"
+  },
+  {
+    "action": "execute_p3",
+    "result": "success",
+    "timestamp": "2026-08-13T01:41:23.953492+00:00"
+  },
+  {
+    "action": "execute_p4",
+    "message": "继续执行 P4",
+    "timestamp": "2026-08-13T01:41:23.956476+00:00"
+  },
+  {
+    "action": "execute_p4",
+    "result": "success",
+    "timestamp": "2026-08-13T01:41:23.961417+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P4",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-13T01:41:26.846046+00:00"
+  },
+  {
+    "action": "execute_p5",
+    "message": "继续执行 P5",
+    "timestamp": "2026-08-13T01:41:26.847278+00:00"
+  },
+  {
+    "action": "execute_p5",
+    "result": "success",
+    "timestamp": "2026-08-13T01:41:26.855776+00:00"
+  }
+]

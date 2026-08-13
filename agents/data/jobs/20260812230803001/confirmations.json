@@ -1,0 +1,38 @@
+[
+  {
+    "stage": "P1",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:25.645034+00:00"
+  },
+  {
+    "stage": "P2",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:45.562036+00:00"
+  },
+  {
+    "stage": "P4",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:49.596637+00:00"
+  },
+  {
+    "stage": "P5",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:51.247089+00:00"
+  },
+  {
+    "stage": "P9",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:52.713053+00:00"
+  },
+  {
+    "stage": "P10",
+    "decision": "approve",
+    "notes": "",
+    "confirmed_at": "2026-08-12T15:08:53.597353+00:00"
+  }
+]

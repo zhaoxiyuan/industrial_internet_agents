@@ -1,0 +1,53 @@
+{
+  "job_id": "20260812230803001",
+  "schema_version": "1.0",
+  "created_at": "2026-08-12T15:08:03.762730+00:00",
+  "updated_at": "2026-08-12T15:08:53.601979+00:00",
+  "main_agent": {
+    "status": "completed",
+    "current_stage": "completed",
+    "pending_confirmations": []
+  },
+  "agents": {
+    "P1": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:25.645486+00:00"
+    },
+    "P2": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:45.562540+00:00"
+    },
+    "P3": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:45.570699+00:00"
+    },
+    "P4": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:49.597182+00:00"
+    },
+    "P5": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:51.247638+00:00"
+    },
+    "P6": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:51.258824+00:00"
+    },
+    "P7": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:51.266743+00:00"
+    },
+    "P8": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:51.273669+00:00"
+    },
+    "P9": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:52.713623+00:00"
+    },
+    "P10": {
+      "status": "completed",
+      "updated_at": "2026-08-12T15:08:53.597934+00:00"
+    }
+  }
+}

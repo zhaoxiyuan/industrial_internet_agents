@@ -1,0 +1,20 @@
+{
+  "task_id": null,
+  "permit_draft_id": null,
+  "application": {
+    "job_content": "临时用电作业：在炼油厂区01管廊架处接临时电源用于照明设备",
+    "region": "管廊架区域",
+    "personnel": [
+      {
+        "name": "钱七",
+        "badge_id": "P-105"
+      }
+    ],
+    "planned_start": "2026-08-08T08:30:00Z",
+    "planned_end": "2026-08-08T17:30:00Z",
+    "job_id": "20260813094036625"
+  },
+  "jsa_result": null,
+  "permit_content": null,
+  "saved_at": "2026-08-13T01:41:21.117676+00:00"
+}

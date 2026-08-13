@@ -179,14 +179,45 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
 
     try:
         # 尝试从结果中提取数据
-        submit_data = result_data.get("result", result_data)
+        # 支持多种格式：
+        # 1. 标准格式 {"schema_version": ..., "command": ..., "result": {...}}
+        # 2. 直接格式 {"task_id": ..., "permit_draft_id": ...}
+        # 3. 字符串格式，需要解析 JSON
+        submit_data = None
 
-        if isinstance(submit_data, dict):
+        if isinstance(result_data, dict):
+            # 情况1: 标准响应格式 {"result": {...}}
+            if "result" in result_data and isinstance(result_data["result"], dict):
+                submit_data = result_data["result"]
+            # 情况2: 直接是数据字典
+            elif "task_id" in result_data or "permit_draft_id" in result_data:
+                submit_data = result_data
+            # 情况3: {"schema_version": ..., "command": ...} 格式，取最外层
+            elif "schema_version" in result_data:
+                submit_data = result_data
+        elif isinstance(result_data, str):
+            # 情况4: 字符串格式，尝试解析 JSON
+            try:
+                parsed = json.loads(result_data)
+                if isinstance(parsed, dict):
+                    if "result" in parsed and isinstance(parsed["result"], dict):
+                        submit_data = parsed["result"]
+                    else:
+                        submit_data = parsed
+            except json.JSONDecodeError:
+                # 情况5: 自然语言文本，从中提取关键信息
+                logger.warning(f"[_process_p1_result] 无法解析 JSON，尝试从文本提取: {result_data[:200]}")
+                submit_data = {}
+
+        if submit_data:
             result["task_id"] = submit_data.get("task_id", "")
             result["permit_draft_id"] = submit_data.get("permit_draft_id", "")
             result["jsa_result"] = submit_data.get("jsa_result", {})
             result["permit_content"] = submit_data.get("permit_content", {})
             result["missing_fields"] = submit_data.get("missing_fields", [])
+            logger.info(f"[_process_p1_result] 成功提取数据: task_id={result.get('task_id')}, permit_draft_id={result.get('permit_draft_id')}")
+        else:
+            logger.warning(f"[_process_p1_result] 无法提取 submit 数据，result_data={result_data}")
 
         # 保存作业票
         app_file = get_job_dir(job_id) + "/application.json"

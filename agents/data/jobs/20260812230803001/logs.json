@@ -1,0 +1,167 @@
+[
+  {
+    "action": "workflow_start",
+    "message": "开始执行作业 20260812230803001",
+    "timestamp": "2026-08-12T15:08:03.764216+00:00"
+  },
+  {
+    "action": "execute_p1",
+    "message": "开始执行 P1",
+    "timestamp": "2026-08-12T15:08:03.766764+00:00"
+  },
+  {
+    "action": "execute_p1_hitl_interrupt",
+    "next_tools": [
+      "HumanInTheLoopMiddleware.after_model"
+    ],
+    "timestamp": "2026-08-12T15:08:22.815124+00:00"
+  },
+  {
+    "action": "workflow_pending",
+    "stage": "P1",
+    "message": "P1 Agent 工具调用需要人工确认",
+    "timestamp": "2026-08-12T15:08:22.819113+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P1",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:25.647056+00:00"
+  },
+  {
+    "action": "p1_hitl_resume",
+    "message": "P1 阶段 HITL 中断恢复执行",
+    "timestamp": "2026-08-12T15:08:25.648666+00:00"
+  },
+  {
+    "action": "execute_p1",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:39.278227+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "message": "继续执行 P2",
+    "timestamp": "2026-08-12T15:08:39.279254+00:00"
+  },
+  {
+    "action": "execute_p2",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:39.284211+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P2",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:45.564283+00:00"
+  },
+  {
+    "action": "execute_p3",
+    "message": "继续执行 P3",
+    "timestamp": "2026-08-12T15:08:45.565375+00:00"
+  },
+  {
+    "action": "execute_p3",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:45.569816+00:00"
+  },
+  {
+    "action": "execute_p4",
+    "message": "继续执行 P4",
+    "timestamp": "2026-08-12T15:08:45.572529+00:00"
+  },
+  {
+    "action": "execute_p4",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:45.576846+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P4",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:49.600268+00:00"
+  },
+  {
+    "action": "execute_p5",
+    "message": "继续执行 P5",
+    "timestamp": "2026-08-12T15:08:49.601713+00:00"
+  },
+  {
+    "action": "execute_p5",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:49.609138+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P5",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:51.249892+00:00"
+  },
+  {
+    "action": "execute_p6",
+    "message": "继续执行 P6",
+    "timestamp": "2026-08-12T15:08:51.251298+00:00"
+  },
+  {
+    "action": "execute_p6",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:51.257187+00:00"
+  },
+  {
+    "action": "execute_p7",
+    "message": "继续执行 P7",
+    "timestamp": "2026-08-12T15:08:51.261046+00:00"
+  },
+  {
+    "action": "execute_p7",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:51.265789+00:00"
+  },
+  {
+    "action": "execute_p8",
+    "message": "继续执行 P8",
+    "timestamp": "2026-08-12T15:08:51.268901+00:00"
+  },
+  {
+    "action": "execute_p8",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:51.272698+00:00"
+  },
+  {
+    "action": "execute_p9",
+    "message": "继续执行 P9",
+    "timestamp": "2026-08-12T15:08:51.276568+00:00"
+  },
+  {
+    "action": "execute_p9",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:51.284693+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P9",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:52.715926+00:00"
+  },
+  {
+    "action": "execute_p10",
+    "message": "继续执行 P10",
+    "timestamp": "2026-08-12T15:08:52.717159+00:00"
+  },
+  {
+    "action": "execute_p10",
+    "result": "success",
+    "timestamp": "2026-08-12T15:08:52.728332+00:00"
+  },
+  {
+    "action": "stage_confirm",
+    "stage": "P10",
+    "decision": "approve",
+    "notes": "",
+    "timestamp": "2026-08-12T15:08:53.600577+00:00"
+  }
+]
