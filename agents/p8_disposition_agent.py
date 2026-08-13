@@ -13,6 +13,19 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p8_disposition_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # ★★★ 长期记忆接入（罗盘长期记忆） ★★★
 #   P8 长期记忆后端 = A7.storage.p8_long_term
@@ -362,3 +375,65 @@ def run_disposition_agent(message: str) -> str:
 def disposition_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_disposition_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P8 阶段执行入口：人机协同处置
+
+    读取 P7 结果中的 risk_events，创建处置任务
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P8")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P8",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p7_result = read_json_file(get_stage_result_path(job_id, "p7"))
+        risk_events = p7_result.get("risk_events", [])
+        logger.info(f"[P8] risk_events_count={len(risk_events)}")
+
+        # 2. 遍历风险事件创建处置任务
+        disposition_tasks = []
+        for event in risk_events:
+            event_id = event.get("event_id", "")
+            if event_id:
+                logger.info(f"[P8] 调用 disposition_create: event_id={event_id}")
+                disp_result = json.loads(disposition_create.invoke(event_id))
+                log.log_tool_call("disposition_create", {"event_id": event_id}, disp_result)
+                if "result" in disp_result:
+                    disposition_tasks.append(disp_result["result"])
+
+        result["disposition_tasks"] = disposition_tasks
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        if disposition_tasks:
+            result["pending_confirmation"] = {
+                "type": "disposition_confirm",
+                "message": "请确认处置任务"
+            }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p8"), result)
+    add_job_log(job_id, {"action": "execute_p8", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

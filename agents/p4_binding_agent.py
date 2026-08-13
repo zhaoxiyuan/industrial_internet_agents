@@ -13,6 +13,19 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p4_binding_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -248,3 +261,61 @@ def run_binding_agent(message: str) -> str:
 def binding_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_binding_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P4 阶段执行入口：监测资源绑定
+
+    读取 P3 结果中的 task_id，匹配监测资源
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P4")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P4",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p3_result = read_json_file(get_stage_result_path(job_id, "p3"))
+        task_id = p3_result.get("task_id", "")
+        logger.info(f"[P4] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P4] 调用 binding_match: task_id={task_id}")
+        binding_result = json.loads(binding_match.invoke(task_id))
+        log.log_tool_call("binding_match", {"task_id": task_id}, binding_result)
+
+        # 3. 提取结果
+        if "result" in binding_result:
+            result["bindings"] = binding_result["result"].get("bindings", {})
+            result["unmatched_resources"] = binding_result["result"].get("unmatched_resources", [])
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "binding_confirm",
+            "message": "请确认监测资源绑定是否正确"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p4"), result)
+    add_job_log(job_id, {"action": "execute_p4", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

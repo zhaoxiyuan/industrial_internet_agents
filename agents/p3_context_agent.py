@@ -13,6 +13,19 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p3_context_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -225,3 +238,64 @@ def run_context_agent(message: str) -> str:
 def context_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_context_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P3 阶段执行入口：作业上下文理解
+
+    读取 P2 结果中的 task_id，构建标准作业上下文包
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P3")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P3",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p2_result = read_json_file(get_stage_result_path(job_id, "p2"))
+        task_id = p2_result.get("task_id", "")
+        logger.info(f"[P3] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P3] 调用 context_build: task_id={task_id}")
+        context_result = json.loads(context_build.invoke(task_id))
+        log.log_tool_call("context_build", {"task_id": task_id}, context_result)
+
+        # 3. 提取结果
+        if "result" in context_result:
+            result["context"] = context_result["result"].get("context", {})
+            result["missing_fields"] = context_result["result"].get("missing_fields", [])
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        if result.get("missing_fields"):
+            result["pending_confirmation"] = {
+                "type": "context_missing",
+                "fields": result["missing_fields"],
+                "message": "上下文存在缺失字段，需要人工确认"
+            }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p3"), result)
+    add_job_log(job_id, {"action": "execute_p3", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

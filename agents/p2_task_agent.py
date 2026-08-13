@@ -14,6 +14,19 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p2_task_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -297,3 +310,61 @@ def run_task_agent(message: str) -> str:
 def task_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_task_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P2 阶段执行入口：作业任务实例化
+
+    读取 P1 结果中的 permit_draft_id，创建任务实例
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P2")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P2",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p1_result = read_json_file(get_stage_result_path(job_id, "p1"))
+        permit_draft_id = p1_result.get("permit_draft_id", "")
+        logger.info(f"[P2] permit_draft_id={permit_draft_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P2] 调用 task_instance_create: permit_draft_id={permit_draft_id}")
+        task_result = json.loads(task_instance_create.invoke(permit_draft_id))
+        log.log_tool_call("task_instance_create", {"permit_draft_id": permit_draft_id}, task_result)
+
+        # 3. 提取结果
+        if "result" in task_result:
+            result["task_instance"] = task_result["result"]
+            result["task_id"] = task_result["result"].get("task_id", "")
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "monitor_decide",
+            "message": "是否将此作业纳入智能监测"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p2"), result)
+    add_job_log(job_id, {"action": "execute_p2", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result
