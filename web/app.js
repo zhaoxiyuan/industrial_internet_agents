@@ -953,13 +953,15 @@ function displayWorkflowLog(msg) {
             jsonDiv.innerHTML = formatJsonView(data);
             entry.appendChild(jsonDiv);
         } else {
-            // 其他日志：显示简单摘要
+            // 其他日志：显示完整数据（支持多行 JSON 美化）
             const dataSummary = formatDataSummary(data);
             if (dataSummary) {
                 const dataDiv = document.createElement('div');
                 dataDiv.style.marginLeft = '20px';
                 dataDiv.style.color = '#888';
                 dataDiv.style.fontSize = '11px';
+                dataDiv.style.whiteSpace = 'pre-wrap';
+                dataDiv.style.fontFamily = '"Consolas", monospace';
                 dataDiv.textContent = dataSummary;
                 entry.appendChild(dataDiv);
             }
@@ -969,8 +971,8 @@ function displayWorkflowLog(msg) {
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 
-    // 限制日志数量，防止内存溢出
-    while (container.children.length > 500) {
+    // 限制日志数量，防止内存溢出（增大到2000）
+    while (container.children.length > 2000) {
         container.removeChild(container.firstChild);
     }
 
@@ -1009,7 +1011,7 @@ function formatJsonView(data, indent = 0) {
         if (data.length <= 3 && data.every(item => typeof item !== 'object')) {
             return `<span class="json-bracket">[${data.map(v => formatJsonView(v, indent + 1)).join(', ')}]</span>`;
         }
-        let html = `<span class="json-bracket">[</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">...${data.length}项</span><span class="json-expanded" style="display:none;">\n`;
+        let html = `<span class="json-bracket">[</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">${data.length}项</span><span class="json-expanded" style="display:none;">\n`;
         data.forEach((item, i) => {
             html += `${nextPad}${formatJsonView(item, indent + 1)}${i < data.length - 1 ? ',' : ''}\n`;
         });
@@ -1024,7 +1026,7 @@ function formatJsonView(data, indent = 0) {
         if (keys.length <= 2 && keys.every(k => typeof data[k] !== 'object')) {
             return `<span class="json-bracket">{${keys.map(k => `<span class="json-key">"${k}"</span>: ${formatJsonView(data[k], indent + 1)}`).join(', ')}}</span>`;
         }
-        let html = `<span class="json-bracket">{</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">...${keys.length}字段</span><span class="json-expanded" style="display:none;">\n`;
+        let html = `<span class="json-bracket">{</span><span class="json-toggle" onclick="toggleJsonBlock(this)">▶</span><span class="json-collapsed">${keys.length}字段</span><span class="json-expanded" style="display:none;">\n`;
         keys.forEach((k, i) => {
             html += `${nextPad}<span class="json-key">"${k}"</span>: ${formatJsonView(data[k], indent + 1)}${i < keys.length - 1 ? ',' : ''}\n`;
         });
@@ -1183,14 +1185,20 @@ function formatDataSummary(data) {
     if (entries.length === 0) return '';
 
     const parts = [];
-    for (const [key, value] of entries.slice(0, 5)) { // 最多显示5个字段
+    for (const [key, value] of entries) { // 显示所有字段
         if (value === null || value === undefined) continue;
 
         let valStr = '';
         if (typeof value === 'string') {
-            valStr = value.length > 50 ? value.substring(0, 50) + '...' : value;
+            // 如果是 JSON 字符串，美化格式化
+            try {
+                const parsed = JSON.parse(value);
+                valStr = JSON.stringify(parsed, null, 2);
+            } catch {
+                valStr = value;
+            }
         } else if (typeof value === 'object') {
-            valStr = JSON.stringify(value).length > 50 ? JSON.stringify(value).substring(0, 50) + '...' : JSON.stringify(value);
+            valStr = JSON.stringify(value, null, 2);
         } else {
             valStr = String(value);
         }
@@ -1200,7 +1208,7 @@ function formatDataSummary(data) {
         }
     }
 
-    return parts.join(' | ');
+    return parts.join('\n');
 }
 
 // ========== HITL 弹窗 ==========

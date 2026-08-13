@@ -3,7 +3,7 @@ P2: 作业任务获取与实例化
 Task Agent - 处理任务列表、详情、订阅和实例创建
 支持 HumanInTheLoop - Agent 层级中断
 """
-from typing import Optional, List
+from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
@@ -14,7 +14,7 @@ from .model.chat_model import create_chat_model_with_logging, get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
-from .utils import get_stage_logger
+from .utils.system_prompt import load_system_prompt
 
 # 配置日志
 import logging
@@ -33,25 +33,6 @@ if not logger.handlers:
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
 _task_checkpointer = MemorySaver()
-
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个作业任务管理专家，负责处理作业任务的获取、列表查询和实例创建。
-
-你需要：
-1. 按时间、区域、状态筛选和列出作业任务
-2. 获取任务详情
-3. 创建唯一任务实例，确保幂等性
-4. 订阅任务变更事件
-
-Task ID 格式: {作业类型}_{区域代码}_{时间戳}_{序号}
-
-当用户列出任务时，调用 task_list 工具。
-当用户获取任务详情时，调用 task_get 工具。
-当用户创建任务实例时，调用 task_instance_create 工具。
-当用户订阅任务变更时，调用 task_subscribe 工具。"""
 
 
 # ============================================================
