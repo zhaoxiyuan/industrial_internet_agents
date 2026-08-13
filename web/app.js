@@ -178,8 +178,8 @@ let currentConfigRaw = {};
 function loadModelConfig() {
     Promise.all([
         fetch('/api/config').then(r => r.json()),
-        fetch('/api/config/profiles').then(r => r.json()).catch(() => []),
-    ]).then(([config, profiles]) => {
+        fetch('/api/config/snapshots').then(r => r.json()).catch(() => []),
+    ]).then(([config, snapshots]) => {
         currentConfigRaw = config;
         // 填表单
         const apiKey = config.api_key || '';
@@ -192,7 +192,7 @@ function loadModelConfig() {
         document.getElementById('config-max-tokens').value = config.max_tokens || '';
         renderProviderHints(config.protocol || 'openai');
         // 渲染历史
-        renderProfiles(profiles);
+        renderSnapshots(snapshots);
     }).catch(err => {
         console.error('[loadModelConfig] Error:', err);
     });
@@ -282,7 +282,13 @@ function showTestResult(type, msg) {
 
 function saveModelConfig() {
     const apiKeyInput = document.getElementById('config-api-key');
-    const apiKey = apiKeyInput.type === 'password' ? (apiKeyInput.dataset.rawValue || '') : apiKeyInput.value;
+    let apiKey = apiKeyInput.type === 'password' ? (apiKeyInput.dataset.rawValue || '') : apiKeyInput.value;
+    // 安全检查：如果获取到的 apiKey 是 masked 值，说明可能有问题
+    if (!apiKey || apiKey.startsWith('****')) {
+        document.getElementById('config-status').textContent = '⚠️ 请先点击眼睛图标切换到明文模式';
+        setTimeout(() => { document.getElementById('config-status').textContent = ''; }, 3000);
+        return;
+    }
     const data = {
         api_key:     apiKey.trim(),
         base_url:    document.getElementById('config-base-url').value.trim(),
@@ -326,13 +332,13 @@ function doSaveProfile() {
         temperature: document.getElementById('config-temperature').value.trim(),
         max_tokens:  document.getElementById('config-max-tokens').value.trim(),
     };
-    fetch('/api/config/profiles/save', {
+    fetch('/api/config/snapshots/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, config }),
     }).then(r => r.json()).then(res => {
         if (res.status === 'ok') {
-            renderProfiles(res.profiles);
+            renderSnapshots(res.snapshots);
             hideSaveProfileModal();
             document.getElementById('config-status').textContent = '✅ 已另存';
             setTimeout(() => { document.getElementById('config-status').textContent = ''; }, 2000);
@@ -360,22 +366,22 @@ function loadProfileToForm(profile) {
 function deleteProfile(name, event) {
     event.stopPropagation();
     if (!confirm('删除配置「' + name + '」？')) return;
-    fetch('/api/config/profiles/delete', {
+    fetch('/api/config/snapshots/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
     }).then(r => r.json()).then(res => {
-        if (res.status === 'ok') renderProfiles(res.profiles);
+        if (res.status === 'ok') renderSnapshots(res.snapshots);
     });
 }
 
-function renderProfiles(profiles) {
-    const container = document.getElementById('profiles-list');
-    if (!profiles || profiles.length === 0) {
+function renderSnapshots(snapshots) {
+    const container = document.getElementById('snapshots-list');
+    if (!snapshots || snapshots.length === 0) {
         container.innerHTML = '<span style="color:#999;font-size:13px;">暂无保存的配置</span>';
         return;
     }
-    container.innerHTML = profiles.map(p => `
+    container.innerHTML = snapshots.map(p => `
         <div onclick="loadProfileToForm(${escapeHtml(JSON.stringify(p))})"
              style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;cursor:pointer;min-width:200px;max-width:260px;transition:box-shadow 0.2s;">
             <div style="font-weight:bold;font-size:14px;margin-bottom:6px;color:#333;">${escapeHtml(p.name || '')}</div>
@@ -693,9 +699,17 @@ function connectWebSocket(jobId) {
 
                 if (msg.type === 'state_update') {
                     const data = msg.data;
+                    const prevStage = state.workflowState.current_stage || '';
+
                     state.workflowState = data;
                     renderWorkflowDiagram();
                     updateControlPanel();
+
+                    // 检测 P1 完成，切换到 P2 时显示完成提示
+                    if (prevStage === 'P1' && data.current_stage === 'P2') {
+                        hideP1StepsModal();
+                        showP1CompleteModal();
+                    }
 
                     // 更新日志
                     const currentStage = data.current_stage || '';
@@ -955,6 +969,125 @@ function displayWorkflowLog(msg) {
     while (container.children.length > 500) {
         container.removeChild(container.firstChild);
     }
+
+    // P1 步骤检测与更新
+    detectAndUpdateP1Steps(msg);
+}
+
+// P1 步骤状态管理
+const P1_STEPS = {
+    permit_submit: { index: 1, name: '提交作业申请' },
+    jsa_analyze: { index: 2, name: 'JSA 安全分析' },
+    permit_generate_draft: { index: 3, name: '生成作业票' },
+    permit_check: { index: 4, name: '作业票查询' }
+};
+let p1StepsCompleted = 0;
+let p1ModalShown = false;
+
+function detectAndUpdateP1Steps(msg) {
+    const source = msg.source || '';
+    const message = msg.message || '';
+
+    // 只处理 P1 和 TOOL 源的日志
+    if (source !== 'P1' && source !== 'TOOL' && source !== 'AGENT') return;
+
+    // 检测工具入口和出口
+    for (const [toolName, stepInfo] of Object.entries(P1_STEPS)) {
+        if (message.includes(`>>> ${toolName} 工具入口`)) {
+            // 工具开始执行
+            if (!p1ModalShown) {
+                showP1StepsModal();
+                p1ModalShown = true;
+            }
+            updateP1Step(stepInfo.index, 'running', `执行中: ${stepInfo.name}`);
+        } else if (message.includes(`<<< ${toolName} 工具出口`)) {
+            // 工具执行完成
+            updateP1Step(stepInfo.index, 'completed', `${stepInfo.name} 完成`);
+            p1StepsCompleted++;
+            updateP1Progress();
+
+            // 如果所有步骤完成，显示 P1 完成提示弹窗，3秒后进入P2
+            if (p1StepsCompleted >= 4) {
+                setTimeout(() => {
+                    hideP1StepsModal();
+                    showP1CompleteModal();
+                    p1StepsCompleted = 0;
+                    p1ModalShown = false;
+                }, 1500);
+            }
+        }
+    }
+}
+
+// P1 完成提示弹窗，3秒倒计时后自动进入P2
+let p1CountdownInterval = null;
+
+function showP1CompleteModal() {
+    const countdownEl = document.getElementById('p1-complete-countdown');
+    let countdown = 3;
+    countdownEl.textContent = countdown;
+
+    document.getElementById('p1-complete-modal').classList.add('active');
+
+    // 清除之前的定时器
+    if (p1CountdownInterval) {
+        clearInterval(p1CountdownInterval);
+    }
+
+    // 开始倒计时
+    p1CountdownInterval = setInterval(() => {
+        countdown--;
+        if (countdown <= 0) {
+            clearInterval(p1CountdownInterval);
+            p1CountdownInterval = null;
+            hideP1CompleteModal();
+            // 自动进入P2 - 由于是异步执行，前端不需要额外操作
+            addLog('⏳ P1 完成，进入 P2 作业任务获取阶段...', 'success');
+        } else {
+            countdownEl.textContent = countdown;
+        }
+    }, 1000);
+}
+
+function hideP1CompleteModal() {
+    document.getElementById('p1-complete-modal').classList.remove('active');
+    if (p1CountdownInterval) {
+        clearInterval(p1CountdownInterval);
+        p1CountdownInterval = null;
+    }
+}
+
+function showP1StepsModal() {
+    // 重置所有步骤状态
+    for (let i = 1; i <= 4; i++) {
+        const stepEl = document.getElementById(`p1-step-${i}`);
+        stepEl.className = 'p1-step pending';
+        stepEl.querySelector('.p1-step-status').textContent = '待执行';
+    }
+    document.getElementById('p1-progress-fill').style.width = '0%';
+    document.getElementById('p1-progress-text').textContent = '0 / 4 步骤完成';
+    document.getElementById('p1-log-content').textContent = '等待执行...';
+
+    document.getElementById('p1-steps-modal').classList.add('active');
+}
+
+function hideP1StepsModal() {
+    document.getElementById('p1-steps-modal').classList.remove('active');
+}
+
+function updateP1Step(stepIndex, status, logMessage) {
+    const stepEl = document.getElementById(`p1-step-${stepIndex}`);
+    stepEl.className = `p1-step ${status}`;
+    stepEl.querySelector('.p1-step-status').textContent = status === 'running' ? '执行中' : '完成';
+
+    // 更新当前日志
+    document.getElementById('p1-log-content').textContent = logMessage;
+}
+
+function updateP1Progress() {
+    const percent = (p1StepsCompleted / 4) * 100;
+    document.getElementById('p1-progress-fill').style.width = `${percent}%`;
+    document.getElementById('p1-progress-text').textContent = `${p1StepsCompleted} / 4 步骤完成`;
 }
 
 // 格式化数据显示摘要

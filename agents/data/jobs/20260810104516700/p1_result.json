@@ -1,7 +1,0 @@
-{
-  "job_id": "20260810104516700",
-  "stage": "P1",
-  "started_at": "2026-08-10T02:45:16.423978+00:00",
-  "completed": false,
-  "error": "4 validation errors for Settings\nOPENAI_API_KEY\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nOPENAI_BASE_URL\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nOPENAI_MODEL\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nMODEL_PROVIDER\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing"
-}
