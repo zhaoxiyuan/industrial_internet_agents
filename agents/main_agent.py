@@ -13,7 +13,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils import extract_output, get_stage_logger, push_websocket_log
 from .utils.logging_handler import get_agent_config
 

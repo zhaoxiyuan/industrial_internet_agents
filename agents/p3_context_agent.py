@@ -9,7 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
@@ -32,24 +33,6 @@ if not logger.handlers:
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
 _context_checkpointer = MemorySaver()
-
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个作业上下文理解专家，负责构建标准化的作业上下文包。
-
-标准上下文包包含 11 个维度：
-作业对象 — 区域 — 设备 — 介质 — 人员 — 资质 — 风险 — 措施 — 时间 — 关联作业 — 数据源
-
-你需要：
-1. 调用 context_build 聚合任务相关信息
-2. 调用 context_validate 验证上下文完整性
-3. 调用 context_history 获取上下文变更历史
-4. 上下文不完整时提示人工补充
-
-数据溯源：每项数据记录来源系统、获取时间、有效期
-缺失确认：上下文不完整时暂停流程，等待人工补充"""
 
 
 # ============================================================

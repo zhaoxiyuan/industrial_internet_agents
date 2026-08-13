@@ -9,7 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
@@ -32,30 +33,6 @@ if not logger.handlers:
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
 _verify_checkpointer = MemorySaver()
-
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个作业前条件核验专家，负责在作业开始前核验各项安全措施是否落实。
-
-核验结果枚举：
-- PASS: 符合
-- PENDING: 待确认
-- FAIL: 不符合
-- N/A: 不适用
-
-核验项目包括：
-1. 隔离措施（隔离阀、电源切断等）
-2. 警戒标识（警戒带、警示牌等）
-3. 消防器材（灭火器、消防栓等）
-4. 气体检测（可燃气体、有毒气体、氧气含量）
-5. 人员资质（证书有效期、作业授权）
-6. PPE配备（呼吸器、防护服等）
-
-当用户请求生成核验清单时，调用 verify_checklist 工具。
-当用户执行核验时，调用 verify_execute 工具。
-当用户获取开工建议时，调用 verify_recommendation 工具。"""
 
 
 # ============================================================

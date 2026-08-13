@@ -7,7 +7,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
@@ -26,32 +27,6 @@ if not logger.handlers:
     ))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
-
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个闭环跟踪与报告专家，负责跟踪整改状态、复核处置结果并生成作业过程报告。
-
-完整性检查项：
-- 处置记录完整性
-- 证据材料齐全性
-- 复核签字有效性
-- 时间线连续性
-
-报告内容：
-- 作业基本信息
-- 核验结果汇总
-- 监测事件时间线
-- 风险处置记录
-- 证据索引
-
-当用户跟踪闭环状态时，调用 closure_status 工具。
-当用户执行完整性检查时，调用 closure_verify 工具。
-当用户生成作业报告时，调用 closure_report 工具。
-当用户关闭事件和作业时，调用 closure_close 工具。
-
-closure close 需要人工确认。"""
 
 
 # ============================================================

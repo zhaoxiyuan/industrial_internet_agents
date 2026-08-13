@@ -5,7 +5,7 @@ MiniMax LLM 封装
 import logging
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
-from agents.model.config import get_settings
+from .config import get_llm_params
 
 logger = logging.getLogger("llm_callback")
 if not logger.handlers:
@@ -38,13 +38,7 @@ class LLMLoggingCallback(BaseCallbackHandler):
         """LLM 调用开始 - 记录完整消息"""
         logger.info(f"[{self.agent_name}] >>> LLM 调用开始")
         # 推送配置参数
-        settings = get_settings()
-        llm_config = {
-            "model": settings.OPENAI_MODEL,
-            "base_url": settings.OPENAI_BASE_URL,
-            "temperature": settings.TEMPERATURE,
-            "max_tokens": settings.MAX_TOKENS,
-        }
+        llm_config = get_llm_params()
         self._push_ws("INFO", f">>> LLM 调用开始", {"llm_config": llm_config})
         # 推送每条消息
         for i, msg_list in enumerate(messages):
@@ -77,6 +71,7 @@ def create_chat_model(callbacks=None):
     Args:
         callbacks: 可选的回调处理器列表
     """
+    from .config import get_settings
     settings = get_settings()
     llm = init_chat_model(
         model=settings.OPENAI_MODEL,
@@ -88,19 +83,6 @@ def create_chat_model(callbacks=None):
         callbacks=callbacks,
     )
     return llm
-
-
-def get_llm_params() -> dict:
-    """获取当前 LLM 配置参数（用于日志记录）"""
-    settings = get_settings()
-    return {
-        "model": settings.OPENAI_MODEL,
-        "api_key": settings.OPENAI_API_KEY[:10] + "..." if settings.OPENAI_API_KEY else "",
-        "base_url": settings.OPENAI_BASE_URL,
-        "temperature": settings.TEMPERATURE,
-        "max_tokens": settings.MAX_TOKENS,
-        "model_provider": settings.MODEL_PROVIDER,
-    }
 
 
 def create_chat_model_with_logging(agent_name: str = "LLM", job_id: str = "*"):

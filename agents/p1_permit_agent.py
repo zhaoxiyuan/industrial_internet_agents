@@ -11,7 +11,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log, get_agent_config
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION

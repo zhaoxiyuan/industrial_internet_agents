@@ -9,7 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
@@ -32,25 +33,6 @@ if not logger.handlers:
 # Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
 _binding_checkpointer = MemorySaver()
-
-
-# ============================================================
-# 系统提示词
-# ============================================================
-SYSTEM_PROMPT = """你是一个监测资源绑定专家，负责将摄像头、传感器、定位设备与作业任务关联。
-
-匹配策略：
-- 固定摄像头：区域覆盖分析，选择最近且覆盖最好的N个
-- 移动设备：根据作业流动性动态调整
-- 传感器：选择同区域、同介质类型点位
-- 人员定位：作业人员工卡与定位基站关联
-
-当用户请求匹配资源时，调用 binding_match 工具。
-当用户查看绑定状态时，调用 binding_status 工具。
-当用户确认绑定时，调用 binding_confirm 工具。
-当用户请求人工补充资源时，调用 binding_request_manual 工具。
-
-无法自动匹配时触发人工补充流程。"""
 
 
 # ============================================================
@@ -247,7 +229,6 @@ def create_binding_agent_with_hitl():
         middleware=[hitl_middleware],
         checkpointer=_binding_checkpointer,
     )
-    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P4"))
 
 
 def run_binding_agent(message: str) -> str:
