@@ -3,6 +3,10 @@
 .env.local
 .env.*.local
 
+#日志
+A5\logs_test
+A5\logs
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,3 +23,25 @@ data/jobs/
 data/output
 data/input
 .mcp.json
+agents/data
+
+.env.bak
+model_profiles.json
+frontend/saved_configs.json
+openclaw-channel-gateway-standalone/data/gateway-state.json
+openclaw-channel-gateway-standalone/data/gateway-state.json
+openclaw-channel-gateway-standalone/data/gateway-state.json
+openclaw-channel-gateway-standalone/.gateway.pid
+openclaw-channel-gateway-standalone/data/gateway-state.json
+
+# 2026-08-17：运行时数据 / 备份 / 误存文件不入仓
+
+# 卡片回调审计日志（每次点击追加）
+/data/card_callbacks.jsonl
+
+# 各处备份文件
+*.bak
+**/*.bak
+
+# pip install 误存到当前目录的 `=1.x.y` 空文件 / 日志
+/=1.*.*

@@ -44,6 +44,11 @@ export function normalizeOutboundRequest(input) {
   requireObject(input, "message request");
   const toInput = typeof input.to === "string" ? { conversationId: input.to } : requireObject(input.to, "to");
   const text = requireString(input.text, "text", { allowEmpty: false, maxLength: 100_000 });
+  // msgType / content（2026-08-17 新增）：支持飞书交互式卡片 / 透传任意 msg_type。
+  // 仅当 msgType === "interactive" 且 content 非空时，下游 adapter 才会真正用 content 作为飞书 message content；
+  // 否则仍走 text 模式（content 被忽略）。
+  const msgType = optionalString(input.msgType ?? input.msg_type, "msgType", { maxLength: 32 }) ?? "text";
+  const content = optionalString(input.content, "content", { maxLength: 100_000 });
   return {
     channel: requireString(input.channel, "channel", { maxLength: 128 }).toLowerCase(),
     accountId: optionalString(input.accountId ?? input.account_id, "accountId", { maxLength: 256 }) ?? "default",
@@ -52,6 +57,8 @@ export function normalizeOutboundRequest(input) {
       receiveIdType: optionalString(toInput.receiveIdType ?? toInput.receive_id_type, "to.receiveIdType", { maxLength: 64 }),
     },
     text,
+    msgType,
+    content,
     replyToId: optionalString(input.replyToId ?? input.reply_to_id, "replyToId", { maxLength: 1024 }),
     threadId: optionalString(input.threadId ?? input.thread_id, "threadId", { maxLength: 1024 }),
     metadata: input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata) ? input.metadata : {},

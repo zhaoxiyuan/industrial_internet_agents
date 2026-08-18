@@ -286,7 +286,7 @@ class P8JobUpdate(BaseModel):
 class PushMessage(BaseModel):
     """飞书推送消息模板（§ 8.2）。
 
-    A7/notify/p8_feishu_adapter.py 构造此结构后，调用
+    A7/notify/feishu_sender.py 构造此结构后，调用
     agents/channel_gateway_client.send_message(...) 发出。
 
     字段说明：

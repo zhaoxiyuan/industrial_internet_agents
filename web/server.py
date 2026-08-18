@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web.api import config as config_api
 from web.api import workflow as workflow_api
 from web.api import snapshots as snapshots_api
+from A7.notify import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
 from web.ws.servers import start_websocket_threads
 
@@ -66,6 +67,10 @@ class Handler(SimpleHTTPRequestHandler):
             data = self._read_json()
             workflow_api.handle_workflow_confirm(self, data)
 
+        elif path == "/api/feishu/card-callback":
+            data = self._read_json()
+            feishu_card_api.handle_card_callback(self, data)
+
         else:
             logger.warning(f"[POST] 路径未找到: path={path}")
             self.send_error(404)
@@ -105,6 +110,9 @@ class Handler(SimpleHTTPRequestHandler):
             thread_id = parse_qs(parsed.query).get("thread_id", [None])[0]
             workflow_api.handle_workflow_state_get(self, thread_id)
 
+        elif path == "/api/feishu/card-callbacks":
+            feishu_card_api.handle_card_callback_list(self)
+
         else:
             super().do_GET()
 
@@ -113,9 +121,9 @@ class Handler(SimpleHTTPRequestHandler):
         body = self.rfile.read(content_length).decode("utf-8")
         return json.loads(body)
 
-    def send_json(self, data):
+    def send_json(self, data, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", len(body))
         self.send_header("Access-Control-Allow-Origin", "*")

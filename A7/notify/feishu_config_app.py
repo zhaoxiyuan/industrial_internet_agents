@@ -5,7 +5,7 @@
 ================================================================================
 
 让业务 / 运维人员通过浏览器把飞书通道相关参数写入项目根 `.env`，供
-`agents/channel_gateway_client.py` 和 `A7.notify.p8_feishu_adapter` 读取。
+`agents/channel_gateway_client.py` 和 `A7.notify.feishu_sender` 读取。
 
 可配置的 key：
     GATEWAY_HOST              Channel Gateway 地址（默认 http://127.0.0.1:8787）
@@ -94,6 +94,24 @@ TEMPLATES_DIR: Path = NOTIFY_DIR / "templates"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Gateway 子进程路径常量（start_gateway 模块已定义）
+# 同时支持两种启动方式:
+#   python A7/notify/feishu_config_app.py   (脚本方式 — 项目根在 cwd)
+#   python -m A7.notify.feishu_config_app   (模块方式 — 推荐)
+try:
+    from .start_gateway import GATEWAY_DIR  # type: ignore[import-not-found]
+except ImportError:
+    # 脚本方式运行时没有父包,把本文件所在目录临时加进 sys.path
+    if str(NOTIFY_DIR) not in sys.path:
+        sys.path.insert(0, str(NOTIFY_DIR))
+    from start_gateway import GATEWAY_DIR  # type: ignore[no-redef]
+
+# 多账户：Gateway 子进程的相关路径
+GATEWAY_ENV_FILE: Path = GATEWAY_DIR / ".env"
+GATEWAY_ENV_BACKUP_FILE: Path = GATEWAY_DIR / ".env.bak"
+FEISHU_CONFIG_FILE: Path = GATEWAY_DIR / "config" / "config.feishu.local.json"
+FEISHU_CONFIG_BACKUP_FILE: Path = GATEWAY_DIR / "config" / "config.feishu.local.json.bak"
+
 
 # ============================================================
 # 日志
@@ -124,6 +142,7 @@ MANAGED_KEYS_ORDER: List[str] = [
     "FEISHU_APP_SECRET",
     "FEISHU_DOMAIN",
     "FEISHU_USER_MAP",
+    "FEISHU_GROUP_MAP",
 ]
 
 # 敏感 key（读取时遮罩；保存时如果用户没改则保留原值）
@@ -143,10 +162,44 @@ DEFAULTS: Dict[str, str] = {
 # ====== 受管 key 子集 ======
 
 # FEISHU_USER_MAP：key=open_id (ou_xxx)，value={chat_id, role, name}
+# FEISHU_GROUP_MAP：key=chat_id (oc_xxx)，value={name, description}
+# - 两者解耦：USER_MAP 索引"人"，GROUP_MAP 索引"群"
+# - 同一 chat_id 可被多个 user 共享，群名/描述在 GROUP_MAP 维护一次即可
 # 旧 FEISHU_GROUP_<ROLE> 已废弃（保留正则用于 .env 清理，但不展示在 UI）
 FEISHU_GROUP_PREFIX: str = "FEISHU_GROUP_"
 FEISHU_GROUP_PATTERN: re.Pattern = re.compile(r"^FEISHU_GROUP_(.+)$")
 FEISHU_USER_MAP_KEY: str = "FEISHU_USER_MAP"
+FEISHU_GROUP_MAP_KEY: str = "FEISHU_GROUP_MAP"
+
+
+# ====== 多账户（多飞书 App 凭据） ======
+# 2026-08-17 新增：Channel Gateway Node 端原生支持 accounts.<accountId>
+# 这里把多账户信息统一存到项目根 .env 的 FEISHU_ACCOUNTS JSON 中,
+# 同时把每个账户展开成 FEISHU_<ACCT_ID_UPPER>_<FIELD> 写到 gateway .env,
+# 并重建 config.feishu.local.json 的 channels.feishu.accounts 块。
+
+# UI source-of-truth JSON key（项目根 .env，不含 secrets）
+FEISHU_ACCOUNTS_KEY: str = "FEISHU_ACCOUNTS"
+
+# Per-account env var 后缀规范（gateway .env + config JSON 都引用 ${FEISHU_<ACCT>_<SUFFIX>}）
+# (env_var_suffix, ui_field_key, sensitive)
+ACCOUNT_FIELD_SPECS: List[Tuple[str, str, bool]] = [
+    ("APP_ID",             "app_id",             False),
+    ("APP_SECRET",         "app_secret",         True),
+    ("VERIFICATION_TOKEN", "verification_token", True),
+    ("DOMAIN",             "domain",             False),
+]
+
+# account_id 字符集规则（前端 + 后端双重校验）
+ACCOUNT_ID_PATTERN: re.Pattern = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+ACCOUNT_ID_MAX_LEN: int = 64
+
+# Per-account 网关参数硬编码（沿用现有 default 配置；UI 不暴露）
+DEFAULT_ACCOUNT_BLOCK: Dict[str, Any] = {
+    "maxSkewSeconds": 300,
+    "timeoutMs": 15000,
+    "maxResponseBytes": 1048576,
+}
 
 
 # ============================================================
@@ -217,11 +270,361 @@ def serialize_env_file(entries: List[Tuple[str, str, List[str]]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ============================================================
+# 多账户：辅助函数
+# ============================================================
+
+def _account_id_to_env_suffix(account_id: str) -> str:
+    """account_id → UPPER_SNAKE_CASE,用于 env var 后缀。
+
+    规则:lower → 非 [a-z0-9] 替换为 '_' → strip('_') → upper。
+    - 'default' → 'DEFAULT'
+    - 'alerting-bot' → 'ALERTING_BOT'
+    - 'Ops.Tech' → 'OPS_TECH'
+    - '' / '_' → ''
+    """
+    return re.sub(r"[^a-z0-9]+", "_", account_id.strip().lower()).strip("_").upper()
+
+
+def _validate_account_id(account_id: str) -> Optional[str]:
+    """校验 account_id 合法性;返回 None = 合法,否则返回错误信息。
+
+    规则:1~64 字符,首字符字母,后续字母/数字/_/-。
+    """
+    if not account_id:
+        return "account_id 不能为空"
+    if len(account_id) > ACCOUNT_ID_MAX_LEN:
+        return f"account_id 长度不能超过 {ACCOUNT_ID_MAX_LEN} 字符"
+    if not ACCOUNT_ID_PATTERN.match(account_id):
+        return "account_id 必须以字母开头,仅含字母/数字/下划线/短横线"
+    return None
+
+
+def _account_env_key(account_id: str, suffix: str) -> str:
+    """生成 FEISHU_<ACCT_ID_UPPER>_<SUFFIX> 形式的环境变量名。
+
+    例:('default', 'APP_ID') → 'FEISHU_DEFAULT_APP_ID'
+    """
+    s = _account_id_to_env_suffix(account_id)
+    if not s:
+        raise ValueError(f"account_id={account_id!r} 无法生成合法的 env 后缀")
+    return f"FEISHU_{s}_{suffix}"
+
+
+def _is_account_env_key(key: str) -> Optional[Tuple[str, str]]:
+    """判断 .env key 是否为多账户 env var；若是,返回 (account_id, suffix)。
+
+    否则返回 None。
+    """
+    if not key.startswith("FEISHU_"):
+        return None
+    rest = key[len("FEISHU_"):]
+    # 后缀必须是 ACCOUNT_FIELD_SPECS 里的某个
+    matched_suffix: Optional[str] = None
+    for suffix, _, _ in ACCOUNT_FIELD_SPECS:
+        if rest.endswith("_" + suffix):
+            matched_suffix = suffix
+            middle = rest[: -len("_" + suffix)]
+            break
+    if matched_suffix is None:
+        return None
+    # middle 必须能反向映射成合法 account_id（UPPER_SNAKE_CASE → lower-kebab-case）
+    # 这里只做"原始 suffix 截断 + 原样存"；UI 显示时由 _suffix_to_account_id 还原
+    # 但因为 account_id 是 lower-kebab-case，归一时会把 _ → - 仅在尾部合并；
+    # 这里我们直接以 middle 原样小写作为 account_id 候选
+    return middle.lower(), matched_suffix
+
+
+def _read_simple_env_file(path: Path) -> Dict[str, str]:
+    """读 .env → {key: raw_value} dict（不保留 comments/顺序）。
+
+    用于 gateway .env 等"附属配置文件"读写。空行 / 注释行跳过。
+    值同样剥外层单/双引号（与 parse_env_file 一致）。
+    """
+    out: Dict[str, str] = {}
+    if not path.exists():
+        return out
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        v = v.strip()
+        if v.startswith('"') and v.endswith('"'):
+            v = v[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+        elif v.startswith("'") and v.endswith("'"):
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
+def _write_simple_env_file(
+    path: Path, kv: Dict[str, str], *, backup: bool = True
+) -> Optional[str]:
+    """写 .env 简单格式（KEY=VALUE,按 key 排序）。
+
+    - 仅保留传入的 kv,不在 .env 现有但未传入的键原样保留。
+      （调用方先 read + merge + write,实现"重写账户 vars、保留其他 vars"）
+    - 写前自动备份 .env.bak,atomic write（tmp + os.replace）。
+    - 返回 backup 路径或 None。
+
+    Args:
+        path: 目标 .env 路径
+        kv: 要写入的全部 {key: value}（含所有非账户 vars 和账户 vars）
+        backup: 是否备份（默认 True）
+    """
+    backup_path: Optional[str] = None
+    if backup and path.exists():
+        backup_path = str(path.with_suffix(path.suffix + ".bak"))
+        try:
+            shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+        except OSError as exc:
+            logger.warning("备份 %s 失败（继续写）: %s", path, exc)
+            backup_path = None
+
+    lines: List[str] = []
+    for k in sorted(kv.keys()):
+        v = kv[k]
+        needs_quote = bool(re.search(r'[ \t#="\n\'\\\\]', v))
+        if needs_quote:
+            escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'{k}="{escaped}"')
+        else:
+            lines.append(f"{k}={v}")
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+    return backup_path
+
+
+def _load_accounts_from_env(
+    env_path: Path,
+) -> Dict[str, Dict[str, str]]:
+    """从项目根 .env 解析 FEISHU_ACCOUNTS JSON → {account_id: meta}。
+
+    meta = {description, domain, app_id, verification_token} (不含 secrets;
+    secrets 由 _load_gateway_account_env 从 gateway .env 提供)。
+
+    容错:JSON 损坏 / 不存在 → 返回 {}。
+    """
+    if not env_path.exists():
+        return {}
+    kv = _read_simple_env_file(env_path)
+    raw = kv.get(FEISHU_ACCOUNTS_KEY, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("FEISHU_ACCOUNTS JSON 解析失败: %r", raw[:80])
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: Dict[str, Dict[str, str]] = {}
+    for account_id, meta in parsed.items():
+        if not isinstance(account_id, str) or not isinstance(meta, dict):
+            continue
+        out[account_id] = {
+            "description": str(meta.get("description", "") or ""),
+            "domain": str(meta.get("domain", "feishu") or "feishu"),
+            "app_id": str(meta.get("app_id", "") or ""),
+            "verification_token": str(meta.get("verification_token", "") or ""),
+        }
+    return out
+
+
+def _load_gateway_account_env(account_id: str) -> Dict[str, str]:
+    """从 gateway .env 读 FEISHU_<SUCC>_<FIELD> 四个变量 → 字典 {ui_field_key, raw_value}。
+
+    缺哪个返哪个(空字符串);不存在 gateway .env 视为全部空。
+    """
+    if not GATEWAY_ENV_FILE.exists():
+        return {}
+    kv = _read_simple_env_file(GATEWAY_ENV_FILE)
+    out: Dict[str, str] = {}
+    for env_suffix, ui_key, _ in ACCOUNT_FIELD_SPECS:
+        env_key = _account_env_key(account_id, env_suffix)
+        out[ui_key] = kv.get(env_key, "")
+    return out
+
+
+def _build_gateway_env_kv(
+    accounts: List[Dict[str, str]],
+) -> Dict[str, str]:
+    """把 accounts 列表展开成 {FEISHU_<SUCC>_<FIELD>: value} 字典。
+
+    仅含多账户相关的 4N 个键;调用方负责与原 gateway .env 中其他键合并。
+    """
+    out: Dict[str, str] = {}
+    for acc in accounts:
+        aid = acc["account_id"]
+        for env_suffix, ui_key, _ in ACCOUNT_FIELD_SPECS:
+            v = acc.get(ui_key, "")
+            if v == "":
+                continue  # 空值不写入,避免 gateway 启动报 CONFIG_ENV_MISSING
+            out[_account_env_key(aid, env_suffix)] = v
+    return out
+
+
+def _upsert_gateway_accounts_env(
+    new_accounts: List[Dict[str, str]],
+    *,
+    deleted_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """重写 gateway .env 中的多账户键。
+
+    行为:
+        1. 读 gateway .env 全部 {key: value}
+        2. 删除所有现有的 FEISHU_<SUCC>_<FIELD>（N*4 个）
+        3. 删除 deleted_ids（兼容旧名 / 多余 ID）的 4 个键
+        4. 用 new_accounts 重建账户键
+        5. 写回（其他非账户 vars 原样保留;写前自动备份 .env.bak）
+
+    Returns:
+        {"ok": True, "backup": "...", "written_keys": [...], "removed_keys": [...]}
+    """
+    deleted_ids = deleted_ids or []
+    existing_kv = _read_simple_env_file(GATEWAY_ENV_FILE)
+    # 清掉现有的多账户键
+    removed_keys: List[str] = []
+    for k in list(existing_kv.keys()):
+        if _is_account_env_key(k) is not None:
+            existing_kv.pop(k, None)
+            removed_keys.append(k)
+    # 清掉被显式删除的 ID 的键（通常上面已清,这里做幂等兜底）
+    for did in deleted_ids:
+        for env_suffix, _, _ in ACCOUNT_FIELD_SPECS:
+            env_key = _account_env_key(did, env_suffix)
+            if env_key in existing_kv:
+                existing_kv.pop(env_key, None)
+                if env_key not in removed_keys:
+                    removed_keys.append(env_key)
+    # 重建账户键
+    new_kv = _build_gateway_env_kv(new_accounts)
+    existing_kv.update(new_kv)
+    written_keys = sorted(new_kv.keys())
+    backup_path = _write_simple_env_file(GATEWAY_ENV_FILE, existing_kv)
+    return {
+        "ok": True,
+        "backup": backup_path,
+        "written_keys": written_keys,
+        "removed_keys": sorted(removed_keys),
+    }
+
+
+def _upsert_feishu_config_accounts(
+    new_accounts: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """重写 config.feishu.local.json 的 channels.feishu.accounts 块。
+
+    行为:
+        1. 读现有 JSON（若不存在则用空 dict）
+        2. 整体替换 channels.feishu.accounts（避免遗漏旧 key）
+        3. 顶层 server/storage/delivery/其他 channels 原样保留
+        4. 写前备份 .bak,atomic write
+
+    每个账户的 JSON 块用 ${FEISHU_<SUCC>_<FIELD>} 引用 gateway .env。
+    """
+    cfg: Dict[str, Any] = {}
+    if FEISHU_CONFIG_FILE.exists():
+        try:
+            cfg = json.loads(FEISHU_CONFIG_FILE.read_text(encoding="utf-8"))
+            if not isinstance(cfg, dict):
+                cfg = {}
+        except json.JSONDecodeError:
+            logger.warning("config.feishu.local.json JSON 损坏, 重置为空 dict")
+            cfg = {}
+
+    # 保留顶层其他字段
+    channels = cfg.get("channels") or {}
+    if not isinstance(channels, dict):
+        channels = {}
+
+    # 整体重建 feishu.accounts
+    new_accounts_block: Dict[str, Any] = {}
+    for acc in new_accounts:
+        aid = acc["account_id"]
+        # 校验:account_id 必须能生成合法 env 后缀
+        if not _account_id_to_env_suffix(aid):
+            logger.warning(
+                "跳过非法 account_id=%r（无法生成 env 后缀）", aid,
+            )
+            continue
+        try:
+            domain_key = _account_env_key(aid, "DOMAIN")
+            app_id_key = _account_env_key(aid, "APP_ID")
+            app_secret_key = _account_env_key(aid, "APP_SECRET")
+            token_key = _account_env_key(aid, "VERIFICATION_TOKEN")
+        except ValueError:
+            continue
+        block = dict(DEFAULT_ACCOUNT_BLOCK)  # copy 默认网关参数
+        block["domain"] = "${" + domain_key + "}"
+        block["appId"] = "${" + app_id_key + "}"
+        block["appSecret"] = "${" + app_secret_key + "}"
+        block["verificationToken"] = "${" + token_key + "}"
+        new_accounts_block[aid] = block
+
+    # 保留其他 channel 配置（loopback / generic 等）,仅替换 feishu.accounts
+    channels["feishu"] = {
+        **({"enabled": True} if "feishu" not in channels else {}),
+        "enabled": True,
+        "accounts": new_accounts_block,
+    }
+    cfg["channels"] = channels
+
+    # 备份
+    backup_path: Optional[str] = None
+    if FEISHU_CONFIG_FILE.exists():
+        backup_path = str(FEISHU_CONFIG_BACKUP_FILE)
+        try:
+            shutil.copy2(FEISHU_CONFIG_FILE, FEISHU_CONFIG_BACKUP_FILE)
+        except OSError as exc:
+            logger.warning("备份 %s 失败（继续写）: %s", FEISHU_CONFIG_FILE, exc)
+            backup_path = None
+
+    # atomic write
+    tmp_path = FEISHU_CONFIG_FILE.with_suffix(FEISHU_CONFIG_FILE.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, FEISHU_CONFIG_FILE)
+    return {
+        "ok": True,
+        "backup": backup_path,
+        "accounts_written": sorted(new_accounts_block.keys()),
+    }
+
+
+def _resolve_account_secrets(
+    accounts: List[Dict[str, str]],
+) -> None:
+    """就地处理 accounts 列表中的 `***` 占位符 → 从 gateway .env 读回原值。
+
+    仅对敏感字段（app_secret / verification_token）生效。
+    输入 accounts 形如:[{account_id, app_secret, verification_token, ...}]
+    """
+    if not GATEWAY_ENV_FILE.exists():
+        return
+    for acc in accounts:
+        gw = _load_gateway_account_env(acc["account_id"])
+        for _, ui_key, sensitive in ACCOUNT_FIELD_SPECS:
+            if not sensitive:
+                continue
+            if acc.get(ui_key, "") == "***":
+                acc[ui_key] = gw.get(ui_key, "")
+
+
 def get_managed_view() -> Dict[str, Any]:
     """从 .env 读出 UI 关心的字段视图。
 
-    2026-08-13 重构：返回 user_map（[{open_id, chat_id, role, name}]）替代旧的
+    2026-08-13 重构：返回 user_map（[{open_id, role, name}]）替代旧的
     FEISHU_GROUP_<ROLE> 列表。
+    2026-08-17 清理：USER_MAP 移除 chat_id 字段（一直未消费；群发改走 GROUP_MAP）。
 
     Returns:
         {
@@ -231,7 +634,11 @@ def get_managed_view() -> Dict[str, Any]:
                 ...
             },
             "user_map": [  # 解析后的 FEISHU_USER_MAP 条目（按 open_id 排序）
-                {"open_id": "ou_xxx", "chat_id": "oc_xxx", "role": "车间主任", "name": "张三"},
+                {"open_id": "ou_xxx", "role": "车间主任", "name": "张三"},
+                ...
+            ],
+            "group_map": [  # 解析后的 FEISHU_GROUP_MAP 条目（按 chat_id 排序）
+                {"chat_id": "oc_xxx", "name": "应急响应群", "description": "P8 告警群"},
                 ...
             ],
             "legacy_group_overrides": [  # 旧 FEISHU_GROUP_<ROLE>（仅用于清理提示）
@@ -256,6 +663,7 @@ def get_managed_view() -> Dict[str, Any]:
         }
 
     # 解析 FEISHU_USER_MAP → 条目数组（按 open_id 排序保证稳定）
+    # 2026-08-17 清理：USER_MAP 移除 chat_id 字段（历史残留，仍可被静默忽略）
     user_map: List[Dict[str, str]] = []
     raw_user_map = kv.get(FEISHU_USER_MAP_KEY, "").strip()
     if raw_user_map:
@@ -267,13 +675,38 @@ def get_managed_view() -> Dict[str, Any]:
                         continue
                     user_map.append({
                         "open_id": open_id,
-                        "chat_id": str(info.get("chat_id", "") or ""),
-                        "role": str(info.get("role", "") or ""),
-                        "name": str(info.get("name", "") or ""),
+                        "role": str(info.get("role", "") or "").strip(),
+                        "name": str(info.get("name", "") or "").strip(),
                     })
         except json.JSONDecodeError:
             pass  # 留空数组；前端显示解析失败
     user_map.sort(key=lambda x: x["open_id"])
+
+    # 解析 FEISHU_GROUP_MAP → 条目数组（按 chat_id 排序保证稳定）
+    # 注：name 允许为空（占位条目），来自 Gateway 监听捕获但用户尚未命名的群
+    group_map: List[Dict[str, str]] = []
+    raw_group_map = kv.get(FEISHU_GROUP_MAP_KEY, "").strip()
+    if raw_group_map:
+        try:
+            parsed_gm = json.loads(raw_group_map)
+            if isinstance(parsed_gm, dict):
+                for chat_id, info in parsed_gm.items():
+                    if not isinstance(info, dict):
+                        continue
+                    chat_id_s = str(chat_id).strip()
+                    if not chat_id_s:
+                        continue
+                    name = str(info.get("name", "") or "").strip()
+                    description = str(info.get("description", "") or "").strip()
+                    group_map.append({
+                        "chat_id": chat_id_s,
+                        "name": name,
+                        "description": description,
+                        "is_unnamed": (not name),  # 前端用来显示"未命名（点击编辑）"
+                    })
+        except json.JSONDecodeError:
+            pass  # 留空数组；前端显示解析失败
+    group_map.sort(key=lambda x: x["chat_id"])
 
     # 旧 FEISHU_GROUP_<ROLE> 残留（用于清理提示）
     legacy_group_overrides: List[Dict[str, str]] = []
@@ -287,10 +720,42 @@ def get_managed_view() -> Dict[str, Any]:
             })
     legacy_group_overrides.sort(key=lambda x: x["key"])
 
+    # 多账户（FEISHU_ACCOUNTS JSON + gateway .env 中的 secrets）
+    # 合并两份数据:UI 字段(描述/domain/app_id/verification_token)来自 FEISHU_ACCOUNTS JSON,
+    # 敏感字段(app_secret/verification_token 真值)来自 gateway .env。
+    accounts_dict = _load_accounts_from_env(ENV_FILE)
+    accounts_list: List[Dict[str, Any]] = []
+    for aid in sorted(accounts_dict.keys()):
+        meta = accounts_dict[aid]
+        gw = _load_gateway_account_env(aid)
+        app_secret_val = gw.get("app_secret", "")
+        token_val = gw.get("verification_token", "")
+        accounts_list.append({
+            "account_id": aid,
+            "description": meta.get("description", ""),
+            "domain": meta.get("domain", "feishu"),
+            "app_id": {
+                "value": meta.get("app_id", ""),
+                "has_value": bool(meta.get("app_id", "")),
+            },
+            "app_secret": {
+                "value": ("***" if app_secret_val else ""),
+                "sensitive": True,
+                "has_value": bool(app_secret_val),
+            },
+            "verification_token": {
+                "value": ("***" if token_val else ""),
+                "sensitive": True,
+                "has_value": bool(token_val),
+            },
+        })
+
     return {
         "managed": managed,
         "user_map": user_map,
+        "group_map": group_map,
         "legacy_group_overrides": legacy_group_overrides,
+        "accounts": accounts_list,
         "env_path": str(ENV_FILE),
         "env_exists": ENV_FILE.exists(),
     }
@@ -433,8 +898,10 @@ def test_resolve_conversation_id(
 ) -> Dict[str, Any]:
     """预演 USER_MAP 解析（不调用 gateway；纯本地）。
 
-    2026-08-13 重构：FEISHU_USER_MAP 顶层是 {open_id: {chat_id, role, name}}；
+    2026-08-13 重构：FEISHU_USER_MAP 顶层是 {open_id: {role, name}}；
     同一 role 可对应多个收件人 → 返回 recipients 列表。
+    2026-08-17 清理：USER_MAP 移除 chat_id 字段，所有收件人 receive_id_type
+    固定为 open_id（单聊）；群发请改用 FEISHU_GROUP_MAP + send_to_group。
 
     Args:
         assignee_role: 责任岗位（如"车间主任"）
@@ -447,8 +914,8 @@ def test_resolve_conversation_id(
             "map_valid_json": bool,
             "map_error": Optional[str],
             "recipients": [
-                {"open_id": "ou_xxx", "chat_id": "oc_xxx", "name": "张三",
-                 "receive_id_type": "chat_id"|"open_id"},
+                {"open_id": "ou_xxx", "name": "张三",
+                 "receive_id_type": "open_id"},
                 ...
             ],
             "count": int,
@@ -463,7 +930,7 @@ def test_resolve_conversation_id(
             parsed_map = json.loads(user_map_json)
             if not isinstance(parsed_map, dict):
                 map_valid = False
-                map_error = "顶层必须是 JSON object（{open_id: {chat_id, role, name}, ...}）"
+                map_error = "顶层必须是 JSON object（{open_id: {role, name}, ...}）"
                 parsed_map = {}
         except json.JSONDecodeError as exc:
             map_valid = False
@@ -475,25 +942,14 @@ def test_resolve_conversation_id(
     for open_id, info in parsed_map.items():
         if not isinstance(info, dict):
             continue
-        if str(info.get("role", "") or "") != assignee_role:
+        if str(info.get("role", "") or "").strip() != assignee_role:
             continue
-        chat_id = str(info.get("chat_id", "") or "").strip()
         name = str(info.get("name", "") or "").strip()
-        # 优先级：有 chat_id → 群消息；否则 → open_id 单聊
-        if chat_id:
-            recipients.append({
-                "open_id": open_id,
-                "chat_id": chat_id,
-                "name": name,
-                "receive_id_type": "chat_id",
-            })
-        else:
-            recipients.append({
-                "open_id": open_id,
-                "chat_id": "",
-                "name": name,
-                "receive_id_type": "open_id",
-            })
+        recipients.append({
+            "open_id": open_id,
+            "name": name,
+            "receive_id_type": "open_id",
+        })
 
     if recipients:
         return {
@@ -514,9 +970,9 @@ def test_resolve_conversation_id(
         "map_error": map_error,
         "recipients": [{
             "open_id": "",
-            "chat_id": placeholder,
             "name": "",
-            "receive_id_type": "chat_id",
+            "receive_id_type": "open_id",
+            "_fallback_placeholder": placeholder,
         }],
         "count": 0,
     }
@@ -719,88 +1175,6 @@ def stop_all_listeners(reason: str = "shutdown") -> None:
             lst.stop(reason=reason)
 
 
-def save_captured_chat_id(
-    open_id: str,
-    chat_id: str,
-    role: str,
-    name: str,
-) -> Dict[str, Any]:
-    """把捕获的 chat_id / open_id / role / name 写入 .env 的 FEISHU_USER_MAP。
-
-    数据结构：
-        FEISHU_USER_MAP = {
-            "ou_alice_xxx": {
-                "chat_id": "oc_xxx",
-                "role": "车间主任",
-                "name": "张三"
-            },
-            ...
-        }
-
-    Args:
-        open_id: 用户 open_id（ou_xxx），作为 dict 的 key
-        chat_id:  飞书会话 ID（oc_xxx 群聊；None/"" 表示只有 open_id 走单聊）
-        role:     责任岗位（如"车间主任"），用于 P8_job.assignee_role 匹配
-        name:     中文姓名（手动填），用于消息正文里"@张三"
-
-    Returns:
-        {"ok": True, "open_id": "...", "existed": bool,
-         "user_map_size": int, "updated": [...], "backup": "..."}
-    """
-    open_id = (open_id or "").strip()
-    chat_id = (chat_id or "").strip()
-    role = (role or "").strip()
-    name = (name or "").strip()
-    if not open_id:
-        raise ValueError("open_id 不能为空")
-    if not role:
-        raise ValueError("role 不能为空")
-    if not name:
-        raise ValueError("name 不能为空（人只知道自己叫什么，不记得 ID）")
-
-    # 读取现有 user_map
-    existing = {k: v for k, v, _ in parse_env_file(ENV_FILE)}
-    cur_raw = existing.get(FEISHU_USER_MAP_KEY, "").strip()
-    try:
-        cur_map = json.loads(cur_raw) if cur_raw else {}
-        if not isinstance(cur_map, dict):
-            cur_map = {}
-    except json.JSONDecodeError:
-        cur_map = {}
-
-    existed = open_id in cur_map
-    # 写新条目（4 字段；chat_id 缺省用空字符串表示走单聊）
-    cur_map[open_id] = {
-        "chat_id": chat_id,
-        "role": role,
-        "name": name,
-    }
-    new_value = json.dumps(cur_map, ensure_ascii=False, separators=(",", ":"))
-
-    new_entries: List[Tuple[str, str]] = [(FEISHU_USER_MAP_KEY, new_value)]
-    # 顺手清理旧的 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE>（如果有）
-    legacy_to_remove: List[Tuple[str, str]] = []
-    if "FEISHU_CONVERSATION_MAP" in existing:
-        legacy_to_remove.append(("FEISHU_CONVERSATION_MAP", ""))
-    for k in existing:
-        if FEISHU_GROUP_PATTERN.match(k):
-            legacy_to_remove.append((k, ""))
-    if legacy_to_remove:
-        new_entries.extend(legacy_to_remove)
-
-    result = upsert_env_entries(new_entries)
-
-    return {
-        "ok": True,
-        "open_id": open_id,
-        "existed": existed,
-        "user_map_size": len(cur_map),
-        "legacy_removed": [k for k, _ in legacy_to_remove],
-        "updated": result["updated"],
-        "backup": result["backup"],
-    }
-
-
 def _role_to_env_key(role: str) -> str:
     """role 名 → FEISHU_GROUP_<...> 后缀。
 
@@ -878,30 +1252,37 @@ def api_get_config():
 def api_save_config():
     """POST /api/feishu/config → 把表单内容写入 .env。
 
-    2026-08-13 重构：表单提交 user_map（[{open_id, chat_id, role, name, _delete}]）
+    2026-08-13 重构：表单提交 user_map（[{open_id, role, name, _delete}]）
     替代旧的 group_overrides + FEISHU_CONVERSATION_MAP。
+    2026-08-17 清理：USER_MAP 移除 chat_id 字段。
 
     Body:
         {
             "managed": {"GATEWAY_HOST": "...", "CG_API_KEY": "***|新值", ...},
             "user_map": [
-                {"open_id": "ou_xxx", "chat_id": "oc_xxx", "role": "车间主任",
+                {"open_id": "ou_xxx", "role": "车间主任",
                  "name": "张三", "_delete": false},
                 ...
             ],
+            "group_map": [...],
+            "accounts":  [...],
         }
 
     安全规则：
         - managed.* 中 "***" 视为"保留原值"，不写盘
         - managed.* 空字符串视为"删除该 key"
         - user_map 每行 {_delete:true} 时从 dict 删除该 open_id
+        - group_map 每行 {_delete:true} 时从 dict 删除该 chat_id
         - 自动清理旧 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE> 残留
+        - accounts 多账户同步写 3 处（项目根 .env + gateway .env + config.feishu.local.json）
     """
     logger.info("[POST] /api/feishu/config 进入")
     try:
         body = request.get_json(force=True) or {}
         managed_in: Dict[str, str] = body.get("managed") or {}
         user_map_in: List[Dict[str, Any]] = body.get("user_map") or []
+        group_map_in: List[Dict[str, Any]] = body.get("group_map") or []
+        accounts_in: List[Dict[str, Any]] = body.get("accounts") or []
 
         # 1. 处理 managed（敏感字段"***"→保留原值；空→删除）
         existing = {k: v for k, v, _ in parse_env_file(ENV_FILE)}
@@ -940,14 +1321,12 @@ def api_save_config():
             if delete:
                 user_map_dict.pop(open_id, None)
                 continue
-            chat_id = (row.get("chat_id") or "").strip()
             role = (row.get("role") or "").strip()
             name = (row.get("name") or "").strip()
             if not role:
                 # role 缺失视为无效 → 跳过（不写盘；但也不删）
                 continue
             user_map_dict[open_id] = {
-                "chat_id": chat_id,
                 "role": role,
                 "name": name,
             }
@@ -957,6 +1336,110 @@ def api_save_config():
         )
         new_entries.append((FEISHU_USER_MAP_KEY, new_user_map_value))
 
+        # 2B. 处理 group_map（动态行；主键 chat_id）
+        # 起始：从现有 .env 读取的 dict
+        existing_gm_raw = existing.get(FEISHU_GROUP_MAP_KEY, "").strip()
+        try:
+            group_map_dict: Dict[str, Dict[str, str]] = (
+                json.loads(existing_gm_raw) if existing_gm_raw else {}
+            )
+            if not isinstance(group_map_dict, dict):
+                group_map_dict = {}
+        except json.JSONDecodeError:
+            group_map_dict = {}
+
+        for row in group_map_in:
+            chat_id = (row.get("chat_id") or "").strip()
+            delete = bool(row.get("_delete"))
+            if not chat_id:
+                continue
+            if delete:
+                group_map_dict.pop(chat_id, None)
+                continue
+            name = (row.get("name") or "").strip()
+            description = (row.get("description") or "").strip()
+            if not name:
+                # name 必填；缺失则跳过该行（不写盘；但也不删）
+                continue
+            group_map_dict[chat_id] = {
+                "name": name,
+                "description": description,
+            }
+
+        new_group_map_value = json.dumps(
+            group_map_dict, ensure_ascii=False, separators=(",", ":")
+        )
+        new_entries.append((FEISHU_GROUP_MAP_KEY, new_group_map_value))
+
+        # 2C. 处理多账户（FEISHU_ACCOUNTS + gateway .env + config.feishu.local.json）
+        validated_accounts: List[Dict[str, str]] = []
+        seen_ids: set[str] = set()
+        account_errors: List[str] = []
+        for idx, row in enumerate(accounts_in):
+            aid = (row.get("account_id") or "").strip()
+            if not aid:
+                continue  # 空主键行:跳过(UI 已拦截,这里再保底)
+            if aid in seen_ids:
+                account_errors.append(f"row[{idx}] account_id={aid} 重复")
+                continue
+            err = _validate_account_id(aid)
+            if err is not None:
+                account_errors.append(f"row[{idx}] account_id={aid}: {err}")
+                continue
+            seen_ids.add(aid)
+            validated_accounts.append({
+                "account_id": aid,
+                "description": (row.get("description") or "").strip(),
+                "domain": ((row.get("domain") or "feishu").strip() or "feishu"),
+                "app_id": (row.get("app_id") or "").strip(),
+                "app_secret": row.get("app_secret", "") or "",
+                "verification_token": row.get("verification_token", "") or "",
+            })
+        if account_errors:
+            return jsonify({
+                "ok": False,
+                "error": "accounts validation: " + "; ".join(account_errors),
+            }), 400
+
+        # 处理 "***" 占位符 → 从 gateway .env 读回原值
+        _resolve_account_secrets(validated_accounts)
+
+        # 写 FEISHU_ACCOUNTS JSON(不含 secrets) → .env
+        accounts_json: Dict[str, Dict[str, str]] = {}
+        for acc in validated_accounts:
+            accounts_json[acc["account_id"]] = {
+                "description": acc["description"],
+                "domain": acc["domain"],
+                "app_id": acc["app_id"],
+                # 仅为 UI 展示完整性记录;真实 secrets 在 gateway .env
+                "verification_token": acc["verification_token"],
+            }
+        if accounts_json:
+            new_entries.append((
+                FEISHU_ACCOUNTS_KEY,
+                json.dumps(accounts_json, ensure_ascii=False, separators=(",", ":")),
+            ))
+        else:
+            new_entries.append((FEISHU_ACCOUNTS_KEY, ""))
+
+        # 兼容旧字段:有 default 账户 → 回写顶层 FEISHU_APP_ID/SECRET/DOMAIN(平滑迁移)
+        # 无 accounts → 清空旧字段(避免幽灵配置)
+        default_acc = next(
+            (a for a in validated_accounts if a["account_id"] == "default"), None,
+        )
+        if default_acc is not None:
+            if default_acc["app_id"]:
+                new_entries.append(("FEISHU_APP_ID", default_acc["app_id"]))
+            if default_acc["app_secret"]:
+                new_entries.append(("FEISHU_APP_SECRET", default_acc["app_secret"]))
+            new_entries.append(("FEISHU_DOMAIN", default_acc["domain"]))
+        elif not validated_accounts:
+            new_entries.extend([
+                ("FEISHU_APP_ID", ""),
+                ("FEISHU_APP_SECRET", ""),
+                ("FEISHU_DOMAIN", ""),
+            ])
+
         # 3. 顺手清理旧的 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE>
         if "FEISHU_CONVERSATION_MAP" in existing:
             new_entries.append(("FEISHU_CONVERSATION_MAP", ""))
@@ -964,16 +1447,50 @@ def api_save_config():
             if FEISHU_GROUP_PATTERN.match(k):
                 new_entries.append((k, ""))
 
-        # 4. 写盘
+        # 4. 写盘（项目根 .env）
         result = upsert_env_entries(new_entries)
+
+        # 5. 同步写 gateway .env 与 config.feishu.local.json（多账户运行时配置）
+        gateway_result: Optional[Dict[str, Any]] = None
+        config_result: Optional[Dict[str, Any]] = None
+        try:
+            gateway_result = _upsert_gateway_accounts_env(validated_accounts)
+        except Exception as gw_exc:
+            logger.exception(
+                "[POST] /api/feishu/config: 写 gateway .env 失败: %s", gw_exc,
+            )
+            return jsonify({
+                "ok": False,
+                "error": f"accounts pass 写 gateway .env 失败: {gw_exc}。"
+                          "已写入项目根 .env,但 gateway 配置未同步;请重试保存。",
+            }), 500
+        try:
+            config_result = _upsert_feishu_config_accounts(validated_accounts)
+        except Exception as cfg_exc:
+            logger.exception(
+                "[POST] /api/feishu/config: 写 config.feishu.local.json 失败: %s", cfg_exc,
+            )
+            return jsonify({
+                "ok": False,
+                "error": f"accounts pass 写 config.feishu.local.json 失败: {cfg_exc}。"
+                          "已写入项目根 .env 和 gateway .env,但 JSON 配置未同步;请重试保存。",
+            }), 500
+
         logger.info(
-            "[POST] /api/feishu/config 响应: updated=%s removed=%s backup=%s user_map_size=%d",
-            result["updated"], result["removed"], result["backup"], len(user_map_dict),
+            "[POST] /api/feishu/config 响应: updated=%s removed=%s backup=%s "
+            "user_map_size=%d accounts_size=%d gateway_backup=%s config_backup=%s",
+            result["updated"], result["removed"], result["backup"],
+            len(user_map_dict), len(validated_accounts),
+            gateway_result["backup"], config_result["backup"],
         )
         return jsonify({
             "ok": True,
             **result,
             "user_map_size": len(user_map_dict),
+            "accounts_size": len(validated_accounts),
+            "gateway_backup": gateway_result["backup"],
+            "config_backup": config_result["backup"],
+            "gateway_written_keys": gateway_result["written_keys"],
         })
 
     except Exception as exc:
@@ -1009,10 +1526,10 @@ def api_test_gateway():
 def api_test_resolve():
     """POST /api/feishu/test/resolve → 预演 USER_MAP 解析（不调 gateway）。
 
-    Body（2026-08-13 重构）：
+    Body（2026-08-13 重构 / 2026-08-17 清理 chat_id）：
         {
             "assignee_role": "车间主任",
-            "user_map_json": "{\"ou_xxx\": {\"chat_id\": \"oc_xxx\", \"role\": \"车间主任\", \"name\": \"张三\"}}"
+            "user_map_json": "{\"ou_xxx\": {\"role\": \"车间主任\", \"name\": \"张三\"}}"
         }
     """
     logger.info("[POST] /api/feishu/test/resolve 进入")
@@ -1170,98 +1687,162 @@ def api_listener_stop():
         return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
 
-@app.route("/api/feishu/listener/save", methods=["POST"])
-def api_listener_save():
-    """POST /api/feishu/listener/save → 把捕获的 chat_id / open_id 写入 .env。
+@app.route("/api/feishu/config/delete", methods=["POST"])
+def api_delete_config_item():
+    """POST /api/feishu/config/delete → 按主键删除单条 USER_MAP / GROUP_MAP / 账户 配置。
 
-    Body（2026-08-13 重构）：
+    Body：
         {
-            "listener_id": "...",
-            "sequence": 123,                  # 来自 snapshot.events[*].sequence
-            "open_id": "ou_xxx",             # 主键（来自事件 sender.id）
-            "chat_id": "oc_xxx",             # 来自事件 conversation.id（可空）
-            "role": "作业负责人",              # 责任岗位（手动填）
-            "name": "张三"                    # 中文姓名（手动填；人只记得自己叫什么）
+            "type": "user" | "group" | "account",
+            "key":  "ou_xxx" | "oc_xxx" | "<account_id>"
         }
 
-    流程：
-        1. 找到对应 listener + sequence 的事件
-        2. 从事件自动取 open_id / chat_id（如未传）
-        3. 写到 FEISHU_USER_MAP（旧 MAP/GROUP 自动清理）
+    行为：
+        - user / group: 直接调 upsert_env_entries 写盘 .env（备份 .env.bak）
+        - account: 同时改三处（FEISHU_ACCOUNTS JSON + gateway .env per-account vars +
+                 config.feishu.local.json accounts 块）
+        - 主键不存在 → 视为成功（幂等），返回 deleted=False
+        - 不级联：删 GROUP_MAP 一行时，USER_MAP 中共享 chat_id 的 user 不动
+          （群名显示列会自动变空 — 前端 lookupGroupMapByChatId 返回 null）
+
+    写入约束：
+        - 单独的 delete 操作，不与表单 save 混合；前端 + 后端双重校验
+        - type 取值严格 white-list（避免任意写盘）
     """
-    logger.info("[POST] /api/feishu/listener/save 进入")
+    logger.info("[POST] /api/feishu/config/delete 进入")
     try:
         body = request.get_json(force=True, silent=True) or {}
-        listener_id = (body.get("listener_id") or "").strip()
-        sequence = body.get("sequence")
-        open_id_in = (body.get("open_id") or "").strip()
-        chat_id_in = (body.get("chat_id") or "").strip()
-        role = (body.get("role") or "").strip()
-        name = (body.get("name") or "").strip()
+        type_ = (body.get("type") or "").strip()
+        key = (body.get("key") or "").strip()
 
-        if not listener_id:
-            return jsonify({"ok": False, "error": "缺少 listener_id"}), 400
-        if sequence is None:
-            return jsonify({"ok": False, "error": "缺少 sequence"}), 400
-        if not role:
-            return jsonify({"ok": False, "error": "缺少 role（责任岗位名）"}), 400
-        if not name:
-            return jsonify({"ok": False, "error": "缺少 name（中文姓名；人只知道自己叫什么）"}), 400
-
-        # 找到 listener
-        with _LISTENERS_LOCK:
-            listener = _LISTENERS.get(listener_id)
-        if listener is None:
-            return jsonify({"ok": False, "error": f"listener_id 不存在或已清理: {listener_id}"}), 404
-
-        # 找到事件
-        target_evt = None
-        for evt in listener.snapshot()["events"]:
-            if evt.get("sequence") == sequence:
-                target_evt = evt
-                break
-        if target_evt is None:
-            return jsonify({"ok": False, "error": f"未找到 sequence={sequence} 的事件"}), 404
-
-        # 自动从事件取 open_id / chat_id（如未显式传）
-        if not open_id_in:
-            open_id_in = (target_evt.get("open_id") or "").strip()
-        if not chat_id_in:
-            chat_id_in = (target_evt.get("chat_id") or "").strip()
-
-        if not open_id_in:
+        if type_ not in ("user", "group", "account"):
             return jsonify({
                 "ok": False,
-                "error": f"该事件 open_id 为空（sender_id={target_evt.get('open_id')!r}），无法作为 USER_MAP 主键",
+                "error": "type 必须为 'user' / 'group' / 'account'",
             }), 400
+        if not key:
+            return jsonify({"ok": False, "error": "key 不能为空"}), 400
 
-        result = save_captured_chat_id(
-            open_id=open_id_in,
-            chat_id=chat_id_in,
-            role=role,
-            name=name,
-        )
+        # ===== 账户删除分支 =====
+        if type_ == "account":
+            err = _validate_account_id(key)
+            if err is not None:
+                return jsonify({"ok": False, "error": err}), 400
+            accounts_dict = _load_accounts_from_env(ENV_FILE)
+            if key not in accounts_dict:
+                logger.info(
+                    "[POST] /api/feishu/config/delete: account_id=%s 不存在（幂等跳过）",
+                    key,
+                )
+                return jsonify({
+                    "ok": True,
+                    "deleted": False,
+                    "type": type_,
+                    "key": key,
+                    "message": "account_id 不存在；幂等跳过",
+                    "remaining_size": len(accounts_dict),
+                })
+            accounts_dict.pop(key)
+            # 1. 重写 FEISHU_ACCOUNTS JSON
+            if accounts_dict:
+                upsert_env_entries([(
+                    FEISHU_ACCOUNTS_KEY,
+                    json.dumps(accounts_dict, ensure_ascii=False, separators=(",", ":")),
+                )])
+            else:
+                upsert_env_entries([(FEISHU_ACCOUNTS_KEY, "")])
+            # 2. 重建剩余账户列表(用于 gateway .env + config JSON)
+            remaining_accounts: List[Dict[str, str]] = []
+            for aid, meta in accounts_dict.items():
+                gw = _load_gateway_account_env(aid)
+                remaining_accounts.append({
+                    "account_id": aid,
+                    "description": meta.get("description", ""),
+                    "domain": meta.get("domain", "feishu"),
+                    "app_id": meta.get("app_id", ""),
+                    "app_secret": gw.get("app_secret", ""),
+                    "verification_token": gw.get("verification_token", ""),
+                })
+            # 3. 同步 gateway .env（删除 deleted_ids 的 4 个键 + 重写剩余）
+            gw_result = _upsert_gateway_accounts_env(
+                remaining_accounts, deleted_ids=[key],
+            )
+            # 4. 同步 config.feishu.local.json accounts 块
+            cfg_result = _upsert_feishu_config_accounts(remaining_accounts)
+            # 5. 若删的是 default 账户,清掉顶层旧字段
+            if key == "default":
+                upsert_env_entries([
+                    ("FEISHU_APP_ID", ""),
+                    ("FEISHU_APP_SECRET", ""),
+                    ("FEISHU_DOMAIN", ""),
+                ])
+            logger.info(
+                "[POST] /api/feishu/config/delete 响应: account_id=%s 已删除；"
+                "剩 %d 个,gateway_backup=%s config_backup=%s",
+                key, len(accounts_dict),
+                gw_result["backup"], cfg_result["backup"],
+            )
+            return jsonify({
+                "ok": True,
+                "deleted": True,
+                "type": type_,
+                "key": key,
+                "remaining_size": len(accounts_dict),
+                "gateway_backup": gw_result["backup"],
+                "config_backup": cfg_result["backup"],
+            })
+
+        env_key = FEISHU_USER_MAP_KEY if type_ == "user" else FEISHU_GROUP_MAP_KEY
+        existing = {k: v for k, v, _ in parse_env_file(ENV_FILE)}
+        raw = existing.get(env_key, "").strip()
+        cur_dict: Dict[str, Any] = {}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    cur_dict = parsed
+            except json.JSONDecodeError:
+                # .env 里 JSON 已损坏 → 不动它（让用户在 UI 里重新保存）
+                logger.warning(
+                    "[POST] /api/feishu/config/delete: %s JSON 解析失败，跳过",
+                    env_key,
+                )
+                return jsonify({
+                    "ok": False,
+                    "error": f"{env_key} 当前值不是合法 dict，无法定位 key",
+                }), 500
+
+        if key not in cur_dict:
+            logger.info(
+                "[POST] /api/feishu/config/delete: type=%s key=%s 不存在（幂等跳过）",
+                type_, key,
+            )
+            return jsonify({
+                "ok": True,
+                "deleted": False,
+                "type": type_,
+                "key": key,
+                "message": "key 不存在；幂等跳过",
+            })
+
+        cur_dict.pop(key, None)
+        new_value = json.dumps(cur_dict, ensure_ascii=False, separators=(",", ":"))
+        result = upsert_env_entries([(env_key, new_value)])
         logger.info(
-            "[POST] /api/feishu/listener/save 响应: open_id=%s role=%s name=%s size=%d",
-            open_id_in, role, name, result.get("user_map_size"),
+            "[POST] /api/feishu/config/delete 响应: type=%s key=%s 已删除；%s 现 %d 条",
+            type_, key, env_key, len(cur_dict),
         )
         return jsonify({
             "ok": True,
-            "captured": {
-                "sequence": sequence,
-                "open_id": open_id_in,
-                "chat_id": chat_id_in,
-                "sender_name": target_evt.get("sender_name"),
-                "conversation_type": target_evt.get("conversation_type"),
-                "text": target_evt.get("text", "")[:80],
-            },
-            "saved": result,
+            "deleted": True,
+            "type": type_,
+            "key": key,
+            "remaining_size": len(cur_dict),
+            "updated": result["updated"],
+            "backup": result["backup"],
         })
-    except ValueError as exc:
-        logger.warning("[POST] /api/feishu/listener/save 参数错误: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
-        logger.exception("[POST] /api/feishu/listener/save 异常: %s", exc)
+        logger.exception("[POST] /api/feishu/config/delete 异常: %s", exc)
         return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
 
@@ -1315,7 +1896,6 @@ __all__ = [
     # 测试 / 解析
     "test_gateway_connection",
     "test_resolve_conversation_id",
-    "save_captured_chat_id",
     # 实时监听
     "GatewayListener",
     "get_active_listener",

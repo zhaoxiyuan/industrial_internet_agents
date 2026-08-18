@@ -1042,13 +1042,13 @@ LLM 规则提示词明确：
 | 项 | 说明 |
 |----|------|
 | 调用入口 | `A7/notify/send_feishu(p8_job, job_id)` |
-| 通道 | 固定 `channel="feishu"`（由 `A7/notify/p8_feishu_adapter.py` 内部指定） |
+| 通道 | 固定 `channel="feishu"`（由 `A7/notify/feishu_sender.py` 内部指定） |
 | 接收方 | `conversation_id` 由 `_resolve_conversation_id(assignee_role)` 从环境变量解析（`FEISHU_CONVERSATION_MAP` 优先 / `FEISHU_GROUP_<KEY>` 单条 / `feishu_dev_<role>` 兜底） |
 | 幂等键 | `idempotency_key = p8_job_id`（同一 P8_job 重复发送只产生一条） |
 | gateway metadata | `{p8_job_id, job_id, risk_level, assignee_role, channel_decision: "PUSH", a6_event_count}` |
 | 失败回执 | 飞书推送失败 → 仅记日志 + 返回 `FeishuNotifyResult(status="failed")`，**不阻塞** P8_job 推进；LLM 据此决定是否重试 |
 
-**实现位置**：[`A7/notify/p8_feishu_adapter.py`](../../A7/notify/p8_feishu_adapter.py)
+**实现位置**：[`A7/notify/feishu_sender.py`](../../A7/notify/feishu_sender.py)
 （包装 `agents/channel_gateway_client.send_message()`，加 P8 业务语义；
 详见文件组织文档 § 7）。
 

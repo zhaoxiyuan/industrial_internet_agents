@@ -147,6 +147,10 @@ export class GatewayHttpServer {
         return;
       }
 
+      // 2026-08-17：飞书 Card 按钮回调（card.action.trigger）走标准 webhook 入口
+      // /webhooks/feishu/P8，在 adapters/feishu.js 的 receive() 里同步代理到业务端。
+      // 不需要在这里单独加反向代理路由。
+
       if (!url.pathname.startsWith("/v1/") || !this.authorized(request, url)) {
         if (url.pathname.startsWith("/v1/")) {
           throw new GatewayError("UNAUTHORIZED", "A valid Bearer API key is required", { status: 401 });
@@ -340,4 +344,7 @@ export class GatewayHttpServer {
       });
     }
   }
+
+  // 2026-08-17：proxyToBusiness 已废弃——Card 回调走标准 webhook 入口
+  // /webhooks/feishu/P8，在 adapters/feishu.js 的 receive() 里同步代理到业务端。
 }

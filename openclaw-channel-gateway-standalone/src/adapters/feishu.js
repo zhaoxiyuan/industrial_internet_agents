@@ -1,7 +1,52 @@
+import http from "node:http";
 import { GatewayError, PlatformSendError } from "../core/errors.js";
 import { decryptFeishuPayload, constantTimeEqual, verifyFeishuSignature } from "../util/crypto.js";
 import { fetchJson } from "../util/http.js";
 import { normalizeTrustedInbound } from "../core/validation.js";
+
+// 2026-08-17：飞书 Card 按钮回调（card.action.trigger）业务端地址。
+// Gateway 收到 Card 事件后同步代理到这里，业务端把响应原样回给飞书（飞书要求 2s 内）。
+const CARD_CALLBACK_BUSINESS_HOST = "127.0.0.1";
+const CARD_CALLBACK_BUSINESS_PORT = 8080;
+const CARD_CALLBACK_BUSINESS_PATH = "/api/feishu/card-callback";
+const CARD_CALLBACK_PROXY_TIMEOUT_MS = 5_000;
+
+function proxyCardActionToBusiness(payload, logger) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const req = http.request(
+      {
+        host: CARD_CALLBACK_BUSINESS_HOST,
+        port: CARD_CALLBACK_BUSINESS_PORT,
+        method: "POST",
+        path: CARD_CALLBACK_BUSINESS_PATH,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body, "utf8"),
+        },
+        timeout: CARD_CALLBACK_PROXY_TIMEOUT_MS,
+      },
+      (res) => {
+        let chunks = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { chunks += chunk; });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(chunks));
+          } catch (err) {
+            reject(new Error(`business returned non-JSON (status=${res.statusCode}): ${chunks.slice(0, 200)}`));
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy(new Error("business proxy timeout"));
+    });
+    req.write(body);
+    req.end();
+  });
+}
 
 function domainBase(domain) {
   return domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
@@ -93,11 +138,11 @@ export class FeishuAdapter {
     }
 
     const isChallenge = payload?.type === "url_verification" && typeof payload?.challenge === "string";
-    if (accountConfig.encryptKey && !signaturePresent && !isChallenge) {
-      throw new GatewayError("FEISHU_SIGNATURE_REQUIRED", "Signed Feishu callback headers are required for ordinary events", { status: 401 });
-    }
-    this.verifyToken(payload, accountConfig);
 
+    // 2026-08-17：url_verification 必须在 verifyToken 之前返回。
+    // 原因：飞书的 url_verification payload 是 {"challenge": "...", "type": "url_verification"}，
+    // 没有 token。如果先跑 verifyToken，constantTimeEqual(token, undefined) 永远 false → 401。
+    // 飞书收到 401 → 标记"目标回调服务器未在线"。bug fix。
     if (isChallenge) {
       return {
         response: { status: 200, body: { challenge: payload.challenge } },
@@ -105,7 +150,41 @@ export class FeishuAdapter {
       };
     }
 
+    if (accountConfig.encryptKey && !signaturePresent) {
+      throw new GatewayError("FEISHU_SIGNATURE_REQUIRED", "Signed Feishu callback headers are required for ordinary events", { status: 401 });
+    }
+    this.verifyToken(payload, accountConfig);
+
     const eventType = payload?.header?.event_type ?? payload?.type;
+
+    // 2026-08-17：飞书 Card 按钮回调（card.action.trigger）需要同步响应给飞书（2s 内）。
+    // 这里把解密后的 payload 同步代理到业务端 web/server.py:8080/api/feishu/card-callback，
+    // 业务端返回 {"status":"ok"} / {"toast":{...}} / {"card":{...}}，原样回给飞书。
+    // Card 事件不入 Gateway 事件流（不需要异步分发）。
+    if (eventType === "card.action.trigger") {
+      try {
+        const businessReply = await proxyCardActionToBusiness(payload, this.logger);
+        return {
+          response: { status: 200, body: businessReply },
+          events: [],
+        };
+      } catch (err) {
+        this.logger.error("card action proxy failed", {
+          error: err.message,
+          open_message_id: payload?.event?.context?.open_message_id,
+        });
+        // 业务端挂了也要给飞书回 200（不能 4xx/5xx，否则飞书会重试轰炸）
+        // 回一个 toast 提示，前端用户能看到。
+        return {
+          response: {
+            status: 200,
+            body: { toast: { type: "error", content: "服务暂时不可用，请稍后重试" } },
+          },
+          events: [],
+        };
+      }
+    }
+
     if (eventType !== "im.message.receive_v1") {
       return { events: [], ignored: true, ignoredReason: `Unsupported Feishu event type: ${eventType ?? "unknown"}` };
     }
@@ -212,13 +291,22 @@ export class FeishuAdapter {
   async send({ request, accountConfig }) {
     const token = await this.tenantToken(request.accountId, accountConfig);
     const base = domainBase(accountConfig.domain);
-    const content = JSON.stringify({ text: request.text });
+    // 2026-08-17：支持飞书交互式卡片（msgType="interactive"）。
+    // - 当 request.msgType === "interactive" 且 request.content 非空时：
+    //     msg_type = "interactive"，content = 客户端透传的 Card JSON 字符串
+    // - 否则走原文本路径：content = JSON.stringify({ text: request.text })
+    const msgType = request.msgType === "interactive" && typeof request.content === "string" && request.content
+      ? "interactive"
+      : "text";
+    const content = msgType === "interactive"
+      ? request.content
+      : JSON.stringify({ text: request.text });
     let url;
     let body;
     if (request.replyToId) {
       url = `${base}/open-apis/im/v1/messages/${encodeURIComponent(request.replyToId)}/reply`;
       body = {
-        msg_type: "text",
+        msg_type: msgType,
         content,
         ...(request.threadId ? { reply_in_thread: true } : {}),
       };
@@ -227,7 +315,7 @@ export class FeishuAdapter {
       url = `${base}/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`;
       body = {
         receive_id: request.to.conversationId,
-        msg_type: "text",
+        msg_type: msgType,
         content,
       };
     }

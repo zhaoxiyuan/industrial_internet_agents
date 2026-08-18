@@ -389,8 +389,8 @@ industrial_internet_agents/
 │   ├── p3_context_agent.py     # P3 上下文理解
 │   ├── p4_binding_agent.py     # P4 监测绑定
 │   ├── p5_verify_agent.py      # P5 条件核验
-│   ├── p6_monitor_agent.py     # P6 动态监测
-│   ├── p7_risk_agent.py        # P7 风险研判
+│   ├── p6_monitor_agent.py     # P6 动态监测 + A5 Web 服务（共享端口 5002）
+│   ├── p7_risk_agent.py        # P7 风险研判：A6 Agent + A6 路由 + LangChain 工具桩（挂载到 P6）
 │   ├── p8_disposition_agent.py # P8 人机处置
 │   ├── p9_closure_agent.py     # P9 闭环跟踪
 │   ├── p10_archive_agent.py    # P10 归档复盘
