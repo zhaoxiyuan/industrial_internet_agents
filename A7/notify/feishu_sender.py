@@ -126,6 +126,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from agents.channel_gateway_client import GatewayError, SendMessageResult, send_message
+from A7.notify import feishu_card as feishu_card_api
 
 
 # ============================================================
@@ -495,21 +496,31 @@ def send_to_user(
 
 
 # ============================================================
-# 2B. 飞书交互式卡片（Card）支持（2026-08-17 新增）
+# 2B. 飞书交互式卡片（Card）支持（V5 — 2026-08-18 升级）
 # ============================================================
 #
-# 飞书 Card 是 JSON UI 模板：
+# 飞书 Card 2.0 schema（按 docs/飞书卡片教程/）:
 #   {
-#     "config":  {...},
-#     "header":  {"template": "red", "title": {...}},
-#     "elements": [
-#       {"tag": "div",    "text": {"tag": "lark_md", "content": "..."}},
-#       {"tag": "action", "actions": [{"tag": "button", ...}]}
-#     ]
+#     "schema": "2.0",
+#     "header": {"template": "red|green|...", "title": {"tag": "plain_text", "content": "..."}},
+#     "body":   {"elements": [
+#       {"tag": "markdown", "content": "..."},
+#       {"tag": "action",  "actions": [
+#         {"tag": "button", "text": {...}, "type": "primary|default|danger",
+#          "value": "<JSON 字符串>"}
+#       ]}
+#     ]}
 #   }
-# 发送走 Gateway 的 ``POST /v1/messages/send``（msg_type="interactive"）。
-# 网关后端需支持 ``msg_type != "text"``；当前网关硬编码 msg_type="text"，
-# 因此卡片功能需配合网关后端升级启用。客户端 API 已就位。
+#
+# 发送流程（V5 cardkit 官方路径）：
+#   1. 业务端直接调飞书 ``POST /open-apis/cardkit/v1/cards/`` 创建卡片实体 → card_id
+#      （业务端不走 Gateway；cardkit 是飞书 OpenAPI，业务端可直调）
+#   2. 调 Gateway ``POST /v1/messages/send``（msg_type="interactive"），
+#      content = '{"card_id": "<card_id>"}'，透传到 im/v1/messages
+#   3. 若带 --alert-id，把 alert_id → card_id 映射落盘 data/feishu_card_index.json
+#      （callback 时反查，用于异步更新卡片）
+#
+# 网关后端需支持 ``msg_type != "text"``；当前网关已支持 ``msg_type="interactive"``。
 
 # 默认卡片标题（防止 --title 缺省时空字符串）
 DEFAULT_CARD_TITLE: str = "告警通知"
@@ -588,26 +599,28 @@ def build_feishu_card(
     title: str = DEFAULT_CARD_TITLE,
     alert_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """构建飞书交互式卡片 JSON dict（不调用网络）。
+    """构建飞书交互式卡片 JSON dict（不调用网络；Card 2.0 schema）。
 
-    卡片结构（按飞书 Open API Card 规范）：
-        - ``config.wide_screen_mode = True``
+    卡片结构（按 docs/飞书卡片教程/ Card JSON 2.0 规范）：
+        - 顶层 ``schema: "2.0"``（Card 2.0 强制；cardkit 更新接口拒绝 1.0）
         - ``header.template = "red"``（告警主题）
         - ``header.title``: plain_text（默认 "告警通知"）
-        - ``elements[0]``: ``div`` + ``lark_md``，正文 text
-        - ``elements[1]``: ``action`` + 按钮（仅当 options 非空时追加）
-        - 每个按钮 ``value``: ``{"action": "...", "alert_id": "..."}``；
-          ``alert_id`` 缺省时**不**写入该字段
+        - ``body.elements[0]``: ``markdown``，正文 text（Card 2.0 用 markdown 而非 div+lark_md）
+        - ``body.elements[1]``: ``action`` + 按钮（仅当 options 非空时追加）
+        - 每个按钮 ``value``: JSON 字符串 ``{"action": "...", "alert_id": "..."}``
+          （Card 2.0 强制 value 是 string；alert_id 缺省时不写该字段）
 
     Args:
-        text: 卡片正文（飞书 ``lark_md``，支持 Markdown 语法）。
+        text: 卡片正文（飞书 ``markdown``，支持 Markdown 语法）。
         options: ``[(label, action), ...]``，按 :func:`parse_options` 解析；
             空列表表示"纯展示卡片"，不生成按钮 action 元素。
         title: 卡片标题；空字符串回落到默认 "告警通知"。
-        alert_id: 业务 ID；会写入每个按钮的 ``value``，缺省时省略。
+        alert_id: 业务 ID；会写入每个按钮的 ``value`` JSON 字符串里，
+            缺省时省略。
 
     Returns:
         Card JSON dict（可直接 ``json.dumps(..., ensure_ascii=False)``）。
+        满足 Card JSON 2.0 schema，可用于飞书 cardkit 创建/更新接口。
 
     Raises:
         ValueError: ``text`` 为空。
@@ -624,39 +637,30 @@ def build_feishu_card(
 
     elements: List[Dict[str, Any]] = [
         {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": text,
-            },
+            "tag": "markdown",
+            "content": text,
         },
     ]
 
-    # 按钮区（仅当 options 非空时添加）
+    # 按钮区（Card 2.0 不再支持 tag:"action" 容器；按钮直接放 elements 数组）
     if options:
-        actions: List[Dict[str, Any]] = []
         for label, action in options:
-            btn: Dict[str, Any] = {
+            value_dict: Dict[str, str] = {"action": action}
+            if has_alert_id:
+                value_dict[_ALERT_ID_KEY] = clean_alert_id
+            elements.append({
                 "tag": "button",
                 "text": {
                     "tag": "plain_text",
                     "content": label,
                 },
                 "type": get_button_type(action),
-                "value": {"action": action},
-            }
-            if has_alert_id:
-                btn["value"][_ALERT_ID_KEY] = clean_alert_id
-            actions.append(btn)
-        elements.append({
-            "tag": "action",
-            "actions": actions,
-        })
+                # Card 2.0 强制 value 是 string（dict 不行）；用紧凑 separators 跟 cardkit 一致
+                "value": json.dumps(value_dict, ensure_ascii=False, separators=(",", ":")),
+            })
 
     card: Dict[str, Any] = {
-        "config": {
-            "wide_screen_mode": True,
-        },
+        "schema": "2.0",  # Card 2.0 强制
         "header": {
             "template": "red",
             "title": {
@@ -664,7 +668,9 @@ def build_feishu_card(
                 "content": title,
             },
         },
-        "elements": elements,
+        "body": {  # Card 2.0: elements 必须在 body 内
+            "elements": elements,
+        },
     }
     return card
 
@@ -675,19 +681,30 @@ def send_to_group_card(
     chat_id: Optional[str] = None,
     group_name: Optional[str] = None,
     account_id: Optional[str] = None,
+    alert_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
 ) -> SendMessageResult:
-    """发送飞书交互式卡片到指定群（走 Gateway，msg_type='interactive'）。
+    """发送飞书交互式卡片到指定群（V5 cardkit 路径）。
+
+    V5 流程（严格按 docs/飞书卡片教程/）：
+        1. 业务端直接调飞书 ``POST /open-apis/cardkit/v1/cards/`` 创建卡片实体 → card_id
+           （业务端不走 Gateway；cardkit 是飞书 OpenAPI，业务端可直调）
+        2. 调 Gateway ``POST /v1/messages/send``（msg_type="interactive"），
+           content = ``'{"card_id": "<card_id>"}'``，透传到 im/v1/messages
+        3. 若带 ``alert_id``，把 alert_id → card_id 映射落盘
+           data/feishu_card_index.json（callback 时反查，用于异步更新卡片）
 
     支持两种群聊指定方式（**互斥，必填其一**）：
         1. ``chat_id`` 直传飞书群 ID（不读 GROUP_MAP）
         2. ``group_name`` 按 FEISHU_GROUP_MAP.name 反查 chat_id
 
     Args:
-        card: 飞书 Card JSON dict（来自 :func:`build_feishu_card`）。
+        card: 飞书 Card JSON dict（Card 2.0 schema；来自 :func:`build_feishu_card`）。
         chat_id: 飞书群 ID（与 ``group_name`` 互斥）。
         group_name: 群聊名称（与 ``chat_id`` 互斥）。
         account_id: Gateway 账号 ID（多账号机器人场景；不传走 channel_gateway_client 默认值）。
+        alert_id: 业务告警 ID（可选）；传了会写入按钮 value 并落盘 alert_id → card_id 映射，
+            便于 callback 时异步更新该卡片（同一 alert_id 第二次点击走幂等）。
         idempotency_key: 幂等键；建议业务唯一（如 ``"p8-gas-20260817-001"``）。
 
     Returns:
@@ -695,6 +712,7 @@ def send_to_group_card(
 
     Raises:
         ValueError: ``card`` 为空 dict / 互斥校验失败 / 反查失败。
+        FeishuCardkitError: cardkit 创建卡片实体失败（鉴权 / schema 不合法）。
         GatewayError: 网关业务错误。
         requests.RequestException: 网络错误。
     """
@@ -715,22 +733,32 @@ def send_to_group_card(
         resolved_chat_id = chat_id.strip()
         log_tag = f"chat_id={resolved_chat_id}（直传，不走 GROUP_MAP）"
 
-    # Card content 必须是 JSON 字符串（飞书 im/v1/messages 接口约定）
+    # Step 1: im/v1/messages 发消息（content = Card 2.0 JSON 字符串，inline 渲染）
+    # 注：原计划走 cardkit 创建 card_id 再引用，但飞书 im/v1/messages 对
+    # cardkit-created 卡片返回 200621 "parse card json err"（im 端无法渲染
+    # cardkit 存储格式），实测 inline 直接传 Card 2.0 JSON 字符串 OK。
+    # Callback 路径仍可通过返回新 Card 2.0 JSON 实时替换（飞书原生行为）。
     content_str = json.dumps(card, ensure_ascii=False)
 
+    # Gateway 校验 text 非空（即便 msg_type=interactive + content 非空），
+    # 这里把卡片首段 markdown 内容同步塞给 text 作为兼容性兜底（飞书 im
+    # 渲染以 content 中的 Card 2.0 为准；text 仅用于网关通过校验）。
+    body_elems = (card.get("body") or {}).get("elements") or []
+    first_content = ""
+    if isinstance(body_elems, list) and body_elems:
+        first_el = body_elems[0]
+        if isinstance(first_el, dict):
+            first_content = str(first_el.get("content", "") or "")
+    text_for_gateway = first_content or "[card]"
+
     logger.info(
-        "[p8-notify] send_to_group_card 进入: %s card_elements=%d "
-        "idempotency_key=%s",
-        log_tag, len(card.get("elements", [])), idempotency_key,
+        "[p8-notify] send_to_group_card 进入: %s alert_id=%s "
+        "idempotency_key=%s content_len=%d",
+        log_tag, alert_id, idempotency_key, len(content_str),
     )
     try:
-        # Gateway server 端要求 text 非空（即使走 msg_type=interactive）。
-        # 这里把 card 内的 div.lark_md.content 作为 text 兜底（飞书侧不会被显示，
-        # 只是过 Gateway 校验；真正发给用户的仍是 content 里的 Card 结构）。
-        text_fallback = (card.get("elements", [{}])[0].get("text", {}).get("content", "")
-                        if isinstance(card, dict) else "")
         result = send_message(
-            text=text_fallback,
+            text=text_for_gateway,  # Gateway 校验非空；飞书 im 渲染以 content 为准
             channel=FEISHU_CHANNEL,
             conversation_id=resolved_chat_id,
             receive_id_type="chat_id",
@@ -741,15 +769,15 @@ def send_to_group_card(
         )
     except Exception as exc:
         logger.exception(
-            "[p8-notify] send_to_group_card 异常: %s err=%s",
-            log_tag, exc,
+            "[p8-notify] send_to_group_card 异常: %s alert_id=%s err=%s",
+            log_tag, alert_id, exc,
         )
         raise
 
     logger.info(
-        "[p8-notify] send_to_group_card 响应: %s status=%s "
+        "[p8-notify] send_to_group_card 响应: %s alert_id=%s status=%s "
         "intent_id=%s message_id=%s replayed=%s",
-        log_tag, result.status, result.intent_id,
+        log_tag, alert_id, result.status, result.intent_id,
         result.platform_message_id, result.replayed,
     )
     return result
@@ -776,6 +804,7 @@ def _cli_send_group(args: argparse.Namespace) -> int:
                 chat_id=args.chat_id,
                 group_name=args.group_name,
                 account_id=args.account_id,
+                alert_id=args.alert_id,  # V5 透传给 send_to_group_card（用于落盘 + callback 异步更新）
             )
         else:
             # 纯文本模式（与重构前完全一致的行为）

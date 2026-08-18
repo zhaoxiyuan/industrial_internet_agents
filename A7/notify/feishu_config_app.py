@@ -1440,6 +1440,26 @@ def api_save_config():
                 ("FEISHU_DOMAIN", ""),
             ])
 
+        # 2026-08-18：业务端 cardkit 路径需要按 account_id 拿凭证。
+        # 之前 feishu_config_app 只写 gateway/.env 的 FEISHU_<UPPER>_* 字段；
+        # 业务端项目根 .env 同步写一份，让 A7/notify/feishu_card._resolve_account_credentials
+        # 直接按账户级 fallback 拿到 secret。
+        # 注意：仅写 APP_ID / APP_SECRET / DOMAIN（业务端调 OpenAPI 需要的最小集）；
+        # 不写 verification_token（仅 gateway 鉴权用，业务端不需要）。
+        for acc in validated_accounts:
+            aid = acc["account_id"]
+            if aid == "default":
+                continue  # default 走顶层字段,不在这里重复
+            s = re.sub(r"[^a-z0-9]+", "_", aid.strip().lower()).strip("_")
+            if not s:
+                continue
+            suffix = s.upper()
+            if acc.get("app_id"):
+                new_entries.append((f"FEISHU_{suffix}_APP_ID", acc["app_id"]))
+            if acc.get("app_secret"):
+                new_entries.append((f"FEISHU_{suffix}_APP_SECRET", acc["app_secret"]))
+            new_entries.append((f"FEISHU_{suffix}_DOMAIN", acc.get("domain") or "feishu"))
+
         # 3. 顺手清理旧的 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE>
         if "FEISHU_CONVERSATION_MAP" in existing:
             new_entries.append(("FEISHU_CONVERSATION_MAP", ""))

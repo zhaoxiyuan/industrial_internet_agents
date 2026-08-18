@@ -149,6 +149,12 @@ from agents.channel_gateway_client import (
     poll_inbound_events,
 )
 
+# 2026-08-18：feishu_card 业务逻辑下沉（process_card_callback），
+# receiver re-export 便于外部统一 import。
+# V5（2026-08-18 升级）：process_card_callback 改为返回 {toast} + 异步调 cardkit 更新卡片，
+# 严格按 docs/飞书卡片教程/ 官方路径。
+from A7.notify.feishu_card import process_card_callback as _process_card_callback
+
 
 # ============================================================
 # 常量
@@ -451,6 +457,95 @@ def format_event(
     text = _extract_text(event)
 
     return f"{ts}  {name} {conv_label} | {text}"
+
+
+# ============================================================
+# 2.6 Card 按钮回调（公开 API，2026-08-18 新增）
+# ============================================================
+# Gateway 当前架构下 card.action.trigger 不入事件流（feishu.js 直接代理给业务端），
+# 但 feishu_card 把核心业务逻辑下沉为 process_card_callback 后，
+# 这里 re-export 便于上层统一 import；format_card_callback 提供可读单行格式化。
+
+def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """receiver 层 re-export :func:`A7.notify.feishu_card.process_card_callback`。
+
+    V5 业务流程（严格按 docs/飞书卡片教程/ 官方路径）：
+        1. ``url_verification`` 挑战 → ``{"challenge": "..."}``
+        2. 入参非法（缺 event/action.value）→ ``{"status": "error", "error": "..."}``
+        3. 幂等命中（同 alert_id 已处置）→ ``{"toast": {"type": "warning", "content": "..."}}``
+        4. 首次成功：写审计日志 + 同步返回 ``{"toast": {"type": "success", "content": "..."}}``
+           + daemon 线程异步调 PUT cardkit 全量更新卡片（飞书 callback 2s 内必须返回）。
+
+    本函数是"识别卡片点击 HTTP 请求"的统一入口；卡片替换由 feishu_card 模块内部
+    异步调用 cardkit 完成（不在 callback 响应里实时返回 card 字段——
+    飞书 callback 协议不支持实时替换，且 callback 期间错误码 200810 不可流式更新）。
+
+    Args:
+        payload: 飞书 card.action.trigger 回调 payload dict。
+
+    Returns:
+        回给飞书的完整响应 dict（可能含 challenge / error / toast）。
+    """
+    return _process_card_callback(payload)
+
+
+def format_card_callback(
+    payload: Dict[str, Any],
+    *,
+    user_map: Optional[Dict[str, Dict[str, str]]] = None,
+) -> str:
+    """把飞书 card.action.trigger payload 格式化为可读单行字符串：
+
+        <时间>  <人名> 按了"<按钮文字>"按钮（action=<action>, alert_id=<alert_id>）
+
+    用于：
+        - 调试场景下人工查看 card.click payload 的可读视图
+        - 未来 Gateway 改造让 card 事件入事件流后，poll_and_print 拿到事件时打印
+        - CLI --show-raw 模式下的辅助输出
+
+    Args:
+        payload: 飞书 card.action.trigger 回调 payload dict。
+        user_map: 可选，{open_id: {name}}；缺省时临时从 .env 读。
+
+    Returns:
+        单行字符串。字段缺失时对应位置用空串或占位符。
+    """
+    if user_map is None:
+        user_map = _load_user_map()
+
+    # 时间：header.create_time 是毫秒时间戳
+    header = payload.get("header") or {}
+    create_ms = header.get("create_time")
+    ts = ""
+    if create_ms is not None:
+        try:
+            from datetime import datetime, timezone
+            ts = datetime.fromtimestamp(
+                int(create_ms) / 1000, tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, OSError, TypeError):
+            pass
+
+    # 操作人姓名（按 USER_MAP 反查兜底）
+    event = payload.get("event") or {}
+    operator = event.get("operator") or {}
+    open_id = (operator.get("open_id") or "").strip()
+    raw_user_name = (operator.get("user_name") or "").strip()
+    user_name = raw_user_name or (user_map.get(open_id) or {}).get("name", "")
+    name = user_name or open_id or "匿名"
+
+    # 按钮
+    action_obj = event.get("action") or {}
+    value = action_obj.get("value") or {}
+    action = (value.get("action") or "").strip()
+    alert_id = (value.get("alert_id") or "").strip()
+    raw_button_text = (action_obj.get("text") or {}).get("content", "").strip()
+    button_text = raw_button_text or action
+
+    return (
+        f"{ts}  {name} 按了\"{button_text}\"按钮"
+        f"（action={action}, alert_id={alert_id}）"
+    )
 
 
 def mark_event_status(
@@ -1112,9 +1207,11 @@ __all__ = [
     "INITIAL_SEQUENCE_AUTO",
     # 公开 API
     "format_event",
+    "format_card_callback",
     "poll_once",
     "poll_and_print",
     "mark_event_status",
+    "process_card_callback",
     # CLI
     "main",
 ]

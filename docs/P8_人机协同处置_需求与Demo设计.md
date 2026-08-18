@@ -749,7 +749,7 @@ def archive_job(p8_job_id: str, final_status: str, summary: str) -> dict:
 | 入口 | 触发方 | 启动函数 | 用途 |
 |------|-------|---------|------|
 | **主流程自动模式** | `main_agent.execute_p8(job_id)` | `create_disposition_agent(walltime)` | 端到端流水线，无人值守批量处理 |
-| **独立对话模式** | 用户在前端 / CLI 发起消息 | `disposition_demo(message, history)` | 人工补创建、调试、演示 |
+| **独立对话模式** | 用户在**飞书侧**（群 / 单聊）发起消息 | `chat_reply_handler(event)` → `disposition_demo(message, history)` | 人工补创建、调试、演示、对话式问答 |
 
 ### 7.2 注入数据清单（启动函数注入）
 
@@ -802,11 +802,16 @@ def create_disposition_agent(
 
 
 def disposition_demo(message: str, history: list = None) -> str:
-    """Gradio ChatInterface 入口（独立对话模式）。
+    """独立对话模式统一入口（飞书对话 + Gradio 共享底层）。
 
     job_id 不通过工厂参数传入，而是嵌入到 message 中：
     message = f"[job_id={current_job_id}] {user_message}"
     LLM 收到后通过 read_p7_events(job_id=...) 工具读取。
+
+    触发方：
+    - **飞书侧**：`A7.notify.chat_reply_handler` 从 Gateway `/v1/events` 拉到的入站消息
+      解析出 `[job_id=...]` 后调用本函数；最终通过 `reply_to_event` 把 LLM 输出回写到飞书。
+    - **Gradio**：`web/server.py` ChatInterface 直接调；输出回写到 Web 终端。
     """
     return run_disposition_agent(message)
 ```
@@ -848,20 +853,29 @@ execute_p8 写 p8_result.json.disposition_tasks（仅写"快照"；运行时状�
 返回 main_agent，触发 pending_confirmation
 ```
 
-### 7.5 独立对话模式时序
+### 7.5 独立对话模式时序（飞书侧触发）
 
 ```
-用户在前端 / CLI 输入："为 A6-20260813-094525-230 创建处置任务"
+用户在飞书群 / 单聊输入："[job_id=JOB-20260813-001] 为 A6-20260813-094525-230 创建处置任务"
   ↓
-disposition_demo(message, history) 被前端调起
+飞书 webhook → Gateway 入队到 /v1/events
   ↓
-后端：解析 current_job_id（从前端会话上下文获取）；walltime = now()
+feishu_receiver.poll_once 拉取入站消息                       ← A7/notify/feishu_receiver.py
+  ↓
+chat_reply_handler(event) 被调起                              ← A7/notify/chat_reply.py（本期新增）
+  ↓
+后端：解析 current_job_id（从消息正文的 [job_id=...] 标记提取）；walltime = now()
+  ↓
+disposition_demo(message, history) → run_disposition_agent(message)    ← 共享底层入口
   ↓
 create_disposition_agent(walltime)               ← 仅传 walltime
   ↓
 构造实际消息：HumanMessage(content=f"[job_id={current_job_id}] {user_message}")
   ↓
-agent.invoke({"messages": [HumanMessage(content=...)]})
+agent.invoke(
+    {"messages": [HumanMessage(content=...)]},
+    config={"configurable": {"thread_id": f"feishu-{event.chat_id}"}},  ← thread_id 用 chat_id 作隔离
+)
   ↓
 LLM 看到工作记忆为空 → 调 read_p7_events(job_id=current_job_id)  ← 从消息中解析出 job_id
   ↓
@@ -874,8 +888,18 @@ LLM 判断为单事件处置（N=1，level=HIGH）：
   ↓
 agent 输出："已为 A6-20260813-094525-230 创建处置 P8_job (P8J-...)，等待人工决策"
   ↓
-agent 空闲；等待 HITL 决策到达 → 框架自动唤醒
+chat_reply_handler 调 reply_to_event(event_id, llm_response)            ← A7/notify/feishu_sender.py
+  ↓
+飞书侧用户收到 P8 的文本回复
+  ↓
+agent 空闲；等待 HITL 决策到达（飞书 Card 按钮点击或人工群内回复）→ 框架自动唤醒
 ```
+
+> **与 §7.4 主流程自动模式的差异**：
+> - 触发主体：**主流程 = `main_agent` 调度；独立对话 = 飞书用户消息**
+> - 数据流入：**主流程 = `p7_data` 透传 / `read_p7_events`；独立对话 = 同左（语义不变）**
+> - 输出通道：**主流程 = 写 `p8_result.json` + 飞书推送；独立对话 = `reply_to_event` 把 LLM 输出直接回写到原飞书会话**
+> - thread_id：主流程 = `p8-{job_id}`；独立对话 = `feishu-{chat_id}`（同一会话跨 invoke 共享 working memory）
 
 ### 7.6 HITL 决策到达后的执行流程
 
@@ -900,16 +924,17 @@ LLM 检查其他 P8_job → 继续处理或输出完成总结
 
 ### 7.7 完整生命周期一览
 
-| 阶段 | 主流程自动模式 | 独立对话模式 |
-|------|--------------|------------|
-| 触发 | `execute_p8(job_id)` | `disposition_demo(message)` |
+| 阶段 | 主流程自动模式 | 独立对话模式（飞书侧触发） |
+|------|--------------|---------------------------|
+| 触发 | `execute_p8(job_id)` | `chat_reply_handler(event)` ← 飞书入站消息 |
 | 工厂调用 | `create_disposition_agent(walltime)` | `create_disposition_agent(walltime)` |
-| job_id 传入 | HumanMessage 内容（如 `"处理作业 {job_id} 的 P7 风险事件"`） | HumanMessage 内容（如 `"[job_id={...}] {user_msg}"`） |
-| thread_id | `invoke(config={"configurable": {"thread_id": f"p8-{job_id}"}})` | `invoke(config={"configurable": {"thread_id": session_id}})` |
+| job_id 传入 | HumanMessage 内容（如 `"处理作业 {job_id} 的 P7 风险事件"`） | HumanMessage 内容（如 `"[job_id={...}] {user_msg}"`，用户手动加在飞书消息正文里） |
+| thread_id | `invoke(config={"configurable": {"thread_id": f"p8-{job_id}"}})` | `invoke(config={"configurable": {"thread_id": f"feishu-{chat_id}"}})` |
 | 初始读取 | LLM → `read_p7_events(job_id=...)` | LLM → `read_p7_events(job_id=...)` |
 | 决策循环 | LLM 遍历 events → `update_job` + `hitl_decide` / `notify_feishu` | LLM 按用户指令处理单个/多个 event |
 | 决策响应 | 框架自动唤醒 → LLM → `update_job` → `P8ArchiveMiddleware` 自动归档 | 同左 |
-| 终态 | 写 p8_result.json + 工作记忆清空（已归档） | agent 输出文本确认 |
+| 终态 | 写 p8_result.json + 工作记忆清空（已归档） | agent 输出文本 → `reply_to_event` 回写到原飞书会话 |
+| 输出通道 | 飞书 PUSH（主动推送告警） | 飞书 REPLY（在原入站消息下回复） |
 
 ### 7.8 何时关注新的 a6_event（事件关注策略）
 
@@ -955,18 +980,21 @@ def execute_p8(job_id: str, p7_data: dict | None = None) -> dict:
 - **`p7_data` 透传**：避免重复 IO；main 可以在上层合并多次 P7 增量再下发
 - **`p7_data=None` 兼容**：LLM 自行拉取；保留 main_agent.py 旧调用方式的兼容性
 
-#### B. 用户明确要求（按需关注）
+#### B. 用户明确要求（按需关注，飞书侧触发场景）
 
 LLM 规则提示词明确：
 
 ```markdown
-## 何时调 `read_p7_events`（独立对话模式）
+## 何时调 `read_p7_events`（独立对话模式，飞书侧触发）
 
-- ✅ 用户明确询问新事件时（"刚才还有新的吗？"、"P7 那边有新数据吗？"）
+- ✅ 用户在飞书群 / 单聊明确询问新事件时（"刚才还有新的吗？"、"P7 那边有新数据吗？"）
 - ✅ 用户要求刷新 P8_job 列表时（"看看现在有哪些事件"）
 - ✅ 用户要求创建新 P8_job 时（隐含：需要最新 P7 数据决定是否已有 P8_job）
 - ❌ 用户在确认/查询/推进某个已知 P8_job 时（不主动订阅）
 - ❌ 没有用户消息时（不轮询、不订阅、不监听文件变化）
+
+> **触发源**：以上"用户消息"统一来自 `feishu_receiver.poll_once` 拉到的飞书入站消息；
+> Gradio ChatInterface 触发场景共用同一套规则，但本期产品重心在飞书侧。
 ```
 
 #### 两种入口的对比矩阵
@@ -1183,15 +1211,16 @@ agent.invoke(
 | **HITL** | ❌ 不涉及 |
 | **价值** | 演示"长期记忆按需调取"原则；不污染当前工作记忆 |
 
-### Demo 6：当前作业状态查询（走 REST API）
+### Demo 6：当前作业状态查询（飞书侧走 REST API / 工作记忆直读）
 
 | 项 | 说明 |
 |----|------|
-| **用户输入** | "查看当前所有进行中的 P8_job" |
-| **LLM 自动行为** | ❌ **不调工具**——查询走 REST API。引导用户："请在右侧面板查看（前端已自动调 `GET /api/jobs/:job_id/working-memory`）" |
-| **前端自动行为** | Web 组件自动调 REST API 拉工作记忆快照，按 status / channel 分组展示 |
+| **用户输入（飞书侧）** | "查看当前所有进行中的 P8_job" |
+| **LLM 自动行为** | ❌ **不调工具**——查询走 REST API。引导用户："详情见实时面板（已自动调 `GET /api/jobs/:job_id/working-memory`）" |
+| **LLM 简化输出** | 若用户接受纯文本回复，可直接基于 working memory 快照生成简表（按 status / channel 分组）回写到飞书 |
+| **REST API 自动化** | `chat_reply_handler` 拉取 working memory 后，将关键字段拼成文本块附加到 LLM 回复下方 |
 | **HITL** | ❌ 不涉及 |
-| **价值** | 演示"工具 = 动作 / REST API = 查询"的职责分层 |
+| **价值** | 演示"工具 = 动作 / REST API = 查询"的职责分层；飞书侧用户在群内即可获得工作记忆快照，无需跳转 Web |
 
 ---
 
