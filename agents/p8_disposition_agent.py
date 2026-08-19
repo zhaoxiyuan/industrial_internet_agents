@@ -29,11 +29,27 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
+
 from .utils.system_prompt import load_system_prompt
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p8_disposition_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
 
 # ★★★ 长期记忆接入（罗盘长期记忆） ★★★
 from A7.storage import (

@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from typing import TypedDict, Optional, Any, List
@@ -12,7 +13,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils import extract_output, get_stage_logger, push_websocket_log
 from .utils.logging_handler import get_agent_config
 
@@ -25,7 +27,7 @@ from .workflow import (
     save_job_application, add_job_log, save_confirmation, get_job_status,
 )
 # 导入工具响应和 Prompt 加载器
-from .utils import make_response, make_error, SCHEMA_VERSION, load_system_prompt
+from .utils import make_response, make_error, load_system_prompt
 
 # 配置日志
 logger = logging.getLogger("main_agent")
@@ -38,6 +40,21 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+    
+
+# 阶段执行映射
+# 导入各子Agent的阶段执行入口
+from .p1_permit_agent import execute_stage as p1_execute_stage, is_agent_interrupted
+from .p2_task_agent import execute_stage as p2_execute_stage
+from .p3_context_agent import execute_stage as p3_execute_stage
+from .p4_binding_agent import execute_stage as p4_execute_stage
+from .p5_verify_agent import execute_stage as p5_execute_stage
+from .p6_monitor_agent import execute_stage as p6_execute_stage
+from .p7_risk_agent import execute_stage as p7_execute_stage
+from .p8_disposition_agent import execute_stage as p8_execute_stage
+from .p9_closure_agent import execute_stage as p9_execute_stage
+from .p10_archive_agent import execute_stage as p10_execute_stage
+    
 # 导入各阶段工具函数
 from .p1_permit_agent import permit_submit, jsa_analyze, permit_generate_draft, run_permit_agent_with_hitl, is_agent_interrupted, get_agent_next_tools
 from .p2_task_agent import task_instance_create
@@ -713,18 +730,21 @@ def execute_p10(job_id: str) -> dict:
     return result
 
 
-# 阶段执行映射
+# P1 特殊处理：保留 HITL 逻辑
+execute_p1 = p1_execute_stage
+
+# 阶段执行映射（从子Agent导入）
 STAGE_EXECUTORS = {
-    "P1": execute_p1,
-    "P2": execute_p2,
-    "P3": execute_p3,
-    "P4": execute_p4,
-    "P5": execute_p5,
-    "P6": execute_p6,
-    "P7": execute_p7,
-    "P8": execute_p8,
-    "P9": execute_p9,
-    "P10": execute_p10,
+    "P1": p1_execute_stage,
+    "P2": p2_execute_stage,
+    "P3": p3_execute_stage,
+    "P4": p4_execute_stage,
+    "P5": p5_execute_stage,
+    "P6": p6_execute_stage,
+    "P7": p7_execute_stage,
+    "P8": p8_execute_stage,
+    "P9": p9_execute_stage,
+    "P10": p10_execute_stage,
 }
 
 

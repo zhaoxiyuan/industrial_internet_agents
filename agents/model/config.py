@@ -29,3 +29,16 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """获取配置单例"""
     return Settings()
+
+
+def get_llm_params() -> dict:
+    """获取当前 LLM 配置参数（用于日志记录）"""
+    settings = get_settings()
+    return {
+        "model": settings.OPENAI_MODEL,
+        "api_key": settings.OPENAI_API_KEY[:10] + "..." if settings.OPENAI_API_KEY else "",
+        "base_url": settings.OPENAI_BASE_URL,
+        "temperature": settings.TEMPERATURE,
+        "max_tokens": settings.MAX_TOKENS,
+        "model_provider": settings.MODEL_PROVIDER,
+    }

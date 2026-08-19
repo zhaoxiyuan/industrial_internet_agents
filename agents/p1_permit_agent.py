@@ -11,11 +11,13 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils.agent_utils import extract_output
 from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, push_websocket_log, get_agent_config
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.system_prompt import load_system_prompt
+from .utils import add_job_log
 
 # 配置日志
 logger = logging.getLogger("p1_permit_agent")
@@ -489,3 +491,191 @@ def run_permit_agent(message: str) -> str:
 def permit_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_permit_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str, resume: bool = False) -> dict:
+    """P1 阶段执行入口：作业预约、JSA分析与作业票
+
+    支持 HumanInTheLoop 中断恢复
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_job_dir, get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger
+
+    log = get_stage_logger("P1")
+    log.log_enter(job_id, {"resume": resume})
+    result_file = get_stage_result_path(job_id, "p1")
+    existing_result = read_json_file(result_file)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P1",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    # 检查是否需要恢复执行
+    if resume or is_agent_interrupted(job_id):
+        log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
+        hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
+        if not hitl_result:
+            logger.error(f"[execute_stage P1] hitl_result 为空: job_id={job_id}, resume={resume}")
+            return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
+        if hitl_result["interrupted"]:
+            next_tools = hitl_result.get("next", [])
+            result["pending_confirmation"] = {
+                "type": "hitl_recover",
+                "message": "P1 Agent 工具调用等待确认",
+                "next_tools": next_tools,
+            }
+            log.log_exit(job_id, result)
+            return result
+        result_text = hitl_result.get("result", "{}")
+        try:
+            result_data = json.loads(result_text)
+        except:
+            result_data = {"result": result_text}
+        result = _process_p1_result(job_id, result_data, existing_result)
+        log.log_exit(job_id, result)
+        return result
+
+    # 首次执行
+    app_file = get_job_dir(job_id) + "/application.json"
+    application = read_json_file(app_file).get("application", {})
+
+    if not application:
+        logger.warning(f"[P1] !!! 作业申请为空: job_id={job_id}")
+        result = {"error": "No application found", "completed": False}
+        log.log_exit(job_id, result)
+        return result
+
+    try:
+        app_str = json.dumps(application, ensure_ascii=False)
+        message = f"""请处理以下作业申请：
+
+作业申请内容：{app_str}
+
+请依次执行：
+1. 调用 permit_submit 工具提交作业申请
+2. 调用 jsa_analyze 工具进行JSA分析
+3. 调用 permit_generate_draft 工具生成作业票草稿"""
+
+        logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
+        push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
+        hitl_result = run_permit_agent_with_hitl(message, job_id)
+
+        if hitl_result["interrupted"]:
+            next_tools = hitl_result.get("next", [])
+            log.log_hitl_interrupt(job_id, next_tools)
+            add_job_log(job_id, {
+                "action": "execute_p1_hitl_interrupt",
+                "next_tools": next_tools
+            })
+            result["pending_confirmation"] = {
+                "type": "hitl_tool_call",
+                "message": "P1 Agent 工具调用需要人工确认",
+                "next_tools": next_tools,
+            }
+            write_json_file(result_file, result)
+            log.log_exit(job_id, result)
+            return result
+
+        result_text = hitl_result.get("result", "{}")
+        try:
+            result_data = json.loads(result_text)
+        except:
+            result_data = {"result": result_text}
+
+        result = _process_p1_result(job_id, result_data, result)
+        log.log_exit(job_id, result)
+        return result
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+        write_json_file(result_file, result)
+        log.log_exit(job_id, result)
+        return result
+
+
+def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) -> dict:
+    """处理 P1 执行结果，提取并保存作业票数据"""
+    from datetime import datetime, timezone
+    from .workflow import get_job_dir, get_stage_result_path, write_json_file
+
+    result = existing_result.copy() if existing_result else {}
+    result["job_id"] = job_id
+    result["stage"] = "P1"
+    result["completed"] = True
+    result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        submit_data = None
+
+        if isinstance(result_data, dict):
+            if "result" in result_data and isinstance(result_data["result"], dict):
+                submit_data = result_data["result"]
+            elif "task_id" in result_data or "permit_draft_id" in result_data:
+                submit_data = result_data
+            elif "schema_version" in result_data:
+                submit_data = result_data
+        elif isinstance(result_data, str):
+            try:
+                parsed = json.loads(result_data)
+                if isinstance(parsed, dict):
+                    if "result" in parsed and isinstance(parsed["result"], dict):
+                        submit_data = parsed["result"]
+                    else:
+                        submit_data = parsed
+            except json.JSONDecodeError:
+                logger.warning(f"[_process_p1_result] 无法解析 JSON，尝试从文本提取: {result_data[:200]}")
+                submit_data = {}
+
+        if submit_data:
+            result["task_id"] = submit_data.get("task_id", "")
+            result["permit_draft_id"] = submit_data.get("permit_draft_id", "")
+            result["jsa_result"] = submit_data.get("jsa_result", {})
+            result["permit_content"] = submit_data.get("permit_content", {})
+            result["missing_fields"] = submit_data.get("missing_fields", [])
+            logger.info(f"[_process_p1_result] 成功提取数据: task_id={result.get('task_id')}, permit_draft_id={result.get('permit_draft_id')}")
+        else:
+            logger.warning(f"[_process_p1_result] 无法提取 submit 数据，result_data={result_data}")
+
+        app_file = get_job_dir(job_id) + "/application.json"
+        application = read_json_file(app_file).get("application", {})
+
+        permit_data = {
+            "task_id": result.get("task_id"),
+            "permit_draft_id": result.get("permit_draft_id"),
+            "application": application,
+            "jsa_result": result.get("jsa_result"),
+            "permit_content": result.get("permit_content"),
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        }
+        output_path = get_job_dir(job_id) + "/permit.json"
+        write_json_file(output_path, permit_data)
+        result["permit_file"] = output_path
+
+        if result.get("missing_fields"):
+            result["pending_confirmation"] = {
+                "type": "missing_fields",
+                "fields": result["missing_fields"],
+                "message": "作业票存在缺失字段，需要人工确认"
+            }
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p1"), result)
+    add_job_log(job_id, {
+        "action": "execute_p1",
+        "result": "success" if result["completed"] else "failed"
+    })
+
+    return result

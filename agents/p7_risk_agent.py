@@ -17,10 +17,13 @@ P7: 风险研判与分级 - 基于 A6 实现（完整模块）
 """
 import asyncio
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, Dict, List
+
+logger = logging.getLogger("p7_risk_agent")
 
 # ── 项目路径 ────────────────────────────────────────────────────────────────
 _ROOT = Path(__file__).resolve().parent.parent
@@ -303,6 +306,67 @@ def get_prompt_manager():
     if _prompt_manager is None:
         _prompt_manager = PromptManager()
     return _prompt_manager
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P7 阶段执行入口：风险研判与分级
+
+    读取 P6 结果中的 candidate_events，调用 risk_analyze 进行风险研判，
+    输出 risk_events 供 P8 使用。
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P7")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P7",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p6_result = read_json_file(get_stage_result_path(job_id, "p6"))
+        candidate_events = p6_result.get("candidate_events", [])
+        logger.info(f"[P7] candidate_events_count={len(candidate_events)}")
+
+        # 2. 遍历候选事件进行风险研判
+        risk_events = []
+        for event in candidate_events:
+            event_id = event.get("event_id", "")
+            if not event_id:
+                continue
+            logger.info(f"[P7] 调用 risk_analyze: event_id={event_id}")
+            try:
+                analyze_result = json.loads(risk_analyze.invoke(event_id))
+                log.log_tool_call("risk_analyze", {"event_id": event_id}, analyze_result)
+                if "result" in analyze_result:
+                    risk_events.append(analyze_result["result"])
+            except Exception as e:
+                logger.warning(f"[P7] risk_analyze failed for {event_id}: {e}")
+
+        result["risk_events"] = risk_events
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p7"), result)
+    add_job_log(job_id, {"action": "execute_p7", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result
 
 
 # ============================================================
