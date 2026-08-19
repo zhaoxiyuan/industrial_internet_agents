@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web.api import config as config_api
 from web.api import workflow as workflow_api
 from web.api import snapshots as snapshots_api
+from feishu_gateway_cli import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
 from web.ws.servers import start_websocket_threads
 
@@ -66,6 +67,25 @@ class Handler(SimpleHTTPRequestHandler):
             data = self._read_json()
             workflow_api.handle_workflow_confirm(self, data)
 
+        elif path == "/api/feishu/card-callback":
+            # 2026-08-18：飞书客户端"显示出错"+ 卡不换的根因之一——
+            # do_POST 在 _read_json 或 handle_card_callback 抛异常时，
+            # BaseHTTPRequestHandler 默认走 handle_error → 关连接不发响应
+            # → Gateway 兜底返回 toast.error → 飞书侧报错 + 无 card 字段。
+            # 这里加 try/except + send_json 兜底，保证飞书侧永远收到 200 + JSON 响应。
+            try:
+                data = self._read_json()
+                feishu_card_api.handle_card_callback(self, data)
+            except Exception as exc:
+                logger.exception("[POST] /api/feishu/card-callback 异常")
+                try:
+                    self.send_json(
+                        {"status": "error", "error": f"internal: {exc}"[:200]},
+                        status=500,
+                    )
+                except Exception:
+                    logger.exception("[POST] send_json 兜底失败")
+
         else:
             logger.warning(f"[POST] 路径未找到: path={path}")
             self.send_error(404)
@@ -105,17 +125,92 @@ class Handler(SimpleHTTPRequestHandler):
             thread_id = parse_qs(parsed.query).get("thread_id", [None])[0]
             workflow_api.handle_workflow_state_get(self, thread_id)
 
+        elif path == "/api/feishu/card-callbacks":
+            feishu_card_api.handle_card_callback_list(self)
+
+        elif path.startswith("/api/jobs/") and path.endswith("/working-memory"):
+            # 蓝图 § 8.1：P8 工作记忆快照查询
+            # 路径格式：/api/jobs/{job_id}/working-memory
+            parts = path.strip("/").split("/")
+            # 期望 ["api","jobs","{job_id}","working-memory"] → len==4
+            if len(parts) != 4 or not parts[2]:
+                logger.warning(
+                    f"[GET] /api/jobs/.../working-memory 路径非法: path={path}"
+                )
+                self.send_json(
+                    {
+                        "status": "error",
+                        "error": "路径必须是 /api/jobs/{job_id}/working-memory",
+                    },
+                    status=400,
+                )
+            else:
+                job_id = parts[2]
+                logger.info(
+                    f"[GET] /api/jobs/{job_id}/working-memory 进入: job_id={job_id}"
+                )
+                try:
+                    from A7.api.p8_working_memory_ctrl import (
+                        get_working_memory_snapshot,
+                    )
+                    result = get_working_memory_snapshot(job_id)
+                    logger.info(
+                        f"[GET] /api/jobs/{job_id}/working-memory 响应: "
+                        f"status={result.get('status')}, "
+                        f"working_count={len(result.get('working_memory') or [])}, "
+                        f"archived_count={len(result.get('archived_recent') or [])}"
+                    )
+                    self.send_json(result)
+                except ValueError as exc:
+                    # job_id 为空（控制器兜底，正常不会到这里）
+                    logger.warning(
+                        f"[GET] /api/jobs/{job_id}/working-memory 参数非法: {exc}"
+                    )
+                    self.send_json(
+                        {"status": "error", "error": str(exc)[:200]}, status=400
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        f"[GET] /api/jobs/{job_id}/working-memory 异常: {exc}"
+                    )
+                    self.send_json(
+                        {
+                            "status": "error",
+                            "error": f"internal: {exc}"[:200],
+                        },
+                        status=500,
+                    )
+
         else:
             super().do_GET()
 
     def _read_json(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8")
-        return json.loads(body)
+        """读 POST body 并解析为 dict。
 
-    def send_json(self, data):
+        2026-08-18 修复：飞书某些 SDK / 测试工具在 Windows GBK locale 下会
+        用 GBK 编码 body（含 0xd5 等字节），直接 .decode("utf-8") 抛
+        UnicodeDecodeError → do_POST 异常 → Empty reply → Gateway 兜底
+        toast.error → 飞书侧报错。容错策略：
+        1. 先尝试 UTF-8（飞书官方规范）
+        2. 失败回退 GBK（飞书 SDK / Git Bash curl 的 GBK locale）
+        3. 最后 latin-1（永不抛，解码结果可能含乱码但 json.loads 仍可能成功）
+        """
+        content_length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(content_length)
+        text = None
+        for codec in ("utf-8", "gbk"):
+            try:
+                text = raw.decode(codec)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            text = raw.decode("latin-1")
+        return json.loads(text)
+
+    def send_json(self, data, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", len(body))
         self.send_header("Access-Control-Allow-Origin", "*")

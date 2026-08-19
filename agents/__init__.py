@@ -71,11 +71,16 @@ from .p8_disposition_agent import (
     create_disposition_agent_with_hitl,
     run_disposition_agent,
     disposition_demo,
-    disposition_create,
-    disposition_confirm,
-    disposition_status,
-    disposition_list,
-    recall_jobs,    # 长期记忆 LLM 入口（罗盘长期记忆）
+    # 蓝图 API：5 个工具 + 长期记忆入口
+    update_job,            # 创建/更新 P8_job（Command → working_memory）
+    hitl_decide,           # 设置 HITL 等待决策
+    read_p7_events,        # 读 p7_result.json
+    notify_feishu,         # 推送飞书（channel_gateway_client 真实联通）
+    list_active_p8_jobs,   # 列出当前 in-progress P8_job
+    recall_jobs,           # 长期记忆 LLM 入口（罗盘长期记忆）
+    # Checkpointer 导出（A7/api/p8_working_memory_ctrl 调用）
+    get_p8_checkpointer,
+    _p8_checkpointer,
 )
 
 from .p9_closure_agent import (

@@ -13,6 +13,7 @@
 | [P6 动态监测](P6_MONITOR_AGENT.md) | `p6_monitor_agent.py` | 作业过程动态监测 |
 | [P7 风险研判](P7_RISK_AGENT.md) | `p7_risk_agent.py` | 风险研判与分级 |
 | [P8 人机处置](P8_DISPOSITION_AGENT.md) | `p8_disposition_agent.py` | 人机协同处置 |
+| [P8 工具 I/O 参考](P8_DISPOSITION_TOOLS.md) | `p8_disposition_agent.py` | 6 个工具 + 3 个入口函数的详细签名、I/O、HITL 矩阵 |
 | [P9 闭环跟踪](P9_CLOSURE_AGENT.md) | `p9_closure_agent.py` | 闭环跟踪与报告 |
 | [P10 归档复盘](P10_ARCHIVE_AGENT.md) | `p10_archive_agent.py` | 归档与复盘 |
 | [HumanInTheLoop](HUMAN_IN_THE_LOOP.md) | `human_in_the_loop.py` | 人工确认管理 |

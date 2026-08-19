@@ -184,11 +184,15 @@ export class ChannelGateway extends EventEmitter {
     if (!event) {
       throw new GatewayError("EVENT_NOT_FOUND", `Event not found: ${eventId}`, { status: 404 });
     }
+    // 2026-08-19：透传 msgType + content，让 chat_reply 适配层可发送飞书 interactive 卡片。
+    // 之前只透传 text，导致 LLM 输出的 markdown 在飞书 text 类型下被剥成纯文本（###/表格丢失）。
     return await this.sendMessage({
       channel: input.channel ?? event.channel,
       accountId: input.accountId ?? event.accountId,
       to: input.to ?? { conversationId: event.conversation.id },
       text: input.text,
+      msgType: input.msgType ?? input.msg_type,
+      content: input.content,
       replyToId: input.replyToId ?? event.message.id,
       threadId: input.threadId ?? event.conversation.threadId,
       metadata: { ...(input.metadata ?? {}), sourceEventId: eventId },
