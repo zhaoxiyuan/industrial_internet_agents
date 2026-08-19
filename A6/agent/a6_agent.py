@@ -509,7 +509,7 @@ class A6Agent:
             "timestamp": datetime.now().isoformat(),
         }
 
-        self.output_tools.save_assessment(assessment)
+        self.output_tools.save_assessment(assessment, output_dir=str(self.a6_output_dir))
         self.a5_tools.update_event_status(
             event_id=event_id,
             a6_output_id=a6_event_id,

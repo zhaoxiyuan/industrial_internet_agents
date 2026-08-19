@@ -471,26 +471,35 @@ def read_p7_events(job_id: str) -> str:
 
 
 # ============================================================
-# 工具 4：notify_feishu — 推送飞书卡片（蓝图 § 8.2）
+# 工具 4：notify_feishu — 推送飞书交互式告警卡片（蓝图 § 8.2）
 # ============================================================
-# 2026-08-19 重构：改用 feishu_gateway_cli.feishu_sender 的封装（send_to_group_card /
-# send_to_user），不再直调 channel_gateway_client.send_message。之前的实现漏传
-# conversation_id / receive_id_type，并把 assignee_role（岗位描述）误当作
-# account_id（机器人身份），Gateway 必报 VALIDATION_ERROR。
+# 2026-08-19 重构：改用 feishu_gateway_cli.feishu_sender 的 send_to_group_card 封装。
 #
-# 新签名增加 4 个收件人参数（互斥必填其一）：
-#   - chat_id        飞书群 ID（"oc_xxx"）直传
-#   - group_name     按 FEISHU_GROUP_MAP.name 反查 chat_id
-#   - name           按 FEISHU_USER_MAP.name 反查 open_id（单聊）
-#   - open_id        飞书用户 open_id（webhook 回调场景）直传
+# 设计边界（与 chat_reply.py 的分工）：
+#   - chat_reply.py（普通回消息）→ 走 msg_type=text，不包卡片
+#   - notify_feishu（告警/处置推送）→ **必须** Card 2.0 + 必带 options（按钮）
+#     按钮按下后飞书回调 → Gateway 透传到 web/api/feishu/card-callback → P8 处置 HITL
+#
+# 收件人限制：
+#   - **只支持群发**（chat_id / group_name）—— 飞书单聊 DM 暂不支持 interactive 卡片
+#     （feishu_sender 没有 send_to_user_card）
+#   - name / open_id 不再接受（避免 LLM 误用 DM 通道）
+#
+# options 必填：
+#   - 格式 ["label:action", ...]，与 CLI 的 --option 参数一致
+#   - 至少 1 个按钮；空 options 返回 INVALID_ARGUMENT
+#   - 由 feishu_sender.parse_options 解析；解析失败抛 ValueError
 # ============================================================
 @tool(description=(
-    "通过 OpenClaw Channel Gateway 推送飞书交互式卡片（Card 2.0 schema）。"
-    "channel=PUSH 的 P8_job 决策完成后调用，把结果推给责任人。"
-    "底层走 feishu_gateway_cli.feishu_sender.send_to_group_card / send_to_user"
-    " → channel_gateway_client.send_message → Gateway (port 8787) → 飞书 API。"
+    "通过 OpenClaw Channel Gateway 推送飞书交互式告警卡片（Card 2.0 schema）。"
+    "P8_agent 在 channel=PUSH 的 P8_job 创建/变更后调用此工具推送告警。\n"
+    "★ 必须传 options —— 每个 button 含 label + action，"
+    "飞书用户点击后飞书回调 Gateway → web /api/feishu/card-callback，"
+    "由 P8 处置 Agent 处理 HITL 决策。\n"
+    "★ 必须传 group 收件人（chat_id 或 group_name）—— 单聊 DM 暂不支持卡片。\n"
+    "底层走 feishu_gateway_cli.feishu_sender.send_to_group_card "
+    "→ channel_gateway_client.send_message → Gateway (port 8787) → 飞书 API。"
     "成功后 P8_job.status 应变更为 'notified'。"
-    "★ 收件人 4 选 1（互斥必填其一）：chat_id / group_name / name / open_id"
 ))
 def notify_feishu(
     p8_job_id: str,
@@ -500,15 +509,14 @@ def notify_feishu(
     assignee_role: str,
     job_id: str,
     a6_event_ids: list[str],
+    options: list[str],  # ★ 必填：["label:action", ...]（如 ["已知悉:ack", "立即处理:handle"]）
     *,
     chat_id: Optional[str] = None,
     group_name: Optional[str] = None,
-    name: Optional[str] = None,
-    open_id: Optional[str] = None,
     alert_id: Optional[str] = None,
     account_id: Optional[str] = None,
 ) -> str:
-    """推送飞书卡片（蓝图 § 8.2；2026-08-19 重构走 feishu_sender 封装）。
+    """推送飞书告警卡片（蓝图 § 8.2；2026-08-19 重构走 feishu_sender 封装）。
 
     Args:
         p8_job_id:     P8_job ID
@@ -519,12 +527,12 @@ def notify_feishu(
                        **不是**收件人 ID）
         job_id:        主流程作业 ID
         a6_event_ids:  关联 A6 输出 ID 列表
+        options:       ★ 必填。按钮列表，格式 ["label:action", ...]；至少 1 个；
+                       与 feishu_sender CLI 的 --option 参数同构。
 
-        --- 收件人（互斥必填其一）---
+        --- 收件人（互斥必填其一；仅支持群发）---
         chat_id:       飞书群 ID（"oc_xxx"）直传；不读 GROUP_MAP
         group_name:    按 FEISHU_GROUP_MAP.name 反查 chat_id
-        name:          按 FEISHU_USER_MAP.name 反查 open_id（单聊）
-        open_id:       飞书用户 open_id（webhook 回调场景）直传；不读 USER_MAP
 
         --- 可选 ---
         alert_id:      业务告警 ID；落盘 alert_id→card_id 映射，callback 异步更新卡片
@@ -533,18 +541,16 @@ def notify_feishu(
     Returns:
         标准 JSON 响应（含 channel gateway 返回的 intent id / status）
     """
-    # 收件人互斥校验（4 选 1）
+    # 收件人互斥校验（2 选 1：仅支持群发）
     provided = [
         ("chat_id",    chat_id),
         ("group_name", group_name),
-        ("name",       name),
-        ("open_id",    open_id),
     ]
     given = [(k, v) for k, v in provided if v and str(v).strip()]
     if len(given) == 0:
         return json.dumps(make_error(
             code="INVALID_ARGUMENT",
-            message="notify_feishu: 必须传 chat_id / group_name / name / open_id 之一（互斥）",
+            message="notify_feishu: 必须传 chat_id 或 group_name（仅支持群发；单聊 DM 不支持卡片）",
             recoverable=False,
         ), ensure_ascii=False)
     if len(given) > 1:
@@ -553,7 +559,14 @@ def notify_feishu(
             message=f"notify_feishu: 收件人参数互斥，只能传一个；当前传了 {[k for k, _ in given]}",
             recoverable=False,
         ), ensure_ascii=False)
-    recipient_kind = "group" if given[0][0] in ("chat_id", "group_name") else "user"
+
+    # options 必填校验（至少 1 个按钮）
+    if not options or not isinstance(options, list) or len(options) == 0:
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message="notify_feishu: options 必填且至少 1 个按钮（格式 ['label:action', ...]）",
+            recoverable=False,
+        ), ensure_ascii=False)
 
     # 构造 PushMessage（Pydantic 自动回填 idempotency_key）
     try:
@@ -574,7 +587,7 @@ def notify_feishu(
             recoverable=False,
         ), ensure_ascii=False)
 
-    # 调 feishu_sender 封装（按收件人类型分流）
+    # 调 feishu_sender.send_to_group_card 封装
     # 2026-08-19：之前 notify_feishu 直调 channel_gateway_client.send_message，
     # 漏传 conversation_id + receive_id_type，且把 assignee_role 误当 account_id，
     # Gateway 必报 VALIDATION_ERROR。改用 feishu_sender 的封装后这些参数自动填好。
@@ -582,34 +595,36 @@ def notify_feishu(
         # 延迟 import 避免循环（A7→agents→A7）；feishu_sender 本身就是 Gateway 适配层
         from feishu_gateway_cli.feishu_sender import (
             send_to_group_card,
-            send_to_user,
             build_feishu_card,
+            parse_options,
         )
 
-        # 构造 Card 2.0 JSON dict（无按钮；按钮由回调交互场景单独加）
+        # 解析 options（与 CLI 的 parse_options 行为一致：label:action 切分）
+        parsed_options = parse_options(options)  # -> [(label, action), ...]
+        if not parsed_options:
+            return json.dumps(make_error(
+                code="INVALID_ARGUMENT",
+                message=f"notify_feishu: options 解析后无有效按钮；原始 options={options!r}",
+                recoverable=False,
+            ), ensure_ascii=False)
+
+        # 构造 Card 2.0 JSON dict（必带 options 按钮）
+        resolved_alert_id = alert_id or push_msg.p8_job_id
         card = build_feishu_card(
             text=push_msg.body,                    # 卡片正文用 body（title 走 header）
-            options=[],                            # 不加按钮，纯展示卡片
+            options=parsed_options,                # ★ 必带按钮（hits HITL 回调）
             title=push_msg.title,
-            alert_id=alert_id or push_msg.p8_job_id,  # 默认 alert_id=p8_job_id
+            alert_id=resolved_alert_id,            # 默认 alert_id=p8_job_id
         )
 
-        if recipient_kind == "group":
-            result = send_to_group_card(
-                card=card,
-                chat_id=chat_id,
-                group_name=group_name,
-                account_id=account_id,
-                alert_id=alert_id or push_msg.p8_job_id,
-                idempotency_key=push_msg.idempotency_key,
-            )
-        else:  # user
-            result = send_to_user(
-                text=push_msg.body,                # 单聊走文本通道（与重构前行为一致）
-                name=name,
-                open_id=open_id,
-                account_id=account_id,
-            )
+        result = send_to_group_card(
+            card=card,
+            chat_id=chat_id,
+            group_name=group_name,
+            account_id=account_id,
+            alert_id=resolved_alert_id,
+            idempotency_key=push_msg.idempotency_key,
+        )
     except Exception as exc:
         logger.exception("notify_feishu: feishu_sender 调用失败: %s", exc)
         return json.dumps(make_error(
@@ -619,19 +634,20 @@ def notify_feishu(
         ), ensure_ascii=False)
 
     logger.info(
-        "notify_feishu: pid=%s, recipient_kind=%s, intent=%s, status=%s",
-        p8_job_id, recipient_kind,
+        "notify_feishu: pid=%s, options_count=%d, intent=%s, status=%s",
+        p8_job_id, len(parsed_options),
         getattr(result, "intent_id", None), getattr(result, "status", None),
     )
 
     return json.dumps(make_response(
         "notify_feishu",
         {
-            "p8_job_id":      p8_job_id,
-            "recipient_kind": recipient_kind,
-            "intent_id":      getattr(result, "intent_id", None),
-            "status":         getattr(result, "status", None),
-            "message_id":     getattr(result, "platform_message_id", None),
+            "p8_job_id":       p8_job_id,
+            "options_count":   len(parsed_options),
+            "intent_id":       getattr(result, "intent_id", None),
+            "status":          getattr(result, "status", None),
+            "message_id":      getattr(result, "platform_message_id", None),
+            "alert_id":        resolved_alert_id,
         },
     ), ensure_ascii=False)
 
@@ -828,10 +844,14 @@ def run_disposition_agent(
 
     Args:
         message:   用户消息
-        thread_id: LangGraph thread_id；主流程约定 f"p8-{job_id}"，
-                   Bot 模式默认 "default"（chat_reply 兼容）
+        thread_id: LangGraph thread_id。
+                   - 主流程：``f"p8-{job_id}"``
+                   - Bot 模式（chat_reply）：``chat_id``（群）或 ``open_id``（单聊）；
+                     旧版兼容回退 ``"default"``。
+                   不同 thread_id 在 MemorySaver 下完全隔离 working_memory / messages。
         user_ctx:  2026-08-19 新增。chat_reply 注入的"当前用户"身份 dict。
                    透传到 create_disposition_agent，按 user_ctx 复用 agent 实例。
+                   **不**影响 thread_id。
     """
     agent = create_disposition_agent(user_ctx=user_ctx)
     agent_config = get_agent_config(
@@ -848,18 +868,29 @@ def disposition_demo(
     history: list = None,
     *,
     user_ctx: Optional[Dict[str, str]] = None,
+    thread_id: Optional[str] = None,
 ) -> str:
     """Gradio ChatInterface / chat_reply 兼容入口（chat_reply.py L330 硬依赖）。
 
-    签名 **(message, history=None) -> str** 不可破坏 —— chat_reply.py 通过
+    位置参数签名 ``(message, history=None)`` 不可破坏 —— chat_reply.py 通过
     `disposition_demo(message, history)` 调用位置参数。
-    2026-08-19 新增 keyword-only ``user_ctx``：chat_reply 用
-    ``disposition_demo(message, history=None, user_ctx=user_ctx)`` 注入身份。
+    2026-08-19 新增两个 keyword-only 参数：
+        - ``user_ctx``：chat_reply 用 ``disposition_demo(message, history=None,
+          user_ctx=user_ctx)`` 注入身份（缓存 Agent 实例）。
+        - ``thread_id``（2026-08-19 新增）：chat_reply 按"群=chat_id / 单聊=open_id"
+          决定 LangGraph checkpointer key。``None`` → 回退 ``"default"``
+          （向后兼容过渡版 / 单元测试）。
 
     Args:
-        message:  用户消息文本。
-        history:  Gradio 兼容参数（不使用；P8 状态由 MemorySaver 通过 thread_id 维护）。
-        user_ctx: chat_reply_handler 构造的"当前用户"身份 dict（keyword-only）。
+        message:   用户消息文本。
+        history:   Gradio 兼容参数（不使用；P8 状态由 MemorySaver 通过 thread_id 维护）。
+        user_ctx:  chat_reply_handler 构造的"当前用户"身份 dict（keyword-only）。
+        thread_id: LangGraph thread_id（keyword-only；``None`` 回退 ``"default"``）。
+                   Bot 模式由 chat_reply 注入；主流程 / 测试可显式指定。
     """
     # 历史参数仅用于 Gradio 兼容；P8 状态由 MemorySaver 通过 thread_id 维护
-    return run_disposition_agent(message, user_ctx=user_ctx)
+    return run_disposition_agent(
+        message,
+        user_ctx=user_ctx,
+        thread_id=thread_id or "default",   # ← None 回退 "default"（向后兼容）
+    )

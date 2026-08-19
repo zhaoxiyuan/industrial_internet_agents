@@ -49,3 +49,9 @@ logs/web_server_8080.log
 
 # P8 运行时日志（daemon / 测试运行产生，体积大且不可复现）
 data/runtime/
+A5/log_test/
+A6/log_test/
+A5/logs/
+A6/logs/
+
+

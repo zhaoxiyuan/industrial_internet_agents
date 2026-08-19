@@ -317,29 +317,39 @@ def _truncate_for_feishu(text: str) -> str:
 # 2026-08-19：构造飞书 interactive 卡片（msg_type="interactive" + lark_md）。
 # 之前 LLM 输出的 markdown（标题 / 表格 / 加粗）会被飞书 text 类型剥成纯文本，
 # 这里包成卡片，让 lark_md 渲染生效。
+#
+# 2026-08-19 修订：改用 feishu_sender.build_feishu_card（Card 2.0 schema）。
+# 旧实现是 Card 1.0 的 div + lark_md 残缺格式，飞书服务端会退化渲染成普通
+# 消息（无 header / 无边框 / 无按钮），看起来跟 text 没区别。Card 2.0 带
+# schema/header/body 三段式才被飞书识别为真正的交互式卡片。
 _FEISHU_CARD_MAX_TEXT_LEN: int = 4000
+_FEISHU_CARD_DEFAULT_TITLE: str = "P8 处置回复"
 
 
 def _build_feishu_card(text: str) -> str:
-    """把清洗后的文本包成飞书 interactive 卡片 JSON 字符串。
+    """把清洗后的文本包成飞书 Card 2.0 交互式卡片 JSON 字符串。
 
-    卡片结构（最小可用版本）：
+    卡片结构（Card 2.0 schema，按 docs/飞书卡片教程/）：
         {
-          "config": {"wide_screen_mode": true},
-          "elements": [
-            {"tag": "div", "text": {"tag": "lark_md", "content": "<text>"}}
-          ]
+          "schema": "2.0",
+          "header": {"template": "blue", "title": {"tag": "plain_text", "content": "..."}},
+          "body": {
+            "elements": [
+              {"tag": "markdown", "content": "<text>"}
+            ]
+          }
         }
 
-    - ``wide_screen_mode=true`` 让移动端也能横向展示表格。
-    - 单 ``div + lark_md`` 元素足以覆盖 P8 处置对话的格式需求；
-      后续若需要按钮 / 多列 / 折叠，可在此函数扩展 elements 数组。
+    - ``template = "blue"`` 蓝色 header（区别于告警的 red），表示 P8 处置回复
+    - ``markdown`` 元素原生支持 lark_md 语法（粗体 / 列表 / 表格 / emoji）
+    - 不加按钮（chat_reply 是被动回复，不是交互决策）；如需按钮，由
+      notify_feishu 走 send_to_group_card（带 --option）单独处理
 
     Args:
         text: 已经过 ``_strip_think_tags`` + ``_truncate_for_feishu`` 清洗的文本。
 
     Returns:
-        飞书卡片 JSON 字符串（直接透传给 gateway ``content`` 字段）。
+        飞书 Card 2.0 JSON 字符串（直接透传给 gateway ``content`` 字段）。
     """
     # 防御：空文本 / 超长截断（前置 _truncate_for_feishu 已做，但保险起见）。
     if not text:
@@ -347,15 +357,15 @@ def _build_feishu_card(text: str) -> str:
     if len(text) > _FEISHU_CARD_MAX_TEXT_LEN:
         text = text[: _FEISHU_CARD_MAX_TEXT_LEN - 6] + "…(截断)"
 
-    card = {
-        "config": {"wide_screen_mode": True},
-        "elements": [
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": text},
-            }
-        ],
-    }
+    # 委托给 feishu_sender.build_feishu_card（已测试通过的 Card 2.0 实现）
+    # options=[] 不加按钮；title 用蓝色 header 标识"这是 P8 回复"
+    from feishu_gateway_cli.feishu_sender import build_feishu_card
+    card = build_feishu_card(
+        text=text,
+        options=[],
+        title=_FEISHU_CARD_DEFAULT_TITLE,
+        alert_id=None,
+    )
     return json.dumps(card, ensure_ascii=False)
 
 
@@ -405,6 +415,61 @@ def _extract_chat_id(event: Dict[str, Any]) -> str:
     """从 event 抽取 chat_id；缺失返回空字符串。"""
     conv = event.get("conversation") or {}
     return str(conv.get("id") or "")
+
+
+def _extract_chat_type(event: Dict[str, Any]) -> str:
+    """从 event 抽取会话类型（飞书 Gateway 归一化字段 ``conversation.type``）。
+
+    飞书 webhook 原生 payload 的 ``message.chat_type`` 在 Gateway 归一化时被搬到
+    ``conversation.type``（参考 feishu_receiver._extract_conversation_type）。
+    取值约定：
+      - ``"group"``        群聊
+      - ``"direct_message"`` / ``"p2p"`` / ``"dm"``  单聊
+      - ``""`` / 缺失      无法识别（fallback 到单聊处理）
+
+    Args:
+        event: chat_reply_handler 入参（feishu_receiver.poll_once 返回值）。
+
+    Returns:
+        会话类型字符串（小写；未知时为空字符串）。
+    """
+    conv = event.get("conversation") or {}
+    ct = conv.get("type")
+    if isinstance(ct, str):
+        return ct.strip().lower()
+    # 回退：raw.event.message.chat_type（飞书原生 webhook 字段）
+    raw = event.get("raw") or {}
+    inner = raw.get("event") or {}
+    inner_msg = inner.get("message") or {}
+    fb = inner_msg.get("chat_type")
+    return str(fb).strip().lower() if isinstance(fb, str) else ""
+
+
+def _compute_thread_id(event: Dict[str, Any], chat_id: str, sender_open_id: Optional[str]) -> str:
+    """按会话类型决定 LangGraph thread_id（蓝图 §7.2.1；2026-08-19 落地）。
+
+    规则：
+        - 群聊（``conversation.type == "group"``）→ ``thread_id = chat_id``
+        - 单聊（``"p2p" / "direct_message" / "dm"`` 或其他）→ ``thread_id = sender_open_id``
+        - chat_id / sender_open_id 都缺失（理论上不会发生）→ ``"default"`` 兜底
+
+    Args:
+        event: 入站事件。
+        chat_id: ``_extract_chat_id(event)`` 的结果。
+        sender_open_id: ``_extract_sender_open_id(event)`` 的结果（可 None）。
+
+    Returns:
+        thread_id 字符串（非空）。
+    """
+    chat_type = _extract_chat_type(event)
+    if chat_type == "group" and chat_id:
+        return chat_id
+    # 单聊 / 未知：fallback 到 open_id
+    if sender_open_id:
+        return sender_open_id
+    if chat_id:
+        return chat_id
+    return "default"
 
 
 def _extract_account_id(event: Dict[str, Any]) -> str:
@@ -521,8 +586,11 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
 
     Note:
         - 本函数**不**实现持续轮询；由调用方（脚本 / 服务 / 测试）循环调用。
-        - thread_id 命名按 §7.2.1：``f"feishu-{chat_id}"``，留待 P8 重写后接入
-          agent.invoke(config={"configurable": {"thread_id": ...}})。
+        - thread_id 命名按 §7.2.1（2026-08-19 落地）：
+            - 群聊（``conversation.type == "group"``）→ ``chat_id``
+            - 单聊 → ``sender_open_id``
+          实现位于 :func:`_compute_thread_id`。不同 thread_id 在 LangGraph
+          MemorySaver 下完全隔离 working_memory / messages。
     """
     event_id = _extract_event_id(event)
     chat_id = _extract_chat_id(event)
@@ -589,6 +657,19 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
     # 始终返回 dict（即使未识别也含占位 + note）—— 避免上游 None 分支。
     sender_open_id = _extract_sender_open_id(event)
     user_ctx = _lookup_sender_info(sender_open_id)
+
+    # 2026-08-19：按会话类型决定 LangGraph thread_id（蓝图 §7.2.1）。
+    #   - 群聊 → thread_id = chat_id       （working_memory / messages 按群隔离）
+    #   - 单聊 → thread_id = open_id        （按私聊用户隔离）
+    # 之前所有消息共用 "default"，多群并发会出现工作记忆串台。
+    chat_type = _extract_chat_type(event)
+    thread_id = _compute_thread_id(event, chat_id, sender_open_id)
+    logger.info(
+        "[%s] chat_reply_handler thread_id: event_id=%s chat_type=%s "
+        "thread_id=%s (chat_id=%s, open_id=%s)",
+        LOG_TAG, event_id, chat_type or "<unknown>", thread_id,
+        chat_id or "<missing>", sender_open_id or "<missing>",
+    )
     logger.info(
         "[%s] chat_reply_handler user_ctx: event_id=%s open_id=%s role=%s name=%s identified=%s",
         LOG_TAG, event_id, user_ctx.get("open_id") or "<missing>",
@@ -615,8 +696,15 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
         return
 
     # ===== 调 LLM（disposition_demo = P8 独立对话模式统一入口）=====
+    # 2026-08-19：thread_id 落地 —— 群=chat_id / 单聊=open_id，确保 MemorySaver
+    # 按会话隔离 working_memory 与 messages（之前默认 "default" 多群串台）。
     try:
-        llm_response = disposition_demo(human_message, history=None, user_ctx=user_ctx)
+        llm_response = disposition_demo(
+            human_message,
+            history=None,
+            user_ctx=user_ctx,
+            thread_id=thread_id,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "[%s] chat_reply_handler LLM 调用异常: event_id=%s job_id=%s err=%s",
@@ -669,18 +757,18 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
         )
         response_text = "P8 Agent 已处理（无文本回复）。"
 
-    # ===== 包成飞书 interactive 卡片（2026-08-19）=====
-    # 让 LLM 输出的 markdown（**加粗** / `- 列表` / `| 表格 |`）通过 lark_md 渲染。
-    # 之前 text 类型会剥成纯文本，### 和表格原样打印给用户。
-    card_content = _build_feishu_card(response_text)
-
-    # ===== 回写到原飞书会话 =====
+    # ===== 回写到原飞书会话（2026-08-19 改为纯文本模式）=====
+    # 普通对话走 msg_type=text（飞书按纯文本渲染）。
+    # 卡片格式（interactive + Card 2.0）**只**由 notify_feishu 工具按需发起——告警/处置
+    # 场景需要 HITL 按钮回调时才走 feishu_sender.send_to_group_card。
+    # 普通回消息不强制包卡片的原因：
+    #   1. "好的/已收到" 这种短回复包卡片视觉冗余（红 header + 边框）
+    #   2. markdown 格式约束已在 system_prompt 约束 LLM 输出（禁 ### / __）
+    #   3. 真正需要可交互卡片的场景（告警/处置）由工具层负责，与普通对话解耦
     try:
         reply_to_event(
             event_id=event_id,
             text=response_text,
-            msg_type="interactive",
-            content=card_content,
             account_id=account_id,
         )
     except GatewayError as exc:

@@ -230,27 +230,55 @@ startPoll();
 
 
 # ============================================================
-# A6 单例状态
+# A6 单例状态（per-job 缓存；2026-08-19 per-job 化改造）
 # ============================================================
+#
+# 改造前：_a6_agent 全局单例，所有 job 共享同一实例 → 数据写到全局 A6/logs/
+# 改造后：按 job_id 缓存 Dict[job_id → A6Agent]
+#        每个 job_id 独立 a5_log_dir / a6_output_dir；
+#        log_test_dir 全局共用 A6/log_test（用户要求 A6/log_test 不变）；
+#        多 job 路径（a5_log_dir / a6_output_dir）完全隔离；当前实现只让一个 active job 跑。
 
-_a6_agent: Optional[A6Agent] = None
+_a6_agents: Dict[str, A6Agent] = {}
 _a5_tools = None
 _output_tools = None
 _prompt_manager = None
 
 
-def get_a6_agent() -> A6Agent:
-    """获取或创建 A6Agent 单例（延迟初始化）"""
-    global _a6_agent, _a5_tools, _output_tools, _prompt_manager
-    if _a6_agent is None:
-        _a5_tools = A5DataTools()
-        _output_tools = OutputTools()
-        _prompt_manager = PromptManager()
-        _a6_agent = A6Agent(
-            a5_log_dir="A5/logs",
-            a6_output_dir="A6/logs",
-        )
-    return _a6_agent
+def get_a6_agent(job_id: str) -> A6Agent:
+    """按 job_id 获取或创建 A6Agent 实例（per-job 缓存）。
+
+    Args:
+        job_id: 主流程作业 ID（YYYYMMDDHHMMSS + 3位随机数）
+                 用于定位 a5_log_dir + a6_output_dir
+
+    Returns:
+        该 job_id 对应的 A6Agent 实例（首次调用时创建并缓存）
+    """
+    if job_id in _a6_agents:
+        return _a6_agents[job_id]
+
+    # per-job 路径 —— 复用 p6_monitor_agent 的 helper（保持单一真源）
+    from agents.p6_monitor_agent import get_p6_log_dir, get_p7_log_dir
+    a5_log_dir = get_p6_log_dir(job_id)              # data/jobs/{job_id}/P6
+    a6_output_dir = get_p7_log_dir(job_id)           # data/jobs/{job_id}/P7
+
+    agent = A6Agent(
+        a5_log_dir=a5_log_dir,
+        a6_output_dir=a6_output_dir,
+        # log_test_dir 不传 → A6Agent 默认 A6/log_test（用户要求 A6/log_test 不变）
+    )
+    _a6_agents[job_id] = agent
+    print(
+        f"[get_a6_agent] 创建 per-job A6Agent: job_id={job_id}, "
+        f"a5_log_dir={a5_log_dir}, a6_output_dir={a6_output_dir}"
+    )
+    return agent
+
+
+def clear_a6_agent(job_id: str) -> None:
+    """清除 job_id 对应的 A6Agent 缓存（job 停止时调用，避免内存泄漏）"""
+    _a6_agents.pop(job_id, None)
 
 
 def get_a5_tools():
@@ -281,24 +309,44 @@ def get_prompt_manager():
 # In-process A5→A6 触发器（供 P6 agent loop 调用）
 # ============================================================
 
-async def trigger_a6_assessment(event_id: str, event_data: dict):
+async def trigger_a6_assessment(event_id: str, event_data: dict, *, job_id: str = ""):
     """
     当 A5 产生告警事件时，in-process 触发 A6 风险研判。
 
     与原 HTTP 触发等价（避免跨进程/跨网络），由 P6 的 agent loop 直接 await。
+
+    Args:
+        event_id: A5 事件 ID
+        event_data: 事件详情（含 events[]）
+        job_id: 必填（P6 端通过 _active_jobs 当前 active 取）；
+                用于定位 per-job 的 a5_log_dir + a6_output_dir
     """
+    if not job_id:
+        print(f"[A5→A6] 警告：trigger_a6_assessment({event_id}) 缺少 job_id，回退到全局 A6Agent")
     if not event_data or not event_data.get("events"):
         return None
     try:
-        agent = get_a6_agent()
+        agent = get_a6_agent(job_id) if job_id else get_a6_agent_global()
         result = await agent.process_event(event_id, event_data=event_data)
-        print(f"[A5→A6] 事件 {event_id} 研判状态: {result.get('status')}")
+        print(f"[A5→A6] 事件 {event_id} 研判状态: {result.get('status')} (job_id={job_id or 'global'})")
         return result
     except Exception as e:
         import traceback
         print(f"[A5→A6] 事件 {event_id} 调用异常: {type(e).__name__}: {e}")
         traceback.print_exc()
         return None
+
+
+def get_a6_agent_global() -> A6Agent:
+    """回退入口：job_id 缺失时使用全局 A6Agent（向后兼容旧调用方）。"""
+    if "_global" in _a6_agents:
+        return _a6_agents["_global"]
+    agent = A6Agent(
+        a5_log_dir="A5/logs",
+        a6_output_dir="A6/logs",
+    )
+    _a6_agents["_global"] = agent
+    return agent
 
 
 # ============================================================
@@ -312,7 +360,7 @@ def risk_analyze(event_id: str) -> str:
     内部直接调用 A6Agent.process_event，返回 JSON 字符串。
     """
     try:
-        agent = get_a6_agent()
+        agent = get_a6_agent_global()  # 工具桩路径：默认全局 A6Agent（向后兼容 main_agent P7 阶段调用）
         try:
             loop = asyncio.get_running_loop()
             # 已在事件循环中 → 起线程跑，避免嵌套 loop
@@ -428,14 +476,22 @@ def run_risk_agent(message: str) -> str:
 # A6 FastAPI 路由注册（由 P6 启动时调用 register_a6_routes(app)）
 # ============================================================
 
-def register_a6_routes(app, a5_log_dir: Optional[str] = None):
+def register_a6_routes(app, a5_log_dir: Optional[str] = None,
+                       a6_output_dir: Optional[str] = None):
     """
     将 A6 全部路由 + /a6 页面挂载到 FastAPI app。
     P6 启动时调用：register_a6_routes(app, a5_log_dir=str(LOG_DIR))
+
+    Args:
+        a5_log_dir:    默认 a5_log_dir（A5/logs 或全局路径）；不传则用 _ROOT/A5/logs
+        a6_output_dir: 默认 a6_output_dir（A6/logs 或全局路径）；不传则用 _ROOT/A6/logs
+                       注意：per-job 数据通过 ?job_id=xxx 查询参数按需访问，
+                       此参数仅控制默认（不传 job_id）的路径。
     """
     from fastapi.responses import Response
 
     a5_log_path = Path(a5_log_dir) if a5_log_dir else _ROOT / "A5" / "logs"
+    a6_output_path = Path(a6_output_dir) if a6_output_dir else _ROOT / "A6" / "logs"
 
     # ── A6 风险研判看板页面 ─────────────────────────────────────────
     @app.get("/a6", response_class=Response)
@@ -449,60 +505,87 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None):
     # ── 研判列表 ─────────────────────────────────────────
     @app.get("/api/a6/assessments")
     async def get_assessments(start: str = None, end: str = None,
-                              risk_level: int = None, limit: int = 100):
-        """获取研判结果列表"""
-        output_dir = _ROOT / "A6" / "logs" / "assessments"
+                              risk_level: int = None, limit: int = 100,
+                              job_id: Optional[str] = None):
+        """获取研判结果列表
+
+        Args:
+            job_id: 传值时只读 data/jobs/{job_id}/P7/a6_*.json（per-job 扁平）；
+                    不传时读全局 a6_output_path/assessments/<YYYYMMDD>/（向后兼容）
+        """
+        if job_id:
+            # per-job 模式（2026-08-19 改造）：扁平 a6_*.json 在 data/jobs/{job_id}/P7/
+            from agents.p6_monitor_agent import get_p7_log_dir
+            output_dir = get_p7_log_dir(job_id)
+        else:
+            output_dir = a6_output_path / "assessments"
         if not output_dir.exists():
             return {"total": 0, "items": []}
 
         results = []
-        for date_dir in sorted(output_dir.iterdir(), reverse=True):
-            if not date_dir.is_dir():
-                continue
-            for f in sorted(date_dir.glob("a6_*.json"), reverse=True):
-                try:
-                    data = json.load(open(f, encoding="utf-8"))
-                    if start and data.get("timestamp", "") < start:
-                        continue
-                    if end and data.get("timestamp", "") > end:
-                        continue
-                    if risk_level and data.get("risk_level") != risk_level:
-                        continue
-                    # 自动过滤无风险记录（risk_level=0），前端不展示
-                    if data.get("risk_level", 0) == 0:
-                        continue
-                    results.append({
-                        "a6_event_id": data.get("a6_event_id"),
-                        "event_type": data.get("event_type"),
-                        "first_seen": data.get("first_seen"),
-                        "last_seen": data.get("last_seen"),
-                        "duration_sec": data.get("duration_sec", 0),
-                        "involved_persons": data.get("involved_persons", []),
-                        "risk_level": data.get("risk_level"),
-                        "risk_level_name": data.get("risk_level_name"),
-                        "risk_basis": data.get("risk_basis"),
-                        "suggestions": data.get("suggestions", []),
-                        "reasoning": data.get("reasoning"),
-                        "timestamp": data.get("timestamp"),
-                    })
-                    if len(results) >= limit:
-                        break
-                except (json.JSONDecodeError, IOError):
+        # 兼容两种结构：扁平 (a6_*.json) 与按日期分 (assessments/<YYYYMMDD>/a6_*.json)
+        candidate_files = []
+        if job_id:
+            candidate_files = sorted(output_dir.glob("a6_*.json"), reverse=True)
+        else:
+            for date_dir in sorted(output_dir.iterdir(), reverse=True):
+                if not date_dir.is_dir():
                     continue
-            if len(results) >= limit:
-                break
+                candidate_files.extend(sorted(date_dir.glob("a6_*.json"), reverse=True))
+        for f in candidate_files:
+            try:
+                data = json.load(open(f, encoding="utf-8"))
+                if start and data.get("timestamp", "") < start:
+                    continue
+                if end and data.get("timestamp", "") > end:
+                    continue
+                if risk_level and data.get("risk_level") != risk_level:
+                    continue
+                # 自动过滤无风险记录（risk_level=0），前端不展示
+                if data.get("risk_level", 0) == 0:
+                    continue
+                results.append({
+                    "a6_event_id": data.get("a6_event_id"),
+                    "event_type": data.get("event_type"),
+                    "first_seen": data.get("first_seen"),
+                    "last_seen": data.get("last_seen"),
+                    "duration_sec": data.get("duration_sec", 0),
+                    "involved_persons": data.get("involved_persons", []),
+                    "risk_level": data.get("risk_level"),
+                    "risk_level_name": data.get("risk_level_name"),
+                    "risk_basis": data.get("risk_basis"),
+                    "suggestions": data.get("suggestions", []),
+                    "reasoning": data.get("reasoning"),
+                    "timestamp": data.get("timestamp"),
+                })
+                if len(results) >= limit:
+                    break
+            except (json.JSONDecodeError, IOError):
+                continue
         return {"total": len(results), "items": results}
 
     @app.get("/api/a6/assessments/{a6_event_id}")
-    async def get_assessment(a6_event_id: str):
-        """获取单条研判详情"""
-        output_dir = _ROOT / "A6" / "logs" / "assessments"
-        if not output_dir.exists():
-            return {"error": "不存在"}
-        for date_dir in sorted(output_dir.iterdir(), reverse=True):
-            if not date_dir.is_dir():
+    async def get_assessment(a6_event_id: str, job_id: Optional[str] = None):
+        """获取单条研判详情
+
+        Args:
+            job_id: 传值时只在 data/jobs/{job_id}/P7/ 查找；
+                    不传时在全局 a6_output_path/assessments/<YYYYMMDD>/ 查找
+        """
+        if job_id:
+            from agents.p6_monitor_agent import get_p7_log_dir
+            search_dirs = [get_p7_log_dir(job_id)]
+        else:
+            base = a6_output_path / "assessments"
+            search_dirs = [base / d for d in sorted(base.iterdir(), reverse=True) if d.is_dir()] \
+                if base.exists() else []
+            # 也兜底扫扁平目录（per-job 模式下不传 job_id 也能找到）
+            if a6_output_path.exists():
+                search_dirs.insert(0, a6_output_path)
+        for d in search_dirs:
+            if not d.exists():
                 continue
-            for f in sorted(date_dir.glob("a6_*.json"), reverse=True):
+            for f in sorted(d.glob("a6_*.json"), reverse=True):
                 try:
                     data = json.load(open(f, encoding="utf-8"))
                     if data.get("a6_event_id") == a6_event_id:
@@ -563,10 +646,16 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None):
     # ── 手动触发研判（外部 HTTP 调用入口） ─────────────────────────────
     @app.post("/api/a6/process/{event_id}")
     async def process_a6_event(event_id: str, body: Optional[dict] = None):
-        """手动触发 A6 研判（HTTP 接口，P6 已改为 in-process 调用）"""
+        """手动触发 A6 研判（HTTP 接口，P6 已改为 in-process 调用）
+
+        Args:
+            event_id: A5 事件 ID
+            body: 必含 job_id（per-job 模式）；不传则用全局 A6Agent
+        """
         import traceback
         try:
-            agent = get_a6_agent()
+            job_id = (body or {}).get("job_id", "")
+            agent = get_a6_agent(job_id) if job_id else get_a6_agent_global()
             result = await agent.process_event(event_id, event_data=body)
             return result
         except Exception as e:

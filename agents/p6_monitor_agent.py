@@ -18,9 +18,10 @@ P6: 作业过程动态监测 - 基于 A5 实现（完整 Web 服务）
 """
 import asyncio
 import json
+import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,22 @@ app = FastAPI(title="A5 作业过程监测 - P6 Monitor")
 
 # 日志根目录：固定在 A5/logs
 LOG_DIR = _ROOT / "A5" / "logs"
+
+# ── per-job 运行状态机 ──────────────────────────────────────────────────────
+# 当前同时只跑一个 active job（mutex 守门），但按 job_id 路径完全隔离，
+# 为未来多并发做准备。
+_monitor_mutex = asyncio.Lock()
+_active_jobs: Dict[str, Dict[str, Any]] = {}  # job_id → {scenario, status, collector_task, agent_task, started_at, ...}
+
+
+def _get_active_job_id() -> str:
+    """返回当前 running 的 job_id（用于在 _run_agent_loop 透传给 trigger_a6_assessment）。
+    若无 active job 则返回空串（向后兼容旧全局路径）。"""
+    for job_id, state in _active_jobs.items():
+        if state.get("status") in ("agent_running", "playing", "starting"):
+            return job_id
+    return ""
+
 
 # ── 挂载 A6 路由（P7 模块提供，共享端口 5002）───────────────────────────────
 # 包括 /a6 页面 + /api/a6/* 全部接口
@@ -278,6 +295,25 @@ textarea { width:100%; background:#0f172a; color:#e2e8f0; border:1px solid #3341
         <button class="btn-blue" id="btnAgentStart" onclick="startAgent()">▶ 启动Agent</button>
         <button class="btn-red"  id="btnAgentStop"  onclick="stopAgent()" disabled>■ 停止Agent</button>
         <span id="agentStatus" class="status">未启动</span>
+      </div>
+
+      <!-- ── per-job 监测（2026-08-19 新增；与 P1-P5 job 规范对齐） ── -->
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;padding:10px;background:#1e293b;border-radius:6px;">
+        <span style="color:#94a3b8;font-size:12px;">📋 per-job 监测（写入 data/jobs/&lt;job_id&gt;/P6 + P7）：</span>
+        <label style="color:#94a3b8;font-size:12px;">作业 ID:</label>
+        <input id="txtJobId" type="text" placeholder="例: 20260819154312029"
+               style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;width:180px;" />
+        <label style="color:#94a3b8;font-size:12px;">场景:</label>
+        <select id="selScenarioJob" style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;">
+          <option value="A">A - 正常作业</option>
+          <option value="B" selected>B - 工人摘头盔</option>
+          <option value="C">C - 可燃气体上升</option>
+          <option value="D">D - 监护人离岗</option>
+          <option value="E">E - 多重违规</option>
+        </select>
+        <button class="btn-blue" id="btnMonitorStart" onclick="startMonitor()">🚀 开始监测（5秒后播放）</button>
+        <button class="btn-red"  id="btnMonitorStop"  onclick="stopMonitor()" disabled>■ 停止监测</button>
+        <span id="monitorStatus" class="status">未启动</span>
       </div>
     </div>
 
@@ -612,6 +648,99 @@ async function stopAgent() {
   } catch(e) { alert("Agent停止失败: " + e); }
 }
 
+// ── per-job 监测（2026-08-19 新增） ──────────────────────────────────────────
+let _monitorJobId = "";
+let _monitorPollTimer = null;
+
+async function startMonitor() {
+  const jobId = document.getElementById("txtJobId").value.trim();
+  const scenario = document.getElementById("selScenarioJob").value;
+  if (!jobId) { alert("请输入 job_id（17 位时间戳，例: 20260819154312029）"); return; }
+  if (!/^\d{17}$/.test(jobId)) {
+    alert("job_id 格式错误，应为 17 位数字（YYYYMMDDHHMMSS + 3位随机）");
+    return;
+  }
+  _monitorJobId = jobId;
+  try {
+    const r = await fetch("/api/monitor/start", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        job_id: jobId,
+        scenario: scenario,
+        duration_sec: 30,
+        interval_sec: 2,
+        batch_size: 10,
+        play_delay_sec: 5,
+      }),
+    });
+    const d = await r.json();
+    if (d.status === "ok") {
+      document.getElementById("btnMonitorStart").disabled = true;
+      document.getElementById("btnMonitorStop").disabled  = false;
+      document.getElementById("monitorStatus").textContent =
+        `运行中（5秒后播放场景 ${d.scenario}）`;
+      addLog(`✅ monitor_start 成功: job_id=${d.job_id}, p6_dir=${d.p6_dir}`);
+      addLog(`▶️ 5 秒后开始播放 mock 数据...`);
+      startMonitorPoll();
+    } else {
+      addLog(`❌ monitor_start 失败: ${d.error}`);
+      alert(d.error || "monitor_start 失败");
+    }
+  } catch(e) {
+    addLog(`❌ monitor_start 异常: ${e}`);
+    alert("monitor_start 异常: " + e);
+  }
+}
+
+async function stopMonitor() {
+  if (!_monitorJobId) { alert("没有运行中的 job_id"); return; }
+  try {
+    const r = await fetch("/api/monitor/stop", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ job_id: _monitorJobId }),
+    });
+    const d = await r.json();
+    addLog(`■ monitor_stop: ${d.status} (job_id=${d.job_id}, final=${d.final_status || d.note})`);
+    document.getElementById("btnMonitorStart").disabled = false;
+    document.getElementById("btnMonitorStop").disabled  = true;
+    document.getElementById("monitorStatus").textContent = "已停止";
+    stopMonitorPoll();
+    _monitorJobId = "";
+  } catch(e) {
+    addLog(`❌ monitor_stop 异常: ${e}`);
+    alert("monitor_stop 异常: " + e);
+  }
+}
+
+function startMonitorPoll() {
+  if (_monitorPollTimer) clearInterval(_monitorPollTimer);
+  _monitorPollTimer = setInterval(async () => {
+    if (!_monitorJobId) { stopMonitorPoll(); return; }
+    try {
+      const r = await fetch(`/api/monitor/status?job_id=${encodeURIComponent(_monitorJobId)}`);
+      const d = await r.json();
+      if (d.status === "ok" && d.job_state) {
+        const s = d.job_state;
+        const label = `status=${s.status}` + (s.scenario ? `, 场景=${s.scenario}` : "");
+        document.getElementById("monitorStatus").textContent = label;
+        if (["completed", "cancelled", "error"].includes(s.status)) {
+          addLog(`📋 monitor 终态: job_id=${_monitorJobId}, status=${s.status}`);
+          document.getElementById("btnMonitorStart").disabled = false;
+          document.getElementById("btnMonitorStop").disabled  = true;
+          _monitorJobId = "";
+          stopMonitorPoll();
+        }
+      }
+    } catch(e) { /* 静默 */ }
+  }, 2000);
+}
+
+function stopMonitorPoll() {
+  if (_monitorPollTimer) { clearInterval(_monitorPollTimer); _monitorPollTimer = null; }
+}
+
 async function loadRules() {
   const r = await fetch("/api/rules");
   const d = await r.json();
@@ -856,8 +985,11 @@ async def _run_data_play(scenario: str, log_dir: str):
 # 内部协程：Agent 轮询（循环2）
 # ============================================================
 
-async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
-    agent = A5Agent(collector=None, work_permit=WORK_PERMIT, raw_event_dir=log_dir)
+async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
+                        agent: Optional[A5Agent] = None):
+    if agent is None:
+        # 兼容旧调用：不传 agent 时 new 一个全局 A5Agent（raw_event 写到 LOG_DIR）
+        agent = A5Agent(collector=None, work_permit=WORK_PERMIT, raw_event_dir=log_dir)
     log_path = Path(log_dir)
     pending_tasks: list = []
     inflight_wts: set = set()
@@ -992,7 +1124,8 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int):
                     # 🚨 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
                     #    P7 in-process 调用，跳过 HTTP — 详见上方注释块
                     if result.get("events"):
-                        asyncio.create_task(trigger_a6_assessment(wt, result))
+                        # 透传当前 active job_id（per-job 模式）；无 active 时空串 → 回退到全局 A6Agent
+                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=_get_active_job_id()))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
@@ -1059,6 +1192,69 @@ async def api_update_system_prompt(body: dict):
 @app.post("/api/system_prompt/reset")
 async def api_reset_system_prompt():
     return {"system_prompt": reset_system_prompt(), "status": "reset"}
+
+
+# ============================================================
+# per-job 监测任务（2026-08-19 新增；与 P1-P5 job 规范对齐）
+# ============================================================
+
+async def _run_data_play_for_job(job_id: str, scenario: str, log_dir: str,
+                                  duration_sec: int = 30):
+    """per-job 版本：把 cv/sensor/position/snapshot 写到 data/jobs/{job_id}/P6/
+
+    与 _run_data_play（全局路径）相比，仅 log_dir 不同；其他逻辑一致。
+    """
+    collector = AsyncCollector(scenario=scenario, log_dir=log_dir)
+    await collector.start()
+    for sec in range(duration_sec):
+        await asyncio.sleep(1.0)
+        try:
+            await collector.flush_second(sec)
+        except asyncio.CancelledError:
+            break
+    await collector.stop()
+
+
+async def _run_agent_loop_for_job(job_id: str, interval_sec: int = 2,
+                                   batch_size: int = 10):
+    """per-job 版本：raw_event 写到 data/jobs/{job_id}/P6/
+
+    A5Agent.raw_event_dir 显式指向 per-job 目录；
+    其余逻辑复用 _run_agent_loop（trigger_a6_assessment 时透传当前 active job_id）。
+    """
+    p6_dir = get_p6_log_dir(job_id)
+    state = _active_jobs.get(job_id)
+    if state is None:
+        print(f"[P6] _run_agent_loop_for_job: job_id={job_id} 不在 _active_jobs 中，跳过")
+        return
+
+    # per-job A5Agent：raw_event 写到 data/jobs/{job_id}/P6/raw_event_*.json
+    agent = A5Agent(collector=None, work_permit=WORK_PERMIT, raw_event_dir=p6_dir)
+    await _run_agent_loop(p6_dir, interval_sec=interval_sec, batch_size=batch_size, agent=agent)
+
+
+async def _stop_one_job_active(job_id: str, state: Dict[str, Any]):
+    """强制停掉一个 active job 的所有 task + 清 A6Agent 缓存"""
+    if state.get("collector_task") and not state["collector_task"].done():
+        state["collector_task"].cancel()
+        try:
+            await state["collector_task"]
+        except (asyncio.CancelledError, Exception):
+            pass
+    if state.get("agent_task") and not state["agent_task"].done():
+        state["agent_task"].cancel()
+        try:
+            await state["agent_task"]
+        except (asyncio.CancelledError, Exception):
+            pass
+    state["status"] = "cancelled"
+    state["ended_at"] = datetime.now(timezone.utc).isoformat()
+    # 显式清除 A6Agent 缓存，避免内存泄漏（p7_risk_agent 提供）
+    try:
+        from agents.p7_risk_agent import clear_a6_agent
+        clear_a6_agent(job_id)
+    except Exception as exc:
+        print(f"[P6] clear_a6_agent({job_id}) 失败: {exc}")
 
 
 # 场景/数据播放控制
@@ -1168,6 +1364,158 @@ async def start_agent(body: dict = None):
     state.agent_task = asyncio.create_task(_run_agent_loop(log_dir, interval, batch_size))
 
     return {"status": "started", "interval_sec": interval, "batch_size": batch_size, "log_dir": log_dir}
+
+
+# ── per-job 监测端点（2026-08-19 新增；与 P1-P5 job 规范对齐）───────────────
+class MonitorStartRequest(BaseModel):
+    job_id: str
+    scenario: str = "B"          # A/B/C/D/E
+    duration_sec: int = 30
+    interval_sec: int = 2
+    batch_size: int = 10
+    play_delay_sec: int = 5      # 用户要求：5 秒后播放 mock 数据
+
+
+class MonitorStopRequest(BaseModel):
+    job_id: str
+
+
+@app.post("/api/monitor/start")
+async def monitor_start(req: MonitorStartRequest):
+    """前端「开始监测」按钮：等价于「点击开始agent → 5秒后播放mock数据」"""
+    print(f"[monitor_start] 进入: job_id={req.job_id}, scenario={req.scenario}, "
+          f"play_delay_sec={req.play_delay_sec}")
+
+    # job_id 校验（与 P1-P5 命名一致：YYYYMMDDHHMMSS + 3位随机）
+    if not req.job_id or not re.match(r"^\d{17}$", req.job_id):
+        return {"status": "error", "error": f"job_id 格式错误，应为 17 位时间戳: {req.job_id}"}
+
+    if req.scenario not in SCENARIOS:
+        return {"status": "error", "error": f"scenario 必须是 {SCENARIOS} 之一"}
+
+    # 目录准备（P6/P7 路径完全隔离）
+    p6_dir = get_p6_log_dir(req.job_id)
+    p7_dir = get_p7_log_dir(req.job_id)
+
+    # 检查并强制停掉所有 active job（用户决策：当前同时只跑一个 active job）
+    async with _monitor_mutex:
+        for active_job_id, active_state in list(_active_jobs.items()):
+            if active_state.get("status") in ("starting", "agent_running", "playing"):
+                print(f"[monitor_start] 检测到已有 active job {active_job_id}，强制停掉")
+                await _stop_one_job_active(active_job_id, active_state)
+                _active_jobs.pop(active_job_id, None)
+
+        # 创建新的 per-job 状态
+        state = {
+            "scenario": req.scenario,
+            "status": "starting",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "collector_task": None,
+            "agent_task": None,
+            "play_delay_sec": req.play_delay_sec,
+            "p6_dir": p6_dir,
+            "p7_dir": p7_dir,
+        }
+        _active_jobs[req.job_id] = state
+
+    try:
+        # 立即启动 Agent（等价于点击"开始agent"按钮）
+        async def run_agent_then_complete():
+            try:
+                state["status"] = "agent_running"
+                await _run_agent_loop_for_job(req.job_id, req.interval_sec, req.batch_size)
+                state["status"] = "agent_completed"
+            except asyncio.CancelledError:
+                state["status"] = "cancelled"
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                state["status"] = "error"
+                state["error"] = str(exc)
+
+        agent_task = asyncio.create_task(run_agent_then_complete())
+        state["agent_task"] = agent_task
+
+        # 后端 asyncio.sleep(play_delay_sec) 后再启动 collector（5秒后播放 mock 数据）
+        async def delayed_play_then_complete():
+            try:
+                await asyncio.sleep(req.play_delay_sec)
+                # 中途若有新 job 抢锁，旧 job 不再启动 collector（mutex 在 stop_one 时已置 cancelled）
+                if state["status"] == "cancelled":
+                    return
+                state["status"] = "playing"
+                await _run_data_play_for_job(req.job_id, req.scenario, p6_dir,
+                                             duration_sec=req.duration_sec)
+                if state["status"] not in ("cancelled", "error"):
+                    state["status"] = "completed"
+            except asyncio.CancelledError:
+                state["status"] = "cancelled"
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                state["status"] = "error"
+                state["error"] = str(exc)
+            finally:
+                state["ended_at"] = datetime.now(timezone.utc).isoformat()
+
+        collector_task = asyncio.create_task(delayed_play_then_complete())
+        state["collector_task"] = collector_task
+
+        print(f"[monitor_start] 响应: job_id={req.job_id}, status={state['status']}, "
+              f"p6_dir={p6_dir}, p7_dir={p7_dir}")
+        return {
+            "status": "ok",
+            "job_id": req.job_id,
+            "scenario": req.scenario,
+            "p6_dir": p6_dir,
+            "p7_dir": p7_dir,
+            "play_delay_sec": req.play_delay_sec,
+            "duration_sec": req.duration_sec,
+        }
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "error": f"internal: {exc}"}
+
+
+@app.post("/api/monitor/stop")
+async def monitor_stop(req: MonitorStopRequest):
+    """主动停掉一个 job_id 的监测"""
+    print(f"[monitor_stop] 进入: job_id={req.job_id}")
+    state = _active_jobs.get(req.job_id)
+    if not state:
+        return {"status": "ok", "note": "job 未在运行"}
+    async with _monitor_mutex:
+        await _stop_one_job_active(req.job_id, state)
+        _active_jobs.pop(req.job_id, None)
+    return {"status": "ok", "job_id": req.job_id, "final_status": state["status"]}
+
+
+@app.get("/api/monitor/status")
+async def monitor_status(job_id: Optional[str] = None):
+    """查询当前 active jobs 或指定 job_id 状态"""
+    if job_id:
+        state = _active_jobs.get(job_id)
+        if not state:
+            return {"status": "not_found", "job_id": job_id}
+        return {
+            "status": "ok",
+            "job_id": job_id,
+            "job_state": {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in state.items()
+                if k not in ("collector_task", "agent_task")
+            },
+        }
+    # 返回所有 active jobs（去重 sensitive 字段）
+    return {
+        "status": "ok",
+        "active_count": len(_active_jobs),
+        "jobs": [
+            {"job_id": jid, **{k: v for k, v in st.items() if k not in ("collector_task", "agent_task")}}
+            for jid, st in _active_jobs.items()
+        ],
+    }
 
 
 @app.post("/api/agent/stop")
@@ -1345,6 +1693,30 @@ def get_a5_log_dir(job_id: str) -> str:
     """获取 A5 日志目录路径"""
     from agents.workflow.file_utils import get_job_dir
     log_dir = get_job_dir(job_id) + "/a5_logs"
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_p6_log_dir(job_id: str) -> str:
+    """获取 P6 日志目录路径：data/jobs/{job_id}/P6
+
+    P6 阶段 A5 流数据 + raw_event 写入此目录；
+    与 P1-P5 get_stage_result_path(job_id, "p{n}") 命名风格一致。
+    """
+    from agents.workflow.file_utils import get_job_dir
+    log_dir = get_job_dir(job_id) + "/P6"
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_p7_log_dir(job_id: str) -> str:
+    """获取 P7 日志目录路径：data/jobs/{job_id}/P7
+
+    P7 阶段 A6 风险研判结果（a6_*.json）写入此目录（扁平结构）；
+    与 P6/P7 per-job 化约定一致。
+    """
+    from agents.workflow.file_utils import get_job_dir
+    log_dir = get_job_dir(job_id) + "/P7"
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     return log_dir
 
