@@ -407,8 +407,9 @@ async function pollLog() {
 }
 
 async function fetchLogCounts() {
+  if (!_monitorJobId) { console.warn("fetchLogCounts: 当前无 active job_id"); return; }
   try {
-    const r = await fetch("/api/logs");
+    const r = await fetch("/api/logs?job_id=" + encodeURIComponent(_monitorJobId));
     const d = await r.json();
     document.getElementById("cntSnapshot").textContent  = (d.snapshots  || []).length;
     document.getElementById("cntRaw").textContent       = (d.raw_events || []).length;
@@ -422,7 +423,10 @@ async function fetchLogCounts() {
 
 async function pollScenario() {
   try {
-    const r = await fetch("/api/scenario/status");
+    // 跟随 per-job 模式：读 data/jobs/{job_id}/P6/ 进度
+    const jobId = _monitorJobId || "";
+    const url = jobId ? "/api/scenario/status?job_id=" + encodeURIComponent(jobId) : "/api/scenario/status";
+    const r = await fetch(url);
     const d = await r.json();
     _currentSecond = d.current_second || 0;
     const pct = Math.min(100, (_currentSecond / 30) * 100);
@@ -436,13 +440,15 @@ async function pollScenario() {
 }
 
 async function fetchLatestSnapshot() {
+  if (!_monitorJobId) return;
   try {
-    const r = await fetch("/api/logs");
+    const r = await fetch("/api/logs?job_id=" + encodeURIComponent(_monitorJobId));
     const d = await r.json();
     const snaps = d.snapshots || [];
     if (snaps.length === 0) return;
     const latest = snaps[snaps.length - 1];
-    const fr = await fetch("/api/logs/" + encodeURIComponent(latest));
+    const fr = await fetch("/api/logs/" + encodeURIComponent(latest) +
+                          "?job_id=" + encodeURIComponent(_monitorJobId));
     if (!fr.ok) return;
     const sd = await fr.json();
     if (!sd.snapshots || !sd.snapshots[0]) return;
@@ -500,12 +506,16 @@ async function pollAgent() {
 
 async function fetchAgentStatus() {
   try {
-    const r = await fetch("/api/agent/status");
+    // 跟随 per-job 模式：读 data/jobs/{job_id}/P6/ 处理队列
+    const jobId = _monitorJobId || "";
+    const url = jobId ? "/api/agent/status?job_id=" + encodeURIComponent(jobId) : "/api/agent/status";
+    const r = await fetch(url);
     const d = await r.json();
     _agentRunning = d.running;
     document.getElementById("btnAgentStart").disabled = d.running;
     document.getElementById("btnAgentStop").disabled  = !d.running;
-    document.getElementById("agentStatus").textContent = d.running ? "运行中" : "已停止";
+    document.getElementById("agentStatus").textContent =
+      d.running ? ("运行中" + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)")) : "已停止";
     const s = d.stats || {};
     document.getElementById("statTotal").textContent  = s.total || 0;
     document.getElementById("statDone").textContent   = s.done || 0;
@@ -548,8 +558,9 @@ function renderQueue(pending) {
 }
 
 async function fetchRawEvents() {
+  if (!_monitorJobId) { console.warn("fetchRawEvents: 当前无 active job_id"); return; }
   try {
-    const r = await fetch("/api/agent/events");
+    const r = await fetch("/api/agent/events?job_id=" + encodeURIComponent(_monitorJobId));
     if (!r.ok) return;
     const d = await r.json();
     const events = d.events || [];
@@ -580,18 +591,21 @@ async function fetchRawEvents() {
 
 async function startScenario() {
   const scenario = document.getElementById("selScenario").value;
+  // 跟随 per-job 模式：传入当前 active job_id → 写到 data/jobs/{job_id}/P6/
+  const jobId = _monitorJobId || "";
   try {
     const r = await fetch("/api/scenario/start", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ scenario }),
+      body: JSON.stringify({ scenario, job_id: jobId }),
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
     _scenarioRunning = true;
     document.getElementById("btnPlay").disabled = true;
     document.getElementById("btnStop").disabled = false;
-    document.getElementById("statusText").textContent = "启动中... " + d.scenario;
+    document.getElementById("statusText").textContent =
+      "启动中... " + d.scenario + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)");
     startScenarioPoll();
   } catch(e) { alert("启动失败: " + e); }
 }
@@ -608,11 +622,19 @@ async function stopScenario() {
 }
 
 async function clearLogs() {
-  if (!confirm("确定清理 A5/logs 下所有日志文件？")) return;
+  if (!_monitorJobId) {
+    alert("请先在「per-job 监测」面板启动一个 job（点击「🚀 开始监测」）");
+    return;
+  }
+  if (!confirm("确定清理 data/jobs/" + _monitorJobId + "/P6 下所有日志文件？")) return;
   try {
-    const r = await fetch("/api/logs/clear", {method:"POST"});
+    const r = await fetch("/api/logs/clear", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({job_id: _monitorJobId}),
+    });
     const d = await r.json();
-    document.getElementById("statusText").textContent = "已清理 " + d.removed + " 个文件";
+    document.getElementById("statusText").textContent = "已清理 " + d.removed + " 个文件 (job=" + d.job_id + ")";
     await fetchLogCounts();
     await fetchRawEvents();
   } catch(e) { alert("清理失败: " + e); }
@@ -621,18 +643,21 @@ async function clearLogs() {
 async function startAgent() {
   const interval = parseInt(document.getElementById("selInterval").value);
   const batch    = parseInt(document.getElementById("selBatch").value);
+  // 跟随 per-job 模式：传入当前 active job_id → 写到 data/jobs/{job_id}/P6/
+  const jobId = _monitorJobId || "";
   try {
     const r = await fetch("/api/agent/start", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ interval_sec: interval, batch_size: batch }),
+      body: JSON.stringify({ interval_sec: interval, batch_size: batch, job_id: jobId }),
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
     _agentRunning = true;
     document.getElementById("btnAgentStart").disabled = true;
     document.getElementById("btnAgentStop").disabled  = false;
-    document.getElementById("agentStatus").textContent = "运行中";
+    document.getElementById("agentStatus").textContent =
+      "运行中" + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)");
     startAgentPoll();
   } catch(e) { alert("Agent启动失败: " + e); }
 }
@@ -680,6 +705,8 @@ async function startMonitor() {
       document.getElementById("btnMonitorStop").disabled  = false;
       document.getElementById("monitorStatus").textContent =
         `运行中（5秒后播放场景 ${d.scenario}）`;
+      // 共享给 /a6 页面（A6 看板前端从 localStorage 读取）
+      localStorage.setItem("p6_active_job_id", d.job_id);
       addLog(`✅ monitor_start 成功: job_id=${d.job_id}, p6_dir=${d.p6_dir}`);
       addLog(`▶️ 5 秒后开始播放 mock 数据...`);
       startMonitorPoll();
@@ -707,6 +734,7 @@ async function stopMonitor() {
     document.getElementById("btnMonitorStop").disabled  = true;
     document.getElementById("monitorStatus").textContent = "已停止";
     stopMonitorPoll();
+    localStorage.removeItem("p6_active_job_id");
     _monitorJobId = "";
   } catch(e) {
     addLog(`❌ monitor_stop 异常: ${e}`);
@@ -801,6 +829,8 @@ class GlobalState:
         self.agent_batch_size: int = 10
         self.agent_running: bool = False
         self.scenario_running: bool = False
+        self.scenario_job_id: str = ""    # 当前 scenario 关联的 job_id（per-job 模式）
+        self.agent_job_id: str = ""       # 当前 agent 关联的 job_id（per-job 模式）
         self._start_wall: Optional[datetime] = None
 
     def reset(self):
@@ -811,6 +841,8 @@ class GlobalState:
         self.log_dir = ""
         self.agent_running = False
         self.scenario_running = False
+        self.scenario_job_id = ""
+        self.agent_job_id = ""
         self._start_wall = None
 
 
@@ -1263,18 +1295,28 @@ async def start_scenario(body: dict = None):
     await _stop_all()
 
     scenario = (body or {}).get("scenario", "B") if body else "B"
-    log_dir = str(LOG_DIR)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    job_id = (body or {}).get("job_id", "") if body else ""
+    # job_id 传值 → 写到 data/jobs/{job_id}/P6/（per-job 模式）；
+    # 不传 → 保留旧行为写 A5/logs（向后兼容调试）
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return {"error": f"job_id 格式错误: {job_id}"}, 400
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = str(LOG_DIR)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     state.scenario = scenario
     state.log_dir = log_dir
     state.scenario_running = True
+    state.scenario_job_id = job_id or ""
 
     state.scenario_task = asyncio.create_task(_run_data_play(scenario, log_dir))
 
     return {
         "status": "started",
         "scenario": scenario,
+        "job_id": job_id,
         "log_dir": log_dir,
         "duration_sec": 30,
     }
@@ -1318,8 +1360,13 @@ async def stop_scenario():
 
 
 @app.get("/api/scenario/status")
-async def get_scenario_status():
-    log_dir = state.log_dir or str(LOG_DIR)
+async def get_scenario_status(job_id: Optional[str] = None):
+    # job_id 传值 → 读 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 回退 state.log_dir 或 LOG_DIR（向后兼容）
+    if job_id:
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = state.log_dir or str(LOG_DIR)
 
     current_sec = 0
     if state.scenario_running and state.collector:
@@ -1342,6 +1389,7 @@ async def get_scenario_status():
         "current_second": current_sec,
         "total_seconds": 30,
         "log_dir": log_dir,
+        "job_id": job_id or state.scenario_job_id,
         "cv_count": cv_count,
         "log_files": _count_log_files(log_dir),
     }
@@ -1355,15 +1403,31 @@ async def start_agent(body: dict = None):
 
     interval = (body or {}).get("interval_sec", 10)
     batch_size = (body or {}).get("batch_size", 10)
+    job_id = (body or {}).get("job_id", "") if body else ""
+
+    # job_id 传值 → 写到 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 保留旧行为写 A5/logs（向后兼容）
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return {"error": f"job_id 格式错误: {job_id}"}, 400
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = str(LOG_DIR)
 
     state.agent_interval = interval
     state.agent_batch_size = batch_size
     state.agent_running = True
+    state.agent_job_id = job_id or ""
 
-    log_dir = str(LOG_DIR)
     state.agent_task = asyncio.create_task(_run_agent_loop(log_dir, interval, batch_size))
 
-    return {"status": "started", "interval_sec": interval, "batch_size": batch_size, "log_dir": log_dir}
+    return {
+        "status": "started",
+        "interval_sec": interval,
+        "batch_size": batch_size,
+        "job_id": job_id,
+        "log_dir": log_dir,
+    }
 
 
 # ── per-job 监测端点（2026-08-19 新增；与 P1-P5 job 规范对齐）───────────────
@@ -1535,8 +1599,13 @@ async def stop_agent():
 
 
 @app.get("/api/agent/status")
-async def get_agent_status():
-    log_dir = str(LOG_DIR)
+async def get_agent_status(job_id: Optional[str] = None):
+    # job_id 传值 → 读 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 回退 LOG_DIR（向后兼容）
+    if job_id:
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = str(LOG_DIR)
     pending = _get_all_batches(Path(log_dir))
     done = sum(1 for v in pending.values() if v["status"] == "done")
     error = sum(1 for v in pending.values() if v["status"] == "error")
@@ -1548,6 +1617,7 @@ async def get_agent_status():
         "running": state.agent_running,
         "interval_sec": state.agent_interval,
         "batch_size": state.agent_batch_size,
+        "job_id": job_id or state.agent_job_id,
         "pending": pending,
         "stats": {
             "total": total,
@@ -1561,9 +1631,17 @@ async def get_agent_status():
 
 
 @app.get("/api/agent/events")
-async def get_agent_events():
+async def get_agent_events(job_id: str):
+    """读 A5 raw_event_*.json 列表。
+
+    job_id 必传：data/jobs/{job_id}/P6/raw_event_*.json（per-job 路径）；
+    不传直接 400 报错。
+    """
+    if not job_id or not re.match(r"^\d{17}$", job_id):
+        return {"error": "job_id 必传且须为 17 位数字"}, 400
+    base = Path(get_p6_log_dir(job_id))
     events = []
-    for f in sorted(Path(LOG_DIR).glob("raw_event_*.json")):
+    for f in sorted(base.glob("raw_event_*.json")):
         try:
             data = json.load(open(f, encoding="utf-8"))
             for ev in data.get("events", []):
@@ -1571,15 +1649,23 @@ async def get_agent_events():
                 events.append(ev)
         except Exception:
             pass
-    return {"events": events}
+    return {"events": events, "job_id": job_id, "base": str(base)}
 
 
 # 日志文件读取
 @app.get("/api/logs/{path:path}")
-async def get_log_file(path: str):
-    file_path = LOG_DIR / path
+async def get_log_file(path: str, job_id: str):
+    """读取单文件（cv/sensor/position/snapshot/raw_event/...）。
+
+    job_id 必传：data/jobs/{job_id}/P6/{path}（per-job 路径）；
+    不传直接 400 报错（避免误清全局 A5/logs）。
+    """
+    if not job_id or not re.match(r"^\d{17}$", job_id):
+        return {"error": "job_id 必传且须为 17 位数字（YYYYMMDDHHMMSS + 3位随机）"}, 400
+    base = get_p6_log_dir(job_id)
+    file_path = Path(base) / path
     if not file_path.exists() or not file_path.is_file():
-        return {"error": f"文件不存在: {path}"}, 404
+        return {"error": f"文件不存在: {path} (base={base})"}, 404
     try:
         with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -1589,10 +1675,18 @@ async def get_log_file(path: str):
 
 
 @app.get("/api/logs")
-async def list_log_files():
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+async def list_log_files(job_id: str):
+    """列出日志目录下的文件，按前缀分组。
+
+    job_id 必传：data/jobs/{job_id}/P6/（per-job 路径）；
+    不传直接 400 报错。
+    """
+    if not job_id or not re.match(r"^\d{17}$", job_id):
+        return {"error": "job_id 必传且须为 17 位数字"}, 400
+    base = Path(get_p6_log_dir(job_id))
+    base.mkdir(parents=True, exist_ok=True)
     result = {}
-    for f in sorted(LOG_DIR.iterdir()):
+    for f in sorted(base.iterdir()):
         if f.is_file():
             name = f.name
             if name.startswith("raw_event_"):
@@ -1620,14 +1714,23 @@ async def list_log_files():
 
 
 @app.post("/api/logs/clear")
-async def clear_logs():
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+async def clear_logs(body: dict):
+    """清空日志目录。
+
+    body.job_id 必传：data/jobs/{job_id}/P6/（per-job 路径）；
+    不传直接 400 报错（避免误清全局 A5/logs）。
+    """
+    job_id = (body or {}).get("job_id", "")
+    if not job_id or not re.match(r"^\d{17}$", job_id):
+        return {"error": "job_id 必传且须为 17 位数字"}, 400
+    base = Path(get_p6_log_dir(job_id))
+    base.mkdir(parents=True, exist_ok=True)
     count = 0
-    for f in LOG_DIR.iterdir():
+    for f in base.iterdir():
         if f.is_file():
             f.unlink()
             count += 1
-    return {"status": "cleared", "removed": count}
+    return {"status": "cleared", "removed": count, "job_id": job_id, "base": str(base)}
 
 
 # WebSocket（保留，向后兼容）

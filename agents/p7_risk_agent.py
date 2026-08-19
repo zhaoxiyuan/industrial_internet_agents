@@ -17,6 +17,7 @@ P7: 风险研判与分级 - 基于 A6 实现（完整模块）
 """
 import asyncio
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -142,9 +143,20 @@ function startPoll() {
 
 async function loadAssessments() {
   try {
-    const r = await fetch("/api/a6/assessments?limit=100");
+    // 跟随 P6 monitor 的 active job_id（localStorage 共享，per-job 模式必传）
+    const jobId = localStorage.getItem("p6_active_job_id") || "";
+    const url = jobId
+      ? "/api/a6/assessments?limit=100&job_id=" + encodeURIComponent(jobId)
+      : "/api/a6/assessments?limit=100";  // 不传 → 后端兜底回退（兼容旧数据）
+    const r = await fetch(url);
+    if (r.status === 400) {
+      const err = await r.json();
+      document.getElementById("totalCount").textContent = err.error || "请先启动 per-job 监测";
+      return;
+    }
     const d = await r.json();
-    document.getElementById("totalCount").textContent = "共 " + d.total + " 条研判";
+    document.getElementById("totalCount").textContent =
+      "共 " + d.total + " 条研判" + (d.job_id ? " (job=" + d.job_id + ")" : "");
     renderAssessments(d.items || []);
     updateStats(d.items || []);
   } catch(e) { console.error("loadAssessments:", e); }
@@ -211,11 +223,17 @@ async function resetPrompt(name) {
 }
 
 async function clearA6Logs() {
-  if (!confirm("确定清理 A6 所有研判日志？")) return;
+  const jobId = localStorage.getItem("p6_active_job_id") || "";
+  if (!jobId) { alert("请先在 P6 主页「per-job 监测」面板启动一个 job（点击「🚀 开始监测」）"); return; }
+  if (!confirm("确定清理 data/jobs/" + jobId + "/P7 下所有研判文件？")) return;
   try {
-    const r = await fetch("/api/a6/clear_logs", {method:"POST"});
+    const r = await fetch("/api/a6/clear_logs", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({job_id: jobId}),
+    });
     const d = await r.json();
-    alert("已清理 " + d.removed + " 个文件/目录");
+    alert("已清理 " + d.removed + " 个文件/目录 (job=" + d.job_id + ")");
     loadAssessments();
   } catch(e) { alert("清理失败: " + e); }
 }
@@ -516,7 +534,7 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
         if job_id:
             # per-job 模式（2026-08-19 改造）：扁平 a6_*.json 在 data/jobs/{job_id}/P7/
             from agents.p6_monitor_agent import get_p7_log_dir
-            output_dir = get_p7_log_dir(job_id)
+            output_dir = Path(get_p7_log_dir(job_id))
         else:
             output_dir = a6_output_path / "assessments"
         if not output_dir.exists():
@@ -574,7 +592,7 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
         """
         if job_id:
             from agents.p6_monitor_agent import get_p7_log_dir
-            search_dirs = [get_p7_log_dir(job_id)]
+            search_dirs = [Path(get_p7_log_dir(job_id))]
         else:
             base = a6_output_path / "assessments"
             search_dirs = [base / d for d in sorted(base.iterdir(), reverse=True) if d.is_dir()] \
@@ -667,10 +685,18 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
 
     # ── 清理日志 ─────────────────────────────────────────
     @app.post("/api/a6/clear_logs")
-    async def clear_a6_logs():
-        """清理 A6 日志"""
+    async def clear_a6_logs(body: dict):
+        """清理 A6 日志（per-job 模式）。
+
+        body.job_id 必传：data/jobs/{job_id}/P7/（清空 a6_*.json）；
+        不传直接 400 报错（避免误清全局 A6/logs）。
+        """
+        job_id = (body or {}).get("job_id", "")
+        if not job_id or not re.match(r"^\d{17}$", job_id):
+            return {"error": "job_id 必传且须为 17 位数字"}, 400
         import shutil
-        log_dir = _ROOT / "A6" / "logs"
+        from agents.p6_monitor_agent import get_p7_log_dir
+        log_dir = Path(get_p7_log_dir(job_id))
         count = 0
         if log_dir.exists():
             for item in log_dir.iterdir():
@@ -683,7 +709,7 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
                         count += 1
                 except Exception:
                     pass
-        return {"status": "cleared", "removed": count}
+        return {"status": "cleared", "removed": count, "job_id": job_id, "base": str(log_dir)}
 
 
 # ============================================================
