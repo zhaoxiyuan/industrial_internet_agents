@@ -356,7 +356,28 @@ def run_workflow(application: dict, thread_id: str) -> dict:
         })
         _broadcast_state(job_id)
 
-        result = executor(job_id)
+        try:
+            result = executor(job_id)
+        except Exception as e:
+            logger.exception(f"[run_workflow] 阶段 {stage_name} 执行异常: job_id={job_id}")
+            update_workflow_status(job_id, {
+                f"{stage_name}_status": "error",
+                "main_agent": {"status": "error", "current_stage": stage_name, "error": str(e)}
+            })
+            _broadcast_state(job_id)
+            add_job_log(job_id, {
+                "action": "stage_error",
+                "stage": stage_name,
+                "error": str(e),
+                "message": f"{stage_name} 执行异常: {str(e)}"
+            })
+            return {
+                "job_id": job_id,
+                "current_stage": stage_name,
+                "status": "error",
+                "error": str(e),
+                "confirmed_stages": list(STAGE_EXECUTORS.keys())[:list(STAGE_EXECUTORS.keys()).index(stage_name)]
+            }
 
         # 更新阶段状态
         if result.get("pending_confirmation"):
@@ -474,7 +495,28 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
             "action": "p1_hitl_resume",
             "message": "P1 阶段 HITL 中断恢复执行"
         })
-        p1_result = execute_p1(job_id, resume=True)
+        try:
+            p1_result = execute_p1(job_id, resume=True)
+        except Exception as e:
+            logger.exception(f"[confirm_and_continue] P1 恢复执行异常: job_id={job_id}")
+            update_workflow_status(job_id, {
+                "P1_status": "error",
+                "main_agent": {"status": "error", "current_stage": "P1", "error": str(e)}
+            })
+            _broadcast_state(job_id)
+            add_job_log(job_id, {
+                "action": "stage_error",
+                "stage": "P1",
+                "error": str(e),
+                "message": f"P1 恢复执行异常: {str(e)}"
+            })
+            return {
+                "job_id": job_id,
+                "current_stage": "P1",
+                "status": "error",
+                "error": str(e),
+                "confirmed_stages": [stage.upper()]
+            }
 
         if p1_result.get("pending_confirmation"):
             logger.info(f"[confirm_and_continue] P1 恢复后仍等待确认")
@@ -506,7 +548,28 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         })
         _broadcast_state(job_id)
 
-        next_result = executor(job_id)
+        try:
+            next_result = executor(job_id)
+        except Exception as e:
+            logger.exception(f"[confirm_and_continue] 阶段 {next_stage} 执行异常: job_id={job_id}")
+            update_workflow_status(job_id, {
+                f"{next_stage}_status": "error",
+                "main_agent": {"status": "error", "current_stage": next_stage, "error": str(e)}
+            })
+            _broadcast_state(job_id)
+            add_job_log(job_id, {
+                "action": "stage_error",
+                "stage": next_stage,
+                "error": str(e),
+                "message": f"{next_stage} 执行异常: {str(e)}"
+            })
+            return {
+                "job_id": job_id,
+                "current_stage": next_stage,
+                "status": "error",
+                "error": str(e),
+                "confirmed_stages": stage_order[:i]
+            }
 
         if next_result.get("pending_confirmation"):
             update_workflow_status(job_id, {
@@ -555,7 +618,22 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
                 "action": "p1_hitl_resume",
                 "message": "P1 阶段 HITL 中断恢复执行"
             })
-            p1_result = execute_p1(job_id, resume=True)
+            try:
+                p1_result = execute_p1(job_id, resume=True)
+            except Exception as e:
+                logger.exception(f"[_confirm_and_continue_async] P1 恢复执行异常: job_id={job_id}")
+                update_workflow_status(job_id, {
+                    "P1_status": "error",
+                    "main_agent": {"status": "error", "current_stage": "P1", "error": str(e)}
+                })
+                _broadcast_state(job_id)
+                add_job_log(job_id, {
+                    "action": "stage_error",
+                    "stage": "P1",
+                    "error": str(e),
+                    "message": f"P1 恢复执行异常: {str(e)}"
+                })
+                return
 
             if p1_result.get("pending_confirmation"):
                 logger.info(f"[_confirm_and_continue_async] P1 恢复后仍等待确认")
@@ -586,7 +664,22 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
             })
             _broadcast_state(job_id)
 
-            next_result = executor(job_id)
+            try:
+                next_result = executor(job_id)
+            except Exception as e:
+                logger.exception(f"[_confirm_and_continue_async] 阶段 {next_stage} 执行异常: job_id={job_id}")
+                update_workflow_status(job_id, {
+                    f"{next_stage}_status": "error",
+                    "main_agent": {"status": "error", "current_stage": next_stage, "error": str(e)}
+                })
+                _broadcast_state(job_id)
+                add_job_log(job_id, {
+                    "action": "stage_error",
+                    "stage": next_stage,
+                    "error": str(e),
+                    "message": f"{next_stage} 执行异常: {str(e)}"
+                })
+                return
 
             if next_result.get("pending_confirmation"):
                 update_workflow_status(job_id, {

@@ -4,21 +4,24 @@
 from pathlib import Path
 
 from pydantic import Field
+from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """LLM 配置"""
+    model_config = ConfigDict(
+        env_file=Path(__file__).parent.parent.parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = ""
     MODEL_PROVIDER: str = ""
     TEMPERATURE: float = Field(default=0.7, validation_alias="OPENAI_TEMPERATURE")
     MAX_TOKENS: int = Field(default=8192, validation_alias="OPENAI_MAX_TOKENS")
-
-    class Config:
-        env_file = Path(__file__).parent.parent.parent / ".env"
-        env_file_encoding = "utf-8"
 
 
 def get_settings() -> Settings:
