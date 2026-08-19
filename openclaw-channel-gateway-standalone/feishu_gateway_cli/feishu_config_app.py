@@ -1,11 +1,11 @@
-"""A7/notify — 飞书通道配置 Web UI（Flask + HTML）。
+"""feishu_gateway_cli — 飞书通道配置 Web UI（Flask + HTML）。
 
 ================================================================================
 职责
 ================================================================================
 
 让业务 / 运维人员通过浏览器把飞书通道相关参数写入项目根 `.env`，供
-`agents/channel_gateway_client.py` 和 `A7.notify.feishu_sender` 读取。
+`agents/channel_gateway_client.py` 和 `feishu_gateway_cli.feishu_sender` 读取。
 
 可配置的 key：
     GATEWAY_HOST              Channel Gateway 地址（默认 http://127.0.0.1:8787）
@@ -39,10 +39,10 @@
 ================================================================================
 
     # 默认 5003 端口（避开 A5=5001 / A6=5002 / AgentConfig=5000）
-    python A7/notify/feishu_config_app.py
+    python openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py
 
     # 自定义端口
-    python A7/notify/feishu_config_app.py --port 5003 --host 127.0.0.1
+    python openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py --port 5003 --host 127.0.0.1
 
 ================================================================================
 API
@@ -82,28 +82,28 @@ from flask import Flask, jsonify, request, send_from_directory
 # 路径常量
 # ============================================================
 
-# A7/notify/feishu_config_app.py → A7/notify/ → A7/ → 项目根
-NOTIFY_DIR: Path = Path(__file__).resolve().parent
-A7_DIR: Path = NOTIFY_DIR.parent
-PROJECT_ROOT: Path = A7_DIR.parent
+# openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py → feishu_gateway_cli/ → openclaw-channel-gateway-standalone/ → 项目根
+PKG_DIR: Path = Path(__file__).resolve().parent
+STANDALONE_DIR: Path = PKG_DIR.parent
+PROJECT_ROOT: Path = STANDALONE_DIR.parent
 ENV_FILE: Path = PROJECT_ROOT / ".env"
 ENV_BACKUP_FILE: Path = PROJECT_ROOT / ".env.bak"
-TEMPLATES_DIR: Path = NOTIFY_DIR / "templates"
+TEMPLATES_DIR: Path = PKG_DIR / "templates"
 
-# 把项目根加进 sys.path，便于 `from A7.notify import ...`
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# 把 standalone 子目录加进 sys.path，便于脚本方式运行时 `from feishu_gateway_cli import ...`
+if str(STANDALONE_DIR) not in sys.path:
+    sys.path.insert(0, str(STANDALONE_DIR))
 
 # Gateway 子进程路径常量（start_gateway 模块已定义）
 # 同时支持两种启动方式:
-#   python A7/notify/feishu_config_app.py   (脚本方式 — 项目根在 cwd)
-#   python -m A7.notify.feishu_config_app   (模块方式 — 推荐)
+#   python openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py   (脚本方式 — 项目根在 cwd)
+#   python -m feishu_gateway_cli.feishu_config_app   (模块方式 — 推荐)
 try:
     from .start_gateway import GATEWAY_DIR  # type: ignore[import-not-found]
 except ImportError:
     # 脚本方式运行时没有父包,把本文件所在目录临时加进 sys.path
-    if str(NOTIFY_DIR) not in sys.path:
-        sys.path.insert(0, str(NOTIFY_DIR))
+    if str(PKG_DIR) not in sys.path:
+        sys.path.insert(0, str(PKG_DIR))
     from start_gateway import GATEWAY_DIR  # type: ignore[no-redef]
 
 # 多账户：Gateway 子进程的相关路径
@@ -814,7 +814,7 @@ def upsert_env_entries(new_entries: List[Tuple[str, str]]) -> Dict[str, Any]:
                     [
                         "",
                         "# ============================================================",
-                        "# A7/notify 飞书通道配置（由 feishu_config_app.py 写入）",
+                        "# feishu_gateway_cli 飞书通道配置（由 feishu_config_app.py 写入）",
                         "# ============================================================",
                         "",
                     ],
@@ -1442,7 +1442,7 @@ def api_save_config():
 
         # 2026-08-18：业务端 cardkit 路径需要按 account_id 拿凭证。
         # 之前 feishu_config_app 只写 gateway/.env 的 FEISHU_<UPPER>_* 字段；
-        # 业务端项目根 .env 同步写一份，让 A7/notify/feishu_card._resolve_account_credentials
+        # 业务端项目根 .env 同步写一份，让 feishu_gateway_cli/feishu_card._resolve_account_credentials
         # 直接按账户级 fallback 拿到 secret。
         # 注意：仅写 APP_ID / APP_SECRET / DOMAIN（业务端调 OpenAPI 需要的最小集）；
         # 不写 verification_token（仅 gateway 鉴权用，业务端不需要）。
@@ -1872,13 +1872,13 @@ def api_delete_config_item():
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="A7/notify 飞书通道配置 UI")
+    parser = argparse.ArgumentParser(description="feishu_gateway_cli 飞书通道配置 UI")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
     parser.add_argument("--port", type=int, default=5003, help="监听端口（默认 5003；避开 A5=5001/A6=5002/AgentConfig=5000）")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("A7/notify 飞书通道配置 UI")
+    print("feishu_gateway_cli 飞书通道配置 UI")
     print("=" * 60)
     print(f"  监听地址:   http://{args.host}:{args.port}")
     print(f"  目标 .env:  {ENV_FILE}")

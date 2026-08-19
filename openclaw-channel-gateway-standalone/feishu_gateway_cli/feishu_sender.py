@@ -1,4 +1,4 @@
-"""A7/notify — P8 飞书通道适配器（精简版：只发，不拼）。
+"""feishu_gateway_cli — P8 飞书通道适配器（精简版：只发，不拼）。
 
 ================================================================================
 职责（极简版）
@@ -35,25 +35,25 @@ CLI 命令（在任何项目终端运行）
 下面三条是**单行命令**（bash / PowerShell / CMD / Git Bash 通用）：
 
     # 群聊发送（按 chat_id 直传）
-    python -m A7.notify.feishu_sender send_group --text "【告警】可燃气体浓度异常" --chat-id oc_xxxx
+    python -m feishu_gateway_cli.feishu_sender send_group --text "【告警】可燃气体浓度异常" --chat-id oc_xxxx
 
     # 群聊发送（按群聊名称反查 GROUP_MAP 拿 chat_id）
-    python -m A7.notify.feishu_sender send_group --text "【告警】可燃气体浓度异常" --group-name "应急响应群"
+    python -m feishu_gateway_cli.feishu_sender send_group --text "【告警】可燃气体浓度异常" --group-name "应急响应群"
 
     # 单聊发送（按姓名查 USER_MAP 拿 open_id）
-    python -m A7.notify.feishu_sender send_user --text "请确认处置结果" --name "张三"
+    python -m feishu_gateway_cli.feishu_sender send_user --text "请确认处置结果" --name "张三"
 
     # 单聊发送（直接传 open_id，webhook 回调场景；与 --name 互斥）
-    python -m A7.notify.feishu_sender send_user --text "已收到" --open-id ou_511d109b8ac87f972af2d5e67e2c8270
+    python -m feishu_gateway_cli.feishu_sender send_user --text "已收到" --open-id ou_511d109b8ac87f972af2d5e67e2c8270
 
     # 群聊发送【交互式 Card】（按 group_name，含按钮选项，可触发回调）
-    python -m A7.notify.feishu_sender send_group --group-name "动火作业群" --text "【告警】可燃气体浓度异常" --card --title "⚠️ 气体浓度告警" --alert-id "gas_20260817_001" --option "已知悉:ack" --option "立即处理:handle" --option "误报:false_alarm"
+    python -m feishu_gateway_cli.feishu_sender send_group --group-name "动火作业群" --text "【告警】可燃气体浓度异常" --card --title "⚠️ 气体浓度告警" --alert-id "gas_20260817_001" --option "已知悉:ack" --option "立即处理:handle" --option "误报:false_alarm"
 
     # 群聊发送【交互式 Card】（按 chat_id 直传，可省略 --option 表示纯文本卡片）
-    python -m A7.notify.feishu_sender send_group --chat-id oc_xxxx --text "巡检结果已上传" --card --title "巡检通知"
+    python -m feishu_gateway_cli.feishu_sender send_group --chat-id oc_xxxx --text "巡检结果已上传" --card --title "巡检通知"
 
     # 群聊发送【交互式 Card】（带 alert_id 但不带 option —— 仅作标识，便于后续卡片回调匹配）
-    python -m A7.notify.feishu_sender send_group --group-name "动火作业群" --text "收到请回复处理结果" --card --alert-id "job_20260817_001"
+    python -m feishu_gateway_cli.feishu_sender send_group --group-name "动火作业群" --text "收到请回复处理结果" --card --alert-id "job_20260817_001"
 
 注：以上示例均为单行，bash / PowerShell / CMD 直接复制即可执行。
 如要换行提升可读性：
@@ -126,7 +126,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from agents.channel_gateway_client import GatewayError, SendMessageResult, send_message
-from A7.notify import feishu_card as feishu_card_api
+from . import feishu_card as feishu_card_api
 
 
 # ============================================================
@@ -345,7 +345,7 @@ def send_to_group(
         requests.RequestException: 网络错误
 
     Examples:
-        >>> from A7.notify.feishu_sender import send_to_group
+        >>> from feishu_gateway_cli.feishu_sender import send_to_group
         >>> # 按 chat_id
         >>> send_to_group("【告警】...", chat_id="oc_xxx")
         >>> # 按群聊名称（反查 GROUP_MAP）
@@ -439,7 +439,7 @@ def send_to_user(
         requests.RequestException: 网络错误
 
     Examples:
-        >>> from A7.notify.feishu_sender import send_to_user
+        >>> from feishu_gateway_cli.feishu_sender import send_to_user
         >>> # 按姓名
         >>> send_to_user("请确认处置结果", name="张三")
         >>> # 按 open_id（webhook 回调场景）

@@ -1,4 +1,4 @@
-"""A7.notify.start_gateway — 用 Python 启动 OpenClaw Channel Gateway Standalone。
+"""feishu_gateway_cli.start_gateway — 用 Python 启动 OpenClaw Channel Gateway Standalone。
 
 ================================================================================
 职责
@@ -24,7 +24,7 @@
 4. 把 PID 记下来方便后续 stop
 
 直接用 shell 也能做，但 P8 的端到端测试 + 开发循环会反复启动 Gateway，
-Python 封装让 `python -m A7.notify.start_gateway start` 一行搞定。
+Python 封装让 `python -m feishu_gateway_cli.start_gateway start` 一行搞定。
 
 ================================================================================
 用法
@@ -33,28 +33,28 @@ Python 封装让 `python -m A7.notify.start_gateway start` 一行搞定。
 ::
 
     # 前台启动（Ctrl+C 停止）
-    python -m A7.notify.start_gateway start --foreground
+    python -m feishu_gateway_cli.start_gateway start --foreground
 
     # 后台启动（默认；写 PID 文件 + 等待 /healthz 通）
-    python -m A7.notify.start_gateway start
+    python -m feishu_gateway_cli.start_gateway start
 
     # 查询状态
-    python -m A7.notify.start_gateway status
+    python -m feishu_gateway_cli.start_gateway status
 
     # 停止
-    python -m A7.notify.start_gateway stop
+    python -m feishu_gateway_cli.start_gateway stop
 
     # 重启
-    python -m A7.notify.start_gateway restart
+    python -m feishu_gateway_cli.start_gateway restart
 
     # 自定义 config / host / port
-    python -m A7.notify.start_gateway start \\
+    python -m feishu_gateway_cli.start_gateway start \\
         --config config/config.feishu.local.json \\
         --host 127.0.0.1 --port 8787 \\
         --health-timeout 30
 
     # 也可作为库调用
-    from A7.notify.start_gateway import start_gateway, stop_gateway, gateway_status
+    from feishu_gateway_cli.start_gateway import start_gateway, stop_gateway, gateway_status
     start_gateway(background=True, wait_health=True)
     print(gateway_status())
     stop_gateway()
@@ -124,9 +124,9 @@ if not logger.handlers:
 # 路径
 # ============================================================
 
-A7_DIR: Path = Path(__file__).resolve().parent           # A7/notify/
-A7_PARENT: Path = A7_DIR.parent                          # A7/
-PROJECT_ROOT: Path = A7_PARENT.parent                    # 项目根
+PKG_DIR: Path = Path(__file__).resolve().parent              # feishu_gateway_cli/
+STANDALONE_DIR: Path = PKG_DIR.parent                        # openclaw-channel-gateway-standalone/
+PROJECT_ROOT: Path = STANDALONE_DIR.parent                   # 项目根
 GATEWAY_DIR: Path = PROJECT_ROOT / "openclaw-channel-gateway-standalone"
 DEFAULT_CONFIG: Path = GATEWAY_DIR / "config" / "config.feishu.local.json"
 PID_FILE: Path = GATEWAY_DIR / ".gateway.pid"
@@ -563,7 +563,7 @@ def restart_gateway(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m A7.notify.start_gateway",
+        prog="python -m feishu_gateway_cli.start_gateway",
         description="用 Python 启动/停止/查询/重启 OpenClaw Channel Gateway Standalone。",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)

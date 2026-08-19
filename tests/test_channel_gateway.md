@@ -48,8 +48,8 @@ cd "c:/Users/13021/Desktop/agent-skill/industrial_internet_agents"
 # 1.1 确认 channel_gateway_client 可导入
 python -c "from agents.channel_gateway_client import ChannelGatewayClient; print('import OK')"
 
-# 1.2 确认 A7.notify USER_MAP 可导入（与 _test_notify_e2e.py 一致）
-python -c "from A7.notify import resolve_recipients, get_user_map; print('A7 OK')"
+# 1.2 确认 feishu_gateway_cli USER_MAP 可导入（与 _test_notify_e2e.py 一致）
+python -c "from feishu_gateway_cli import resolve_recipients, get_user_map; print('A7 OK')"
 
 # 1.3 确认 dotenv 加载 .env 后 env vars 就位
 python -c "import os; print('GATEWAY_HOST=', os.getenv('GATEWAY_HOST')); print('CG_API_KEY set=', bool(os.getenv('CG_API_KEY'))); print('FEISHU_USER_MAP set=', bool(os.getenv('FEISHU_USER_MAP')))"
@@ -127,7 +127,7 @@ print(get_default_client().ready())
 
 ```bash
 python -c "
-from A7.notify import get_user_map
+from feishu_gateway_cli import get_user_map
 um = get_user_map()
 print(f'USER_MAP 总数: {len(um)}')
 for oid, info in um.items():
@@ -140,13 +140,13 @@ for oid, info in um.items():
 ```bash
 # 列出 USER_MAP 中所有不同的 role
 python -c "
-from A7.notify import get_user_map
+from feishu_gateway_cli import get_user_map
 print('USER_MAP 中的 role:', sorted({info['role'] for info in get_user_map().values()}))
 "
 
 # 按 role 解析（替换下面的 role 为实际值）
 python -c "
-from A7.notify import resolve_recipients
+from feishu_gateway_cli import resolve_recipients
 role = '作业负责人'   # ← 改成 USER_MAP 里真实存在的 role
 recs = resolve_recipients(role)
 print(f'{role}: {len(recs)} 个收件人')
@@ -156,7 +156,7 @@ for r in recs:
 
 # 不存在的 role 触发 DEV_FALLBACK
 python -c "
-from A7.notify import resolve_recipients
+from feishu_gateway_cli import resolve_recipients
 print(resolve_recipients('不存在XYZ_ROLE'))
 "
 ```
@@ -165,7 +165,7 @@ print(resolve_recipients('不存在XYZ_ROLE'))
 
 ```bash
 python -c "
-from A7.notify import get_conversation_id
+from feishu_gateway_cli import get_conversation_id
 print(get_conversation_id('作业负责人'))    # 期望: oc_xxx 或 ou_xxx
 print(get_conversation_id('不存在XYZ_ROLE')) # 期望: feishu_dev_不存在XYZ_ROLE
 "
@@ -289,12 +289,12 @@ else:
 env_path.write_text(content, encoding='utf-8')
 os.environ['FEISHU_USER_MAP'] = new_map
 # 同时让 channel_gateway_client 用这份临时 .env
-import A7.notify.feishu_config_app as cfg
+import feishu_gateway_cli.feishu_config_app as cfg
 cfg.ENV_FILE = env_path
 
 # 构造 P8Job
 from A7.schema.p8_models import P8Job, RiskLevel, P8JobStatus, Channel
-from A7.notify import send_feishu
+from feishu_gateway_cli import send_feishu
 job = P8Job(
     p8_job_id='P8-CLI-E2E-001',
     a6_event_ids=['A6-E2E-1'],
@@ -331,7 +331,7 @@ multi_map = {
 }
 os.environ['FEISHU_USER_MAP'] = json.dumps(multi_map, ensure_ascii=False, separators=(',', ':'))
 
-from A7.notify import resolve_recipients, send_feishu
+from feishu_gateway_cli import resolve_recipients, send_feishu
 from A7.schema.p8_models import P8Job, RiskLevel, P8JobStatus, Channel
 print(f'收件人: {len(resolve_recipients(\"multi_role\"))}')
 
@@ -521,7 +521,7 @@ from agents.channel_gateway_client import get_default_client
 print(get_default_client().health())
 
 print('=== Step 2: USER_MAP resolve ===')
-from A7.notify import resolve_recipients
+from feishu_gateway_cli import resolve_recipients
 for role in ['作业负责人', '车间主任']:
     recs = resolve_recipients(role)
     print(f'  {role}: {len(recs)}')
@@ -591,7 +591,7 @@ check('health', lambda: (get_default_client().health(),))
 check('ready', lambda: (get_default_client().ready(),))
 
 print('== B. USER_MAP ==')
-from A7.notify import get_user_map, resolve_recipients, get_conversation_id
+from feishu_gateway_cli import get_user_map, resolve_recipients, get_conversation_id
 check('user_map_nonempty', lambda: get_user_map() and None or (_ for _ in ()).throw(AssertionError('空 USER_MAP')))
 check('resolve_work_lead', lambda: resolve_recipients('作业负责人') if '作业负责人' in {i['role'] for i in get_user_map().values()} else None)
 

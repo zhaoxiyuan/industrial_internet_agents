@@ -24,10 +24,10 @@ CG_API_KEY=gateway-api-key-16chars!
 
 ### 第 2 步：启动 Gateway
 
-参考 `tests/test_channel_gateway.md` §1。也可以用 `A7.notify.start_gateway`：
+参考 `tests/test_channel_gateway.md` §1。也可以用 `feishu_gateway_cli.start_gateway`：
 
 ```bash
-python -m A7.notify.start_gateway start
+python -m feishu_gateway_cli.start_gateway start
 ```
 
 ### 第 3 步：调用接口
@@ -577,7 +577,7 @@ for ev in poll.events:
 ```
 P8 Agent 业务层
     ↓ 用 resolve_recipients() 拿收件人列表
-A7.notify.feishu_sender  (P8 飞书适配层，多收件人聚合)
+feishu_gateway_cli.feishu_sender  (P8 飞书适配层，多收件人聚合)
     ↓ 对每个收件人调 send_message() 一次
 agents.channel_gateway_client  ← 本文档讲的模块
     ↓ HTTP POST /v1/messages/send
@@ -588,15 +588,15 @@ Feishu Open Platform
 
 **`channel_gateway_client` 是叶子节点**：它不知道 P1-P10 任何业务概念，只关心 HTTP 和 JSON。所有 P 编号 Agent 都通过它（直接 / 间接）跟飞书通信。
 
-### 9.5 `A7/notify` 适配层：`send_to_group` 新签名 + `FEISHU_GROUP_MAP`（2026-08-17）
+### 9.5 `feishu_gateway_cli` 适配层：`send_to_group` 新签名 + `FEISHU_GROUP_MAP`（2026-08-17）
 
-> 本节属于上层适配层 `A7/notify/feishu_sender.py`（不是 `channel_gateway_client` 本身）。
+> 本节属于上层适配层 `openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py`（不是 `channel_gateway_client` 本身）。
 > 该层包了一层"按名称反查 ID"的便利函数，让调用方不用记 `oc_xxx` 这种 ID。
 
 **`send_to_group` 新签名**（互斥参数）：
 
 ```python
-from A7.notify import send_to_group
+from feishu_gateway_cli import send_to_group
 
 # 路径 1：按 chat_id 直传（旧路径）
 result = send_to_group(text="【告警】...", chat_id="oc_xxx")
@@ -615,10 +615,10 @@ result = send_to_group(text="【告警】...", group_name="应急响应群")
 
 ```bash
 # 旧路径
-python -m A7.notify.feishu_sender send_group --text "..." --chat-id oc_xxx
+python -m feishu_gateway_cli.feishu_sender send_group --text "..." --chat-id oc_xxx
 
 # 新路径
-python -m A7.notify.feishu_sender send_group --text "..." --group-name "应急响应群"
+python -m feishu_gateway_cli.feishu_sender send_group --text "..." --group-name "应急响应群"
 ```
 
 **`FEISHU_GROUP_MAP` 数据模型**（`.env` JSON 字符串；主键 `chat_id`）：
@@ -692,4 +692,4 @@ python -m A7.notify.feishu_sender send_group --text "..." --group-name "应急�
 - [openclaw-channel-gateway-standalone/openapi/openapi.yaml](../openclaw-channel-gateway-standalone/openapi/openapi.yaml)
 - [docs/P8_人机协同处置_文件组织与职责.md §7.1 适配器](./P8_人机协同处置_文件组织与职责.md)
 - [tests/test_channel_gateway.md §15 一键回归](../tests/test_channel_gateway.md)
-- [A7/notify/start_gateway.py](../A7/notify/start_gateway.py)（Gateway 进程管理）
+- [openclaw-channel-gateway-standalone/feishu_gateway_cli/start_gateway.py](../openclaw-channel-gateway-standalone/feishu_gateway_cli/start_gateway.py)（Gateway 进程管理）

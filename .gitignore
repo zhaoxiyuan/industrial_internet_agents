@@ -45,3 +45,7 @@ openclaw-channel-gateway-standalone/data/gateway-state.json
 
 # pip install 误存到当前目录的 `=1.x.y` 空文件 / 日志
 /=1.*.*
+logs/web_server_8080.log
+
+# P8 运行时日志（daemon / 测试运行产生，体积大且不可复现）
+data/runtime/

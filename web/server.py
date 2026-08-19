@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web.api import config as config_api
 from web.api import workflow as workflow_api
 from web.api import snapshots as snapshots_api
-from A7.notify import feishu_card as feishu_card_api
+from feishu_gateway_cli import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
 from web.ws.servers import start_websocket_threads
 

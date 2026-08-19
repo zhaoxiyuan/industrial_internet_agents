@@ -1,4 +1,4 @@
-"""A7/notify 端到端测试脚本（精简版：只测 send_to_group + send_to_user）。
+"""feishu_gateway_cli 端到端测试脚本（精简版：只测 send_to_group + send_to_user）。
 
 ================================================================================
 覆盖
@@ -52,11 +52,11 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-from A7.notify import (
+from feishu_gateway_cli import (
     send_to_group,
     send_to_user,
 )
-from A7.notify.feishu_sender import (
+from feishu_gateway_cli.feishu_sender import (
     _find_open_id_by_name,       # 私有 helper；本测试用于覆盖反查逻辑
     _find_chat_id_by_group_name, # 私有 helper；TEST 6 覆盖 group_name 反查
     # Card 相关（TEST 7/8/9）
@@ -144,7 +144,7 @@ def test_resolve_all_sources() -> None:
     # 1.5 send_to_user 入参校验：name 和 open_id 都未传 → ValueError
     os.environ["FEISHU_USER_MAP"] = json.dumps({}, ensure_ascii=False)
     try:
-        from A7.notify.feishu_sender import send_to_user
+        from feishu_gateway_cli.feishu_sender import send_to_user
         send_to_user(text="x")
         fail("期望 ValueError（name 和 open_id 都未传），但调用成功")
     except ValueError as exc:
@@ -204,7 +204,7 @@ def test_result_dataclass() -> None:
 def test_gateway_health() -> None:
     section("TEST 3: Gateway /healthz 探活")
 
-    from A7.notify.feishu_config_app import test_gateway_connection
+    from feishu_gateway_cli.feishu_config_app import test_gateway_connection
     result = test_gateway_connection(
         host=os.getenv("GATEWAY_HOST", "http://127.0.0.1:8787"),
         api_key=os.getenv("CG_API_KEY", ""),
@@ -615,7 +615,7 @@ def test_build_feishu_card() -> None:
 
 def main() -> None:
     print(f"\n{'#' * 60}")
-    print(f"# A7/notify 端到端测试（USER_MAP + GROUP_MAP 模型，2026-08-17）")
+    print(f"# feishu_gateway_cli 端到端测试（USER_MAP + GROUP_MAP 模型，2026-08-17）")
     print(f"# 项目根: {ROOT}")
     print(f"{'#' * 60}")
 

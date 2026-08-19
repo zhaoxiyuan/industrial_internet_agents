@@ -1,4 +1,4 @@
-"""A7/notify — P8 飞书通道适配器（精简版：只收，不拼）。
+"""feishu_gateway_cli — P8 飞书通道适配器（精简版：只收，不拼）。
 
 ================================================================================
 职责（极简版）
@@ -47,48 +47,48 @@ CLI 命令（在任何项目终端运行）
 下面命令是**单行命令**（bash / PowerShell / CMD / Git Bash 通用）：
 
     # 默认：持续轮询，每条新事件打印 "有新消息啦"（Ctrl+C 停止）
-    python -m A7.notify.feishu_receiver poll
+    python -m feishu_gateway_cli.feishu_receiver poll
 
     # 自定义轮询间隔（秒；默认 1.0）
-    python -m A7.notify.feishu_receiver poll --interval 2.0
+    python -m feishu_gateway_cli.feishu_receiver poll --interval 2.0
 
     # 从指定 sequence 开始（断点续传；默认 -1=自动跳过历史，只接新事件）
-    python -m A7.notify.feishu_receiver poll --initial-sequence 12
+    python -m feishu_gateway_cli.feishu_receiver poll --initial-sequence 12
 
     # 显式重放历史（从 sequence=0 开始拉所有事件，配合 --once / --exit-after 抽样）
-    python -m A7.notify.feishu_receiver poll --initial-sequence 0 --once --exit-after 5
+    python -m feishu_gateway_cli.feishu_receiver poll --initial-sequence 0 --once --exit-after 5
 
     # 只拉一次就退出：无新消息返回空；有新消息打印 "有新消息啦" + 完整 event JSON
-    python -m A7.notify.feishu_receiver poll --once
+    python -m feishu_gateway_cli.feishu_receiver poll --once
 
     # 显式重放历史并按 account_id 过滤
-    python -m A7.notify.feishu_receiver poll --initial-sequence 0 --once --account-id default
+    python -m feishu_gateway_cli.feishu_receiver poll --initial-sequence 0 --once --account-id default
 
     # 群聊过滤：群聊名称 + 人名（两条件都满足）
-    python -m A7.notify.feishu_receiver poll --once --group-name "应急响应群" --person-name "张三"
+    python -m feishu_gateway_cli.feishu_receiver poll --once --group-name "应急响应群" --person-name "张三"
 
     # 单聊过滤：人名（单独使用）
-    python -m A7.notify.feishu_receiver poll --once --person-name "李四"
+    python -m feishu_gateway_cli.feishu_receiver poll --once --person-name "李四"
 
     # 收到 N 条事件后退出（常用于测试 / 抽样）
-    python -m A7.notify.feishu_receiver poll --exit-after 5
+    python -m feishu_gateway_cli.feishu_receiver poll --exit-after 5
 
     # 静默模式：轮询但不打印到控制台（适合后台守护）
-    python -m A7.notify.feishu_receiver poll --no-print
+    python -m feishu_gateway_cli.feishu_receiver poll --no-print
 
     # 同时打印原始 event JSON（调试用；持续模式每事件后追加一次）
-    python -m A7.notify.feishu_receiver poll --show-raw
+    python -m feishu_gateway_cli.feishu_receiver poll --show-raw
 
     # 收到事件后自动 ACK（默认不 ACK，避免误删未处理消息）
-    python -m A7.notify.feishu_receiver poll --ack
+    python -m feishu_gateway_cli.feishu_receiver poll --ack
 
     # 主动修改一条事件的状态（ACK 或 ignore；封装 /v1/events/{id}/ack）
-    python -m A7.notify.feishu_receiver mark --event-id evt_d654e4f3-13d5-4291-84af-b70f7d798bdb
-    python -m A7.notify.feishu_receiver mark --event-id evt_xxx --status ignored --details '{"reason":"duplicate"}'
+    python -m feishu_gateway_cli.feishu_receiver mark --event-id evt_d654e4f3-13d5-4291-84af-b70f7d798bdb
+    python -m feishu_gateway_cli.feishu_receiver mark --event-id evt_xxx --status ignored --details '{"reason":"duplicate"}'
 
 `--once` 模式输出示例：
 
-    $ python -m A7.notify.feishu_receiver poll --once --person-name "张三"
+    $ python -m feishu_gateway_cli.feishu_receiver poll --once --person-name "张三"
     有新消息啦
     [
       {
@@ -99,7 +99,7 @@ CLI 命令（在任何项目终端运行）
       }
     ]
 
-    $ python -m A7.notify.feishu_receiver poll --once
+    $ python -m feishu_gateway_cli.feishu_receiver poll --once
     无新消息
 
 持续模式输出示例：
@@ -153,7 +153,7 @@ from agents.channel_gateway_client import (
 # receiver re-export 便于外部统一 import。
 # V5（2026-08-18 升级）：process_card_callback 改为返回 {toast} + 异步调 cardkit 更新卡片，
 # 严格按 docs/飞书卡片教程/ 官方路径。
-from A7.notify.feishu_card import process_card_callback as _process_card_callback
+from .feishu_card import process_card_callback as _process_card_callback
 
 
 # ============================================================
@@ -208,7 +208,7 @@ else:
 # ============================================================
 # 1. USER_MAP / GROUP_MAP 读取（私有）
 # ============================================================
-# 与 A7.notify.feishu_sender 的格式完全一致：
+# 与 feishu_gateway_cli.feishu_sender 的格式完全一致：
 #   USER_MAP  = {open_id:  {chat_id, role, name}}
 #   GROUP_MAP = {chat_id:  {name, description}}
 # 这里只读 name / name，不读其它列。
@@ -467,7 +467,7 @@ def format_event(
 # 这里 re-export 便于上层统一 import；format_card_callback 提供可读单行格式化。
 
 def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """receiver 层 re-export :func:`A7.notify.feishu_card.process_card_callback`。
+    """receiver 层 re-export :func:`feishu_gateway_cli.feishu_card.process_card_callback`。
 
     V5 业务流程（严格按 docs/飞书卡片教程/ 官方路径）：
         1. ``url_verification`` 挑战 → ``{"challenge": "..."}``
@@ -578,7 +578,7 @@ def mark_event_status(
         requests.RequestException: 网络错误。
 
     Examples:
-        >>> from A7.notify.feishu_receiver import mark_event_status
+        >>> from feishu_gateway_cli.feishu_receiver import mark_event_status
         >>> mark_event_status("evt_d654e4f3-13d5-4291-84af-b70f7d798bdb")
         {'event': {...}, 'status': 'acked', ...}
 
@@ -655,7 +655,7 @@ def poll_once(
         ValueError: ``group_name`` 传了但 ``person_name`` 没传，或任一参数为空白字符串。
 
     Examples:
-        >>> from A7.notify.feishu_receiver import poll_once
+        >>> from feishu_gateway_cli.feishu_receiver import poll_once
         >>> events = poll_once()
         >>> events = poll_once(account_id="default")
         >>> events = poll_once(group_name="应急响应群", person_name="张三")
@@ -1179,8 +1179,8 @@ def main(argv: Optional[list] = None) -> int:
     """CLI 入口。
 
     Usage:
-        python -m A7.notify.feishu_receiver poll [--interval SEC] ...
-        python -m A7.notify.feishu_receiver mark --event-id evt_xxx [--status ...] [--details ...]
+        python -m feishu_gateway_cli.feishu_receiver poll [--interval SEC] ...
+        python -m feishu_gateway_cli.feishu_receiver mark --event-id evt_xxx [--status ...] [--details ...]
     """
     parser = _build_parser()
     args = parser.parse_args(argv)

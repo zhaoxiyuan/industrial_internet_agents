@@ -13,10 +13,35 @@
 
 ---
 
+> ## ⚠️ 状态说明（2026-08-18 更新）
+>
+> **本文档是 P8 Agent 的"设计意图 / 目标蓝图"（spec 状态），不是当前实现。**
+>
+> | 维度 | 当前状态 | 详见 |
+> |------|---------|------|
+> | [`agents/p8_disposition_agent.py`](../agents/p8_disposition_agent.py)（核心，364 行） | 🔴 **过渡版** — 工具体系 / `P8ArchiveMiddleware` / `walltime` 注入 / 双层记忆物理形态 / `chat_reply_handler` 入口 多处与本文档不符 | 本文档 § 4 / § 5 / § 6 / § 7.5 / § 7.7 |
+> | [`openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py`](../openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py) | ✅ 已实现 V5（Card 2.0 + cardkit 全链路 + 多账号 + USER/GROUP_MAP 反查） | [文件组织 doc § 7.1](P8_人机协同处置_文件组织与职责.md) |
+> | [`openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_receiver.py`](../openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_receiver.py) | ✅ 已实现（poll_once / poll_and_print / mark_event_status / CLI 多维过滤） | [文件组织 doc § 7.2](P8_人机协同处置_文件组织与职责.md) |
+> | [`openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_card.py`](../openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_card.py) | ✅ 已实现 V5（幂等 + 异步 cardkit 更新 + 字段兜底 + 审计日志） | [文件组织 doc § 7.3](P8_人机协同处置_文件组织与职责.md) |
+> | [`openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py`](../openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py) | ✅ 已实现（Gradio UI + USER/GROUP_MAP 配置 + GatewayListener 自动捕获 chat_id） | [文件组织 doc § 7.4](P8_人机协同处置_文件组织与职责.md) |
+> | [`openclaw-channel-gateway-standalone/feishu_gateway_cli/start_gateway.py`](../openclaw-channel-gateway-standalone/feishu_gateway_cli/start_gateway.py) | ✅ 已实现（Gateway 进程启停 / 状态查询 / 重启） | [文件组织 doc § 7.5](P8_人机协同处置_文件组织与职责.md) |
+> | [`feishu_gateway_cli/chat_reply.py`](../feishu_gateway_cli/chat_reply.py)（飞书侧聊天回复入口） | ❌ **未实现** — § 7.5 / § 7.7 描述的是其设计蓝图 | — |
+> | [`A7/api/p8_working_memory_ctrl.py`](../A7/api/p8_working_memory_ctrl.py)（REST API 工作记忆查询） | ❌ **未实现** — [web/server.py](../web/server.py) 端点表里没有 working-memory | — |
+> | [`A7/storage/p8_long_term.py`](../A7/storage/p8_long_term.py)（双层 JSON 长期记忆） | ✅ 已实现（9 函数 + 线程安全 + 原子写 + 双写一致） | 本文档 § 11.3 |
+> | [`A7/schema/p8_state.py`](../A7/schema/p8_state.py) / [`p8_models.py`](../A7/schema/p8_models.py) | ✅ 已实现 | — |
+> | [`A7/prompt/p8_prompt.py`](../A7/prompt/p8_prompt.py)（业务规则） | ✅ 已实现 | — |
+>
+> **本期（2026-08-18）约定**：`p8_disposition_agent.py` **将完全重写**（不参考现有 364 行代码）。
+> 重写完成后，本文档将反向同步更新。当前文档中的代码示例、签名、流程图都是**目标蓝图**，不要当成"已实现"。
+>
+> 本期文档编辑**仅同步外围代码**（`feishu_gateway_cli/*` 已实现模块），不修改 P8 核心描述。
+
+---
+
 ## 1. 一句话定位
 
 **P8 是 P7 风险研判的"执行调度器"**：通过**工作记忆**承载当前所有 in-progress P8_job，
-由 **LLM 自主决策**调用工具推进 P8_job 状态；每个 P8_job 决定走**飞书推送**还是 **HITL 中断**；
+由 **LLM 自主决策**调用工具推进 P8_job 状态；每个 P8_job 决定走**飞书推送**还是 **HITL 中断**还是同时进行；
 已完成的 P8_job 归档到**长期记忆**，用户明确要求才调取。
 
 | 概念 | 定义 |
@@ -772,6 +797,136 @@ def archive_job(p8_job_id: str, final_status: str, summary: str) -> dict:
 > **P7 输出不预先注入系统 prompt**，而是通过 `read_p7_events` 工具按需读入工作记忆。
 > 这样保持架构一致性：所有外部数据都通过工具进入，LLM 拥有完整的工具调用自主权。
 
+### 7.2.1 飞书会话的 `thread_id` 命名空间约定 ⭐
+
+> **基础知识点：LangChain / LangGraph 如何用 `thread_id` 自动维护历史**
+>
+> LangChain 1.x 的 `create_agent` + `MemorySaver` checkpointer 用一个 dict 维护历史：
+>
+> ```python
+> # MemorySaver 本质简化版
+> class MemorySaver:
+>     def __init__(self):
+>         self._storage: dict[str, dict] = {}  # thread_id → state
+>     def save(self, thread_id, state): self._storage[thread_id] = state
+>     def load(self, thread_id): return self._storage.get(thread_id, {"messages": []})
+> ```
+>
+> 每次 invoke：
+> 1. 框架按 `configurable.thread_id` 从 checkpointer **加载**该 thread 的历史 state
+> 2. **append** 调用方传进来的新 HumanMessage
+> 3. 调 LLM
+> 4. **存回** LLM 输出的 AIMessage / ToolMessage
+>
+> 调用方**永远只发新的一条 HumanMessage**——历史由框架自动维护。
+>
+> **核心结论**：
+> - 不同 `thread_id` = 完全隔离的会话（框架不串数据）
+> - 同 `thread_id` 跨 invoke = 共享历史 + working memory
+> - **`thread_id` 是"会话边界"，由调用方负责保证唯一性 + 隔离性**
+
+#### 候选方案对比（5 种）
+
+| 方案 | thread_id 格式 | 群聊语义 | 单聊语义 | 评价 |
+|------|--------------|---------|---------|------|
+| **A. 按 chat_id** ⭐ | `f"feishu-{chat_id}"` | 群智协作共享 working memory | 个人独享 | ✅ **推荐**（见下） |
+| B. 按 open_id | `f"feishu-{open_id}"` | 多人混合；Bob 的"批准"污染 Alice 的 P8_job | 跨群合并 | ❌ 丢掉群协作价值 |
+| C. 群内按人 | `f"feishu-{chat_id}-{open_id}"` | 群内每人独立；协作丢光 | 退化为 B | ❌ 群聊体验割裂 |
+| D. 双层 thread_id | 主：`chat_id` / 子：`chat_id-open_id` | 兼顾但实现复杂 | — | ❌ LangGraph subgraph 调试地狱，过度设计 |
+| E. 按 chat_type 分支 | 群：`chat_id` / 单聊：`open_id` | 同 A | 同 B | ❌ 行为不一致；用户困惑 |
+
+#### 最终决策：方案 A —— `thread_id = feishu-{chat_id}`
+
+**理由**：
+
+1. **群聊的核心价值是协作**——群里开了个 P8_job，群内**所有人都能看到、能推进、能批准**。拆成人就废了。
+2. **单聊退化为个人**——飞书一对一 chat_id ≈ open_id（飞书一对一 session），方案 A 与方案 B 在单聊场景无差别。
+3. **跨群天然隔离**——Alice 在群 A 和群 B 各问一次，互不可见（chat_id 不同）。
+4. **跟飞书 Card / webhook / @ mention 语义对齐**——chat_id 是飞书的主键，Card 按钮天然带 sender open_id，HITL 设计上群里谁都能点。
+5. **前缀命名空间防止误碰**——`feishu-oc_xxx` vs `p8-{job_id}` vs `gradio-{uuid}` 永不冲突，运维可按前缀过滤。
+
+#### 不要用 `thread_id` 解决的 3 个问题
+
+> `thread_id` 只解决**会话边界**。下面 3 个看似相关的问题**不应**靠 thread_id 解决，要用其他机制：
+
+| 问题 | 错误思路 | 正确方案 |
+|------|---------|---------|
+| **HITL 决策责任审计** | "Bob 的批准属于 Bob 的 thread" | ✅ 在 P8_job 上加 `decided_by_open_id` / `created_by_open_id` / `note` 字段（详见 § 4.2 状态机 + § 6.4 归档机制） |
+| **跨端数据一致**（飞书 / Web / CLI 看同一 P8_job） | "用同一个 thread_id 串起来" | ✅ P8_job 是全局数据，跨 thread_id 共享；用 `recall_jobs(p8_job_id=...)` 查；或换 `PostgresSaver` 让 working memory 跨进程可达 |
+| **消息归属**（群里多人说话谁说的） | "按 sender 拆 thread" | ✅ 在 HumanMessage.content 加 `[from:ou_xxx]` 前缀，LLM 看得到；HITL Card 按钮触发时 webhook 天然带 sender |
+
+#### 多端协同：留给 checkpointer 后端，不要靠 thread_id
+
+```python
+# 现状：单进程
+checkpointer = MemorySaver()
+# 问题：不同 thread_id 的会话看到的 P8_job 内容可能不一致
+#   "feishu-oc_group_a" → working_memory: [..., P8J-001 approved, ...]
+#   "gradio-session_xyz" → working_memory: [..., P8J-001 NOT approved yet, ...]
+
+# 解决：换 cross-process checkpointer
+checkpointer = PostgresSaver.from_conn_string("postgresql://...")
+# 工作记忆变成全局状态 → 任何 thread_id 看到的 P8_job 都一致
+# thread_id 退化为"会话上下文边界"，不再是"数据隔离维度"
+```
+
+**P8 重写时决策建议**：如果多端协同是真实需求（Alice 群里发"批准"后 Web 端立即看到状态变化），把 checkpointer 从 `MemorySaver` 升级到 `PostgresSaver`；否则保留 `MemorySaver` + 接受"各端视图独立"。
+
+#### P8 三种模式的 `thread_id` 全景
+
+```
+                         ┌──────────────────────────────────────────────────────┐
+                         │     checkpointer（MemorySaver / PostgresSaver）       │
+                         │     _storage: dict[thread_id → state]                  │
+                         │                                                       │
+                         │     "p8-JOB-20260818-001"     → {...}  ← 主流程      │
+                         │     "p8-JOB-20260818-002"     → {...}  ← 另一作业      │
+                         │     "feishu-oc_5g8a..."       → {...}  ← 飞书群 A      │
+                         │     "feishu-oc_5g8b..."       → {...}  ← 飞书群 B      │
+                         │     "feishu-oc_direct_alice"  → {...}  ← 飞书单聊 Alice │
+                         │     "gradio-7f3e9a..."        → {...}  ← Web 浏览器    │
+                         │     "cli-debug"               → {...}  ← CLI 调试      │
+                         └──────────────────────────────────────────────────────┘
+                                          ▲              ▲
+                                          │              │
+                          ┌───────────────┘              └───────────────┐
+                          │                                            │
+                          ▼                                            ▼
+             main_agent.execute_p8(job_id)              chat_reply_handler(event)
+             thread_id = "p8-{job_id}"                  thread_id = "feishu-{event.chat_id}"
+                                                                    │
+                                                                    ▼
+                                                       disposition_demo(message, history)
+                                                       → run_disposition_agent(message, thread_id=..., walltime=...)
+```
+
+**关键约定**：
+- **同 chat_id 多人共用** `feishu-{chat_id}` thread（群智协作）
+- **跨 chat_id 严格隔离**（不同群互不可见）
+- **跨模式严格隔离**（`feishu-` vs `p8-` vs `gradio-` 永不串）
+- **每次 invoke 调用方必传 config**（不传则所有人共享默认 thread_id，history 全乱套）
+
+#### 调用方责任清单
+
+| 模式 | thread_id 生成方 | 唯一性保证 |
+|------|----------------|-----------|
+| **主流程** | `main_agent.execute_p8` 自己拼 | `job_id` 业务唯一 |
+| **飞书侧** | `chat_reply_handler` 按 `event.chat_id` 拼 | 飞书保证 chat_id 全局唯一 |
+| **Gradio 侧** | 前端生成 session UUID，存 cookie / URL hash | `uuid4()` 不会重复 |
+| **CLI 调试** | 用户传 `--session`，不传则 `cli-default` | 显式声明 |
+
+#### 何时该新建 / 复用 thread_id
+
+| 场景 | 行为 | 理由 |
+|------|------|------|
+| 新聊天窗口（新 chat_id） | ✅ 新建 | 新会话边界 |
+| 用户清空对话 | ✅ 新建（覆盖语义） | 用户主动重置 |
+| 同一 chat 内多人发言 | ❌ 共用 | chat 是会话边界，不是 user |
+| 同 `job_id` 多次 `execute_p8` | ❌ 共用 | 断点续跑需要历史 |
+| HITL 决策到达后继续 invoke | ❌ **必须**共用 | 同 thread_id 才能让 agent "看到" decision 字段已更新 |
+
+---
+
 ### 7.3 启动函数签名
 
 ```python
@@ -809,7 +964,7 @@ def disposition_demo(message: str, history: list = None) -> str:
     LLM 收到后通过 read_p7_events(job_id=...) 工具读取。
 
     触发方：
-    - **飞书侧**：`A7.notify.chat_reply_handler` 从 Gateway `/v1/events` 拉到的入站消息
+    - **飞书侧**：`feishu_gateway_cli.chat_reply_handler` 从 Gateway `/v1/events` 拉到的入站消息
       解析出 `[job_id=...]` 后调用本函数；最终通过 `reply_to_event` 把 LLM 输出回写到飞书。
     - **Gradio**：`web/server.py` ChatInterface 直接调；输出回写到 Web 终端。
     """
@@ -860,9 +1015,9 @@ execute_p8 写 p8_result.json.disposition_tasks（仅写"快照"；运行时状�
   ↓
 飞书 webhook → Gateway 入队到 /v1/events
   ↓
-feishu_receiver.poll_once 拉取入站消息                       ← A7/notify/feishu_receiver.py
+feishu_receiver.poll_once 拉取入站消息                       ← openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_receiver.py
   ↓
-chat_reply_handler(event) 被调起                              ← A7/notify/chat_reply.py（本期新增）
+chat_reply_handler(event) 被调起                              ← feishu_gateway_cli/chat_reply.py（本期新增）
   ↓
 后端：解析 current_job_id（从消息正文的 [job_id=...] 标记提取）；walltime = now()
   ↓
@@ -888,7 +1043,7 @@ LLM 判断为单事件处置（N=1，level=HIGH）：
   ↓
 agent 输出："已为 A6-20260813-094525-230 创建处置 P8_job (P8J-...)，等待人工决策"
   ↓
-chat_reply_handler 调 reply_to_event(event_id, llm_response)            ← A7/notify/feishu_sender.py
+chat_reply_handler 调 reply_to_event(event_id, llm_response)            ← openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py
   ↓
 飞书侧用户收到 P8 的文本回复
   ↓
@@ -1069,14 +1224,14 @@ LLM 规则提示词明确：
 
 | 项 | 说明 |
 |----|------|
-| 调用入口 | `A7/notify/send_feishu(p8_job, job_id)` |
-| 通道 | 固定 `channel="feishu"`（由 `A7/notify/feishu_sender.py` 内部指定） |
+| 调用入口 | `feishu_gateway_cli/send_feishu(p8_job, job_id)` |
+| 通道 | 固定 `channel="feishu"`（由 `openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py` 内部指定） |
 | 接收方 | `conversation_id` 由 `_resolve_conversation_id(assignee_role)` 从环境变量解析（`FEISHU_CONVERSATION_MAP` 优先 / `FEISHU_GROUP_<KEY>` 单条 / `feishu_dev_<role>` 兜底） |
 | 幂等键 | `idempotency_key = p8_job_id`（同一 P8_job 重复发送只产生一条） |
 | gateway metadata | `{p8_job_id, job_id, risk_level, assignee_role, channel_decision: "PUSH", a6_event_count}` |
 | 失败回执 | 飞书推送失败 → 仅记日志 + 返回 `FeishuNotifyResult(status="failed")`，**不阻塞** P8_job 推进；LLM 据此决定是否重试 |
 
-**实现位置**：[`A7/notify/feishu_sender.py`](../../A7/notify/feishu_sender.py)
+**实现位置**：[`openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py`](../../openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_sender.py)
 （包装 `agents/channel_gateway_client.send_message()`，加 P8 业务语义；
 详见文件组织文档 § 7）。
 

@@ -1,4 +1,4 @@
-"""A7.notify — 飞书通道适配层（精简版：只发，不拼）。
+"""feishu_gateway_cli — 飞书通道适配层（精简版：只发，不拼）。
 
 ================================================================================
 职责（精简版）
@@ -18,8 +18,8 @@
     P8_agent.notify_feishu(p8_job_id, message)   ← 未来工具（自行拼装消息正文）
             │
             ▼
-    A7.notify.send_to_group(text, *, chat_id="...", group_name="...")   ← 群聊（chat_id 或 group_name，二选一）
-    A7.notify.send_to_user(text, *, name="...", open_id="...")          ← 单聊（name 或 open_id，二选一）
+    feishu_gateway_cli.send_to_group(text, *, chat_id="...", group_name="...")   ← 群聊（chat_id 或 group_name，二选一）
+    feishu_gateway_cli.send_to_user(text, *, name="...", open_id="...")          ← 单聊（name 或 open_id，二选一）
             │
             ▼
     agents.channel_gateway_client.send_message(...)
@@ -99,24 +99,24 @@
 CLI 命令
 ================================================================================
 
-参见 ``A7/notify/feishu_sender.py`` 文件头 docstring：
+参见 ``feishu_gateway_cli/feishu_sender.py`` 文件头 docstring：
 
-    python -m A7.notify.feishu_sender send_group --text "..." --chat-id oc_xxx
-    python -m A7.notify.feishu_sender send_user  --text "..." --name "张三"
+    python -m feishu_gateway_cli.feishu_sender send_group --text "..." --chat-id oc_xxx
+    python -m feishu_gateway_cli.feishu_sender send_user  --text "..." --name "张三"
 
 ================================================================================
 配置 UI（feishu_config_app）
 ================================================================================
 
-``A7/notify/feishu_config_app`` 是独立的 Flask + HTML 配置面板，让业务 / 运维
+``feishu_gateway_cli.feishu_config_app`` 是独立的 Flask + HTML 配置面板，让业务 / 运维
 人员通过浏览器把上述环境变量（``GATEWAY_HOST`` / ``CG_API_KEY`` /
 ``FEISHU_USER_MAP`` / ``FEISHU_APP_*`` 等）写入 **项目根 .env**，
 避免手工编辑出错。
 
 启动：
 
-    python A7/notify/feishu_config_app.py            # 默认 127.0.0.1:5003
-    python A7/notify/feishu_config_app.py --port 5003
+    python openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py            # 默认 127.0.0.1:5003
+    python openclaw-channel-gateway-standalone/feishu_gateway_cli/feishu_config_app.py --port 5003
 
 URL：``http://127.0.0.1:5003/``。
 
@@ -133,9 +133,9 @@ URL：``http://127.0.0.1:5003/``。
 # 公开符号（lazy re-export，PEP 562）
 # --------------------------------------------------------------------------------
 #
-# 用 __getattr__ 而非 eager import，目的是避免与 `python -m A7.notify.feishu_sender`
+# 用 __getattr__ 而非 eager import，目的是避免与 `python -m feishu_gateway_cli.feishu_sender`
 # 冲突（eager import 会把模块塞进 sys.modules，runpy 跳过后会打 RuntimeWarning）。
-# 短路径 `from A7.notify import send_to_group` 仍然可用，只是首次访问时按需加载。
+# 短路径 `from feishu_gateway_cli import send_to_group` 仍然可用，只是首次访问时按需加载。
 
 _LAZY_SYMBOLS = {
     "send_to_group",
@@ -150,11 +150,11 @@ def __getattr__(name: str):
     if name in _LAZY_SYMBOLS:
         from . import feishu_sender as _adapter
         return getattr(_adapter, name)
-    raise AttributeError(f"module 'A7.notify' has no attribute {name!r}")
+    raise AttributeError(f"module 'feishu_gateway_cli' has no attribute {name!r}")
 
 
 # feishu_config_app 是独立 Flask 入口；不在 __all__ 中暴露避免与运行时 API 混淆。
-# 调用方式：python -m A7.notify.feishu_config_app
+# 调用方式：python -m feishu_gateway_cli.feishu_config_app
 try:
     from . import feishu_config_app  # noqa: F401  （可选；缺失不影响主流程）
 except Exception:  # pragma: no cover
