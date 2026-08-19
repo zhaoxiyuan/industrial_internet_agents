@@ -300,7 +300,7 @@ def start_service(
     return True
 
 
-def stop_service(name: str, *, force: bool = False, timeout: float = 10.0) -> bool:
+def stop_service(name: str, *, force: bool = False, timeout: float = 4.0) -> bool:
     """停止单个服务。"""
     cfg = SERVICES[name]
     pid = _read_pid(cfg["pid_file"])
@@ -377,7 +377,7 @@ def start_all(*, foreground: str = "", no_wait_health: bool = False) -> bool:
     return ok
 
 
-def stop_all(*, force: bool = False, timeout: float = 10.0) -> bool:
+def stop_all(*, force: bool = False, timeout: float = 4.0) -> bool:
     """按依赖反序停止所有服务。"""
     _title("停止 P8 服务")
     ok = True
@@ -448,13 +448,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_stop = cmd.add_parser("stop",   help="停止所有服务")
     p_stop.add_argument("--force", action="store_true", help="强杀进程")
     p_stop.add_argument(
-        "--timeout", type=float, default=10.0,
-        help="每个服务停止的超时秒数（默认 10）",
+        "--timeout", type=float, default=4.0,
+        help="每个服务停止的超时秒数（默认 4）",
     )
 
     p_restart = cmd.add_parser("restart", help="先停后启")
     p_restart.add_argument("--force", action="store_true")
-    p_restart.add_argument("--timeout", type=float, default=10.0)
+    p_restart.add_argument("--timeout", type=float, default=4.0)
     p_restart.add_argument(
         "--foreground", default="",
         choices=["", "gateway", "chat_reply", "web"],
@@ -478,12 +478,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if cmd == "stop":
         return 0 if stop_all(
             force=getattr(args, "force", False),
-            timeout=getattr(args, "timeout", 10.0),
+            timeout=getattr(args, "timeout", 4.0),
         ) else 1
     if cmd == "restart":
         ok_stop = stop_all(
             force=getattr(args, "force", False),
-            timeout=getattr(args, "timeout", 10.0),
+            timeout=getattr(args, "timeout", 4.0),
         )
         time.sleep(1.0)
         ok_start = start_all(

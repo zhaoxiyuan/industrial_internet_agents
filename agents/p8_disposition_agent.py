@@ -20,10 +20,10 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
@@ -44,6 +44,7 @@ from A7.storage import (
 )
 from A7.schema import (
     P8Job, P8JobUpdate, P8JobStatus, RiskLevel, Channel, ActionType, P8State,
+    PushMessage,
 )
 from A7.middleware.p8_archive_middleware import P8ArchiveMiddleware
 
@@ -242,6 +243,7 @@ def update_job(
     status: Optional[str] = None,
     channel: Optional[str] = None,
     note: Optional[str] = None,
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """创建或更新 P8_job。
 
@@ -253,27 +255,36 @@ def update_job(
         status:       要变更的目标状态（pending/notified/waiting_decision/...）
         channel:      要设置的通道（HITL/PUSH）
         note:         要追加的备注（覆盖式）
+        tool_call_id: 由 LangGraph 注入的当前 tool_call_id（必传，否则
+                      LangGraph 会抛 "Every tool call MUST have a corresponding ToolMessage"）
 
     Returns:
         LangGraph Command（reducer 自动 upsert to working_memory）
     """
+    # 2026-08-19 修复：所有返回路径必须含 ToolMessage，否则 LangGraph 抛
+    # "Expected to have a matching ToolMessage in Command.update for tool 'update_job', got: []"
+    # 错误路径与成功路径统一走 _make_tool_msg(...) 辅助函数。
+    def _make_tool_msg(content: str) -> Command:
+        return Command(update={
+            "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
+            "working_memory": [],
+        })
+
     try:
         level_enum = RiskLevel(level)
     except ValueError:
-        return Command(update={"messages": [], "working_memory": []}), \
-            json.dumps(make_error(
-                code="INVALID_LEVEL",
-                message=f"无效的 level: {level}；应为 LOW/MEDIUM/HIGH/CRITICAL",
-                recoverable=False,
-            ), ensure_ascii=False)
+        return _make_tool_msg(json.dumps(make_error(
+            code="INVALID_LEVEL",
+            message=f"无效的 level: {level}；应为 LOW/MEDIUM/HIGH/CRITICAL",
+            recoverable=False,
+        ), ensure_ascii=False))
 
     if not risk_basis or not risk_basis.strip():
-        return Command(update={"messages": [], "working_memory": []}), \
-            json.dumps(make_error(
-                code="INVALID_ARGUMENT",
-                message="risk_basis 不能为空",
-                recoverable=False,
-            ), ensure_ascii=False)
+        return _make_tool_msg(json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message="risk_basis 不能为空",
+            recoverable=False,
+        ), ensure_ascii=False))
 
     # 验证 P8JobUpdate（自动校验 a6_event_ids 唯一性 + p8_job_id 格式）
     try:
@@ -285,12 +296,11 @@ def update_job(
             note=note,
         )
     except Exception as exc:
-        return Command(update={"messages": [], "working_memory": []}), \
-            json.dumps(make_error(
-                code="INVALID_ARGUMENT",
-                message=f"update_job 参数校验失败: {exc}",
-                recoverable=False,
-            ), ensure_ascii=False)
+        return _make_tool_msg(json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message=f"update_job 参数校验失败: {exc}",
+            recoverable=False,
+        ), ensure_ascii=False))
 
     # 构造完整 P8Job dict（max_level / risk_basis / urgency_emoji / assignee_role / due_at / channel）
     defaults = _compute_job_defaults(level_enum, risk_basis)
@@ -316,7 +326,18 @@ def update_job(
     )
 
     # LangGraph Command：reducer 自动按 p8_job_id upsert
-    return Command(update={"working_memory": [job]})
+    # 2026-08-19 修复：成功路径也必须返回 ToolMessage，否则 LangGraph 抛
+    # "Every tool call MUST have a corresponding ToolMessage"。
+    return Command(update={
+        "messages": [ToolMessage(
+            content=json.dumps(make_response(
+                "update_job",
+                {"status": "ok", "p8_job_id": job["p8_job_id"], "job": job},
+            ), ensure_ascii=False),
+            tool_call_id=tool_call_id,
+        )],
+        "working_memory": [job],
+    })
 
 
 # ============================================================
@@ -335,6 +356,7 @@ def hitl_decide(
     p8_job_id: str,
     options: list[str],
     note: str = "",
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """把 P8_job 标记为 waiting_decision。
 
@@ -342,17 +364,24 @@ def hitl_decide(
         p8_job_id: 要操作的 P8_job ID
         options:   候选决策列表（如 ["approve", "rectify", "reject", "escalate"]）
         note:      备注（写入 note 字段；可空）
+        tool_call_id: 由 LangGraph 注入的当前 tool_call_id（必传）
 
     Returns:
         LangGraph Command（patch 后 working_memory 仍含该 P8_job，但状态变更）
     """
+    # 2026-08-19 修复：所有返回路径必须含 ToolMessage。
     if not p8_job_id or not p8_job_id.startswith("P8J-"):
-        return Command(update={"messages": [], "working_memory": []}), \
-            json.dumps(make_error(
-                code="INVALID_ARGUMENT",
-                message=f"hitl_decide: 无效的 p8_job_id={p8_job_id}",
-                recoverable=False,
-            ), ensure_ascii=False)
+        return Command(update={
+            "messages": [ToolMessage(
+                content=json.dumps(make_error(
+                    code="INVALID_ARGUMENT",
+                    message=f"hitl_decide: 无效的 p8_job_id={p8_job_id}",
+                    recoverable=False,
+                ), ensure_ascii=False),
+                tool_call_id=tool_call_id,
+            )],
+            "working_memory": [],
+        })
 
     if not options:
         options = ["approve", "rectify", "reject", "escalate"]
@@ -375,7 +404,17 @@ def hitl_decide(
     # 因此要先读出现有 job 然后合并；但 reducer 不支持 partial update
     # 解决方案：在 patch 里包含 pid + 改的字段 + 哨兵注释说明 reducer 行为
     # 实际：必须传完整 job；这里用最小 patch 让上层 LLM 在下一次 invoke 时再 update_job 补全
-    return Command(update={"working_memory": [patch]})
+    # 2026-08-19 修复：成功路径必须返回 ToolMessage。
+    return Command(update={
+        "messages": [ToolMessage(
+            content=json.dumps(make_response(
+                "hitl_decide",
+                {"status": "ok", "p8_job_id": p8_job_id, "patch": patch},
+            ), ensure_ascii=False),
+            tool_call_id=tool_call_id,
+        )],
+        "working_memory": [patch],
+    })
 
 
 # ============================================================
@@ -432,13 +471,26 @@ def read_p7_events(job_id: str) -> str:
 
 
 # ============================================================
-# 工具 4：notify_feishu — 调 channel_gateway_client.send_message（蓝图 § 8.2）
+# 工具 4：notify_feishu — 推送飞书卡片（蓝图 § 8.2）
+# ============================================================
+# 2026-08-19 重构：改用 feishu_gateway_cli.feishu_sender 的封装（send_to_group_card /
+# send_to_user），不再直调 channel_gateway_client.send_message。之前的实现漏传
+# conversation_id / receive_id_type，并把 assignee_role（岗位描述）误当作
+# account_id（机器人身份），Gateway 必报 VALIDATION_ERROR。
+#
+# 新签名增加 4 个收件人参数（互斥必填其一）：
+#   - chat_id        飞书群 ID（"oc_xxx"）直传
+#   - group_name     按 FEISHU_GROUP_MAP.name 反查 chat_id
+#   - name           按 FEISHU_USER_MAP.name 反查 open_id（单聊）
+#   - open_id        飞书用户 open_id（webhook 回调场景）直传
 # ============================================================
 @tool(description=(
-    "通过 OpenClaw Channel Gateway 推送飞书卡片。"
+    "通过 OpenClaw Channel Gateway 推送飞书交互式卡片（Card 2.0 schema）。"
     "channel=PUSH 的 P8_job 决策完成后调用，把结果推给责任人。"
-    "底层走 channel_gateway_client.send_message → Gateway (port 8787) → 飞书 API。"
+    "底层走 feishu_gateway_cli.feishu_sender.send_to_group_card / send_to_user"
+    " → channel_gateway_client.send_message → Gateway (port 8787) → 飞书 API。"
     "成功后 P8_job.status 应变更为 'notified'。"
+    "★ 收件人 4 选 1（互斥必填其一）：chat_id / group_name / name / open_id"
 ))
 def notify_feishu(
     p8_job_id: str,
@@ -448,21 +500,61 @@ def notify_feishu(
     assignee_role: str,
     job_id: str,
     a6_event_ids: list[str],
+    *,
+    chat_id: Optional[str] = None,
+    group_name: Optional[str] = None,
+    name: Optional[str] = None,
+    open_id: Optional[str] = None,
+    alert_id: Optional[str] = None,
+    account_id: Optional[str] = None,
 ) -> str:
-    """推送飞书卡片（蓝图 § 8.2）。
+    """推送飞书卡片（蓝图 § 8.2；2026-08-19 重构走 feishu_sender 封装）。
 
     Args:
         p8_job_id:     P8_job ID
         title:         卡片标题（含 emoji + 风险等级）
         body:          卡片正文
         risk_level:    风险等级（LOW/MEDIUM/HIGH/CRITICAL）
-        assignee_role: 责任岗位（用于 conversation_id 映射）
+        assignee_role: 责任岗位（"属地责任人 + 班组长" 等描述性文字；仅作记录/审计，
+                       **不是**收件人 ID）
         job_id:        主流程作业 ID
         a6_event_ids:  关联 A6 输出 ID 列表
+
+        --- 收件人（互斥必填其一）---
+        chat_id:       飞书群 ID（"oc_xxx"）直传；不读 GROUP_MAP
+        group_name:    按 FEISHU_GROUP_MAP.name 反查 chat_id
+        name:          按 FEISHU_USER_MAP.name 反查 open_id（单聊）
+        open_id:       飞书用户 open_id（webhook 回调场景）直传；不读 USER_MAP
+
+        --- 可选 ---
+        alert_id:      业务告警 ID；落盘 alert_id→card_id 映射，callback 异步更新卡片
+        account_id:    Gateway 账号 ID（多账号机器人场景；如 'P8'）；不传走默认账号
 
     Returns:
         标准 JSON 响应（含 channel gateway 返回的 intent id / status）
     """
+    # 收件人互斥校验（4 选 1）
+    provided = [
+        ("chat_id",    chat_id),
+        ("group_name", group_name),
+        ("name",       name),
+        ("open_id",    open_id),
+    ]
+    given = [(k, v) for k, v in provided if v and str(v).strip()]
+    if len(given) == 0:
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message="notify_feishu: 必须传 chat_id / group_name / name / open_id 之一（互斥）",
+            recoverable=False,
+        ), ensure_ascii=False)
+    if len(given) > 1:
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message=f"notify_feishu: 收件人参数互斥，只能传一个；当前传了 {[k for k, _ in given]}",
+            recoverable=False,
+        ), ensure_ascii=False)
+    recipient_kind = "group" if given[0][0] in ("chat_id", "group_name") else "user"
+
     # 构造 PushMessage（Pydantic 自动回填 idempotency_key）
     try:
         push_msg = PushMessage(
@@ -482,43 +574,64 @@ def notify_feishu(
             recoverable=False,
         ), ensure_ascii=False)
 
-    # 调 channel_gateway_client.send_message（真实联通飞书）
+    # 调 feishu_sender 封装（按收件人类型分流）
+    # 2026-08-19：之前 notify_feishu 直调 channel_gateway_client.send_message，
+    # 漏传 conversation_id + receive_id_type，且把 assignee_role 误当 account_id，
+    # Gateway 必报 VALIDATION_ERROR。改用 feishu_sender 的封装后这些参数自动填好。
     try:
-        from agents.channel_gateway_client import send_message
-        result = send_message(
-            text=push_msg.title,        # 兜底：text 模式时用 title
-            channel="feishu",
-            account_id=assignee_role,   # 简化：assignee_role 当作 account_id
-            content=json.dumps({
-                "title": push_msg.title,
-                "body":  push_msg.body,
-                "a6_event_ids": push_msg.a6_event_ids,
-            }, ensure_ascii=False),
-            msg_type="interactive",     # 卡片
-            metadata={
-                "job_id":     push_msg.job_id,
-                "p8_job_id":  push_msg.p8_job_id,
-                "risk_level": push_msg.risk_level.value,
-            },
-            idempotency_key=push_msg.idempotency_key,
+        # 延迟 import 避免循环（A7→agents→A7）；feishu_sender 本身就是 Gateway 适配层
+        from feishu_gateway_cli.feishu_sender import (
+            send_to_group_card,
+            send_to_user,
+            build_feishu_card,
         )
+
+        # 构造 Card 2.0 JSON dict（无按钮；按钮由回调交互场景单独加）
+        card = build_feishu_card(
+            text=push_msg.body,                    # 卡片正文用 body（title 走 header）
+            options=[],                            # 不加按钮，纯展示卡片
+            title=push_msg.title,
+            alert_id=alert_id or push_msg.p8_job_id,  # 默认 alert_id=p8_job_id
+        )
+
+        if recipient_kind == "group":
+            result = send_to_group_card(
+                card=card,
+                chat_id=chat_id,
+                group_name=group_name,
+                account_id=account_id,
+                alert_id=alert_id or push_msg.p8_job_id,
+                idempotency_key=push_msg.idempotency_key,
+            )
+        else:  # user
+            result = send_to_user(
+                text=push_msg.body,                # 单聊走文本通道（与重构前行为一致）
+                name=name,
+                open_id=open_id,
+                account_id=account_id,
+            )
     except Exception as exc:
-        logger.exception("notify_feishu: send_message 失败: %s", exc)
+        logger.exception("notify_feishu: feishu_sender 调用失败: %s", exc)
         return json.dumps(make_error(
             code="FEISHU_PUSH_FAILED",
             message=f"飞书推送失败: {exc}"[:200],
             recoverable=True,
         ), ensure_ascii=False)
 
-    logger.info("notify_feishu: pid=%s, intent=%s, status=%s",
-                p8_job_id, getattr(result, "intent_id", None), getattr(result, "status", None))
+    logger.info(
+        "notify_feishu: pid=%s, recipient_kind=%s, intent=%s, status=%s",
+        p8_job_id, recipient_kind,
+        getattr(result, "intent_id", None), getattr(result, "status", None),
+    )
 
     return json.dumps(make_response(
         "notify_feishu",
         {
-            "p8_job_id": p8_job_id,
-            "intent_id": getattr(result, "intent_id", None),
-            "status":    getattr(result, "status", None),
+            "p8_job_id":      p8_job_id,
+            "recipient_kind": recipient_kind,
+            "intent_id":      getattr(result, "intent_id", None),
+            "status":         getattr(result, "status", None),
+            "message_id":     getattr(result, "platform_message_id", None),
         },
     ), ensure_ascii=False)
 

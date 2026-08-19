@@ -246,7 +246,9 @@ r = send_message(
 | 参数 | 必填 | 说明 |
 |------|------|------|
 | `event_id` | ✅ | 入站事件 ID（`evt_xxx`，从 `poll_inbound_events` 拿到） |
-| `text` | ✅ | 回复正文 |
+| `text` | ✅ | 回复正文（同时会作为卡片 fallback 文本） |
+| `msg_type` | — | 消息类型：`"text"`（默认，纯文本）/ `"interactive"`（飞书交互式 Card）/ `"post"`（富文本）。`text` 之外需配合 `content`；仅当网关后端支持时生效（**2026-08-19 新增**，网关 `replyToEvent` 现在透传 `msgType`+`content`） |
+| `content` | △ | 自定义 content 字符串（如飞书卡片的 JSON 字符串）。`msg_type="interactive"` 时必传（建议 `json.dumps(card, ensure_ascii=False)`） |
 | `channel` / `account_id` / `conversation_id` / `receive_id_type` | — | 显式覆盖默认继承 |
 | `reply_to_id` | — | 覆盖默认 `message.id`（作为"被回复的消息"） |
 | `thread_id` | — | 覆盖默认会话 thread |
@@ -256,14 +258,32 @@ r = send_message(
 
 ```python
 from agents.channel_gateway_client import poll_inbound_events, reply_to_event, ack_event
+import json
 
 poll = poll_inbound_events(after_sequence=0, limit=1)
 if poll.events:
     ev = poll.events[0]
+
+    # 方式 1：纯文本回复（旧调用方式仍兼容）
     reply_to_event(
         event_id=ev["id"],
         text=f"收到：{ev.get('message', {}).get('text', '')}",
     )
+
+    # 方式 2：飞书 interactive 卡片（2026-08-19，markdown 可正常渲染）
+    card = {
+        "config": {"wide_screen_mode": True},
+        "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": "**📋 风险概览**\n- 已处理"}}
+        ],
+    }
+    reply_to_event(
+        event_id=ev["id"],
+        text="**📋 风险概览**\n- 已处理",  # 同时作为 fallback 文本
+        msg_type="interactive",
+        content=json.dumps(card, ensure_ascii=False),
+    )
+
     ack_event(event_id=ev["id"], status="acked", details={"consumer": "p8"})
 ```
 

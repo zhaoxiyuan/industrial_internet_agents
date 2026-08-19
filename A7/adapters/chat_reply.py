@@ -128,7 +128,6 @@ from __future__ import annotations
 import logging
 import os
 import json
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -170,6 +169,23 @@ _P8_APP_ID = os.environ.get("FEISHU_P8_APP_ID", "").strip() or None
 
 # 标识本模块日志的 prefix（避免与 feishu_gateway_cli 混淆）
 LOG_TAG = "chat_reply"
+
+# 2026-08-19：剥离 LLM 思考标签。
+# Qwen / DeepSeek / QwQ 等支持 reasoning_content 的模型会把内部推理包在
+# ``<think>...</think>`` 里再追加对外回复。飞书/Gradio 等用户侧展示
+# 应剥离这些内部推理块（避免暴露推理过程 + 减少消息字符数）。
+_THINK_PATTERN = re.compile(
+    r"<think>.*?</think>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# 2026-08-19：飞书消息长度限制。
+# 飞书"文本消息"接口（im/v1/messages）单条消息体上限 4000 字符（UTF-8 编码后）；
+# 超长会被 Gateway 拒绝回写。截断策略：保留前 (max_len-50) 字符 + 末尾加
+# "...(内容过长已截断)"。
+_FEISHU_MAX_TEXT_LEN: int = 4000
+_FEISHU_TRUNCATE_TAIL: str = "\n\n…(内容过长已截断)"
+_FEISHU_TRUNCATE_RESERVED: int = len(_FEISHU_TRUNCATE_TAIL)
 
 
 # ============================================================
@@ -244,6 +260,103 @@ def build_human_message(job_id: Optional[str], user_message: str) -> str:
     if job_id:
         return f"[job_id={job_id}]"
     return clean_user_msg
+
+
+# ============================================================
+# 1.5 对外展示前文本清洗（2026-08-19）
+# ============================================================
+
+def _strip_think_tags(text: str) -> str:
+    """剥离 LLM 思考标签（``<think>...</think>``），返回干净的对外文本。
+
+    适用模型：Qwen / DeepSeek / QwQ 等支持 ``reasoning_content`` 的模型。
+    这些模型会把内部推理包在 ``<think>`` 标签里，再追加对外回复；
+    飞书 / Gradio 等用户侧展示必须剥离这些内部块（避免暴露推理过程、
+    减少消息字符数、防止飞书渲染异常）。
+
+    处理细节：
+        - 多段连续的 ``<think>...</think>`` 全部剥离（DOTALL + 非贪婪）。
+        - 大小写不敏感（防御模型 LLM 大写化）。
+        - 剥离后折叠连续 3+ 空行为 2 个（think 块占位常残留空行）。
+        - 输入空串 / 非字符串 → 返回空串。
+
+    Args:
+        text: LLM 原始回复文本（含或不含 think 块）。
+
+    Returns:
+        剥离 think 块后的对外文本（不含内部推理）。
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    cleaned = _THINK_PATTERN.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _truncate_for_feishu(text: str) -> str:
+    """飞书消息长度限制（4000 字符）—— 超长截断 + 加省略号。
+
+    飞书 im/v1/messages 单条消息体上限 4000 字符（UTF-8 编码后）；
+    超出会被 Gateway 拒绝回写。本函数在前置清洗（think 剥离）**之后**调用。
+
+    Args:
+        text: 已经过 ``_strip_think_tags`` 清洗的对外文本。
+
+    Returns:
+        长度 ≤ ``_FEISHU_MAX_TEXT_LEN`` 的字符串；超长时截断 + 末尾追加
+        ``"\\n\\n…(内容过长已截断)"`` 提示。
+    """
+    if not text:
+        return text
+    if len(text) <= _FEISHU_MAX_TEXT_LEN:
+        return text
+    keep = _FEISHU_MAX_TEXT_LEN - _FEISHU_TRUNCATE_RESERVED
+    return text[:keep] + _FEISHU_TRUNCATE_TAIL
+
+
+# 2026-08-19：构造飞书 interactive 卡片（msg_type="interactive" + lark_md）。
+# 之前 LLM 输出的 markdown（标题 / 表格 / 加粗）会被飞书 text 类型剥成纯文本，
+# 这里包成卡片，让 lark_md 渲染生效。
+_FEISHU_CARD_MAX_TEXT_LEN: int = 4000
+
+
+def _build_feishu_card(text: str) -> str:
+    """把清洗后的文本包成飞书 interactive 卡片 JSON 字符串。
+
+    卡片结构（最小可用版本）：
+        {
+          "config": {"wide_screen_mode": true},
+          "elements": [
+            {"tag": "div", "text": {"tag": "lark_md", "content": "<text>"}}
+          ]
+        }
+
+    - ``wide_screen_mode=true`` 让移动端也能横向展示表格。
+    - 单 ``div + lark_md`` 元素足以覆盖 P8 处置对话的格式需求；
+      后续若需要按钮 / 多列 / 折叠，可在此函数扩展 elements 数组。
+
+    Args:
+        text: 已经过 ``_strip_think_tags`` + ``_truncate_for_feishu`` 清洗的文本。
+
+    Returns:
+        飞书卡片 JSON 字符串（直接透传给 gateway ``content`` 字段）。
+    """
+    # 防御：空文本 / 超长截断（前置 _truncate_for_feishu 已做，但保险起见）。
+    if not text:
+        text = "P8 Agent 已处理（无文本回复）。"
+    if len(text) > _FEISHU_CARD_MAX_TEXT_LEN:
+        text = text[: _FEISHU_CARD_MAX_TEXT_LEN - 6] + "…(截断)"
+
+    card = {
+        "config": {"wide_screen_mode": True},
+        "elements": [
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": text},
+            }
+        ],
+    }
+    return json.dumps(card, ensure_ascii=False)
 
 
 # ============================================================
@@ -539,8 +652,16 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
             )
         return
 
-    # ===== LLM 输出为空 → 兜底提示 =====
-    response_text = (llm_response or "").strip()
+    # ===== 对外展示前清洗（2026-08-19）=====
+    # 顺序：剥离 think 块 → 飞书长度截断 → 空文本兜底
+    raw_response = llm_response or ""
+    stripped_text = _strip_think_tags(raw_response)
+    response_text = _truncate_for_feishu(stripped_text)
+    if len(raw_response) != len(response_text):
+        logger.info(
+            "[%s] chat_reply_handler 输出清洗: event_id=%s raw_len=%d stripped_len=%d final_len=%d",
+            LOG_TAG, event_id, len(raw_response), len(stripped_text), len(response_text),
+        )
     if not response_text:
         logger.warning(
             "[%s] chat_reply_handler LLM 输出为空: event_id=%s job_id=%s",
@@ -548,11 +669,18 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
         )
         response_text = "P8 Agent 已处理（无文本回复）。"
 
+    # ===== 包成飞书 interactive 卡片（2026-08-19）=====
+    # 让 LLM 输出的 markdown（**加粗** / `- 列表` / `| 表格 |`）通过 lark_md 渲染。
+    # 之前 text 类型会剥成纯文本，### 和表格原样打印给用户。
+    card_content = _build_feishu_card(response_text)
+
     # ===== 回写到原飞书会话 =====
     try:
         reply_to_event(
             event_id=event_id,
             text=response_text,
+            msg_type="interactive",
+            content=card_content,
             account_id=account_id,
         )
     except GatewayError as exc:

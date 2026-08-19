@@ -393,6 +393,8 @@ class ChannelGatewayClient:
         *,
         event_id: str,
         text: str,
+        msg_type: Optional[str] = None,
+        content: Optional[str] = None,
         channel: Optional[str] = None,
         account_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
@@ -412,14 +414,31 @@ class ChannelGatewayClient:
         Args:
             event_id: 入站事件的 ``id``（``evt_xxx``）。
             text: 回复文本。
+            msg_type: 消息类型（``"text"`` / ``"interactive"`` / ``"post"``）。
+                2026-08-19：新增，让 chat_reply 适配层可发送飞书 interactive 卡片，
+                解决 LLM 输出的 markdown 在 text 类型下被剥成纯文本的问题。
+                仅当网关后端支持时生效。
+            content: 自定义 content 字符串（如飞书卡片的 JSON 字符串）。
+                ``msg_type="interactive"`` 时必传。
+                网关应原样转发到飞书 Open API 的 ``content`` 字段。
             其余参数：覆盖默认值。
         """
         if not event_id:
             raise ValueError("event_id 不能为空")
         if not text:
             raise ValueError("text 不能为空")
+        # 2026-08-19：msg_type + content 联动校验。
+        # 飞书 interactive 卡片必须带 content（card JSON 字符串）；否则网关会回退到 text。
+        if msg_type and msg_type != "text" and not content:
+            raise ValueError(
+                f"msg_type={msg_type} 时必须传 content（飞书卡片 JSON 字符串）"
+            )
 
         body: Dict[str, Any] = {"event_id": event_id, "text": text}
+        if msg_type:
+            body["msg_type"] = msg_type
+        if content is not None:
+            body["content"] = content
         if channel:
             body["channel"] = channel
         if account_id:
@@ -761,6 +780,8 @@ def reply_to_event(
     event_id: str,
     text: str,
     *,
+    msg_type: Optional[str] = None,
+    content: Optional[str] = None,
     channel: Optional[str] = None,
     account_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
@@ -770,10 +791,18 @@ def reply_to_event(
     metadata: Optional[Dict[str, Any]] = None,
     idempotency_key: Optional[str] = None,
 ) -> SendMessageResult:
-    """便捷封装：使用默认客户端回复入站事件。"""
+    """便捷封装：使用默认客户端回复入站事件。
+
+    2026-08-19 修复：模块级便捷函数原来漏传 ``msg_type`` / ``content``，
+    导致 chat_reply.py import 后调用报
+    ``reply_to_event() got an unexpected keyword argument 'msg_type'``。
+    补全这两个参数 + 透传给实例方法。
+    """
     return get_default_client().reply_to_event(
         event_id=event_id,
         text=text,
+        msg_type=msg_type,
+        content=content,
         channel=channel,
         account_id=account_id,
         conversation_id=conversation_id,
