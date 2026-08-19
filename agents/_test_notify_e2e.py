@@ -502,14 +502,13 @@ def test_build_feishu_card() -> None:
         fail(f"默认标题应为 {DEFAULT_CARD_TITLE!r}，实际: {card['header']['title']['content']}")
     if card["header"]["template"] != "red":
         fail(f"告警场景默认模板应为 red，实际: {card['header']['template']}")
-    if len(card["elements"]) != 1:
-        fail(f"仅 text 时 elements 应只有 1 项，实际: {len(card['elements'])}")
-    if card["elements"][0]["tag"] != "div":
-        fail(f"text 元素 tag 应为 div，实际: {card['elements'][0].get('tag')}")
-    if card["elements"][0]["text"]["tag"] != "lark_md":
-        fail(f"text tag 应为 lark_md（支持 markdown），实际: {card['elements'][0]['text'].get('tag')}")
-    if card["elements"][0]["text"]["content"] != "测试告警":
-        fail(f"text content 不一致: {card['elements'][0]['text']['content']}")
+    elements = card["body"]["elements"]
+    if len(elements) != 1:
+        fail(f"仅 text 时 body.elements 应只有 1 项，实际: {len(elements)}")
+    if elements[0]["tag"] != "markdown":
+        fail(f"text 元素 tag 应为 markdown（Card 2.0），实际: {elements[0].get('tag')}")
+    if elements[0]["content"] != "测试告警":
+        fail(f"markdown content 不一致: {elements[0]['content']}")
     ok("最小卡片（text only）结构正确")
 
     # 9.2 自定义标题
@@ -536,35 +535,38 @@ def test_build_feishu_card() -> None:
         title="气体浓度告警",
         alert_id="gas_20260817_001",
     )
-    if len(card["elements"]) != 2:
-        fail(f"完整卡片 elements 应为 2（div + action），实际: {len(card['elements'])}")
-    action_el = card["elements"][1]
-    if action_el["tag"] != "action":
-        fail(f"第二个元素 tag 应为 action，实际: {action_el.get('tag')}")
-    buttons = action_el["actions"]
-    if len(buttons) != 3:
-        fail(f"按钮数应为 3，实际: {len(buttons)}")
-    # 按钮 0：ack → default
-    b0 = buttons[0]
+    elements = card["body"]["elements"]
+    if len(elements) != 2:
+        fail(f"完整卡片 body.elements 应为 2（markdown + column_set），实际: {len(elements)}")
+    action_el = elements[1]
+    if action_el["tag"] != "column_set":
+        fail(f"第二个元素 tag 应为 column_set（横向布局），实际: {action_el.get('tag')}")
+    columns = action_el["columns"]
+    if len(columns) != 3:
+        fail(f"column 数应为 3（每个按钮一个 column），实际: {len(columns)}")
+    # column 0：ack → default
+    b0 = columns[0]["elements"][0]
     if b0["type"] != "default":
         fail(f"按钮 ack 应为 default，实际: {b0['type']}")
-    if b0["value"]["action"] != "ack":
-        fail(f"按钮 value.action 错误: {b0['value']}")
-    if b0["value"].get("alert_id") != "gas_20260817_001":
-        fail(f"按钮 value.alert_id 未注入: {b0['value']}")
-    # 按钮 1：handle → primary
-    b1 = buttons[1]
+    # Card 2.0 value 是 JSON 字符串（飞书强约束），需 json.loads 后访问
+    b0_value = json.loads(b0["value"])
+    if b0_value["action"] != "ack":
+        fail(f"按钮 value.action 错误: {b0_value}")
+    if b0_value.get("alert_id") != "gas_20260817_001":
+        fail(f"按钮 value.alert_id 未注入: {b0_value}")
+    # column 1：handle → primary
+    b1 = columns[1]["elements"][0]
     if b1["type"] != "primary":
         fail(f"按钮 handle 应为 primary，实际: {b1['type']}")
-    # 按钮 2：false_alarm → danger
-    b2 = buttons[2]
+    # column 2：false_alarm → danger
+    b2 = columns[2]["elements"][0]
     if b2["type"] != "danger":
         fail(f"按钮 false_alarm 应为 danger，实际: {b2['type']}")
-    ok("完整卡片：text + 3 按钮 + alert_id 注入全部正确")
+    ok("完整卡片：text + 3 横向按钮（column_set）+ alert_id 注入全部正确")
 
     # 9.5 alert_id 为空字符串 → 不写入 value
     card = build_feishu_card("x", [("已知悉", "ack")], alert_id="")
-    btn_value = card["elements"][1]["actions"][0]["value"]
+    btn_value = json.loads(card["body"]["elements"][1]["columns"][0]["elements"][0]["value"])
     if "alert_id" in btn_value:
         fail(f"空 alert_id 不应写入 value，实际: {btn_value}")
     if btn_value["action"] != "ack":
@@ -573,15 +575,17 @@ def test_build_feishu_card() -> None:
 
     # 9.6 alert_id 为 None → 不写入 value
     card = build_feishu_card("x", [("已知悉", "ack")], alert_id=None)
-    btn_value = card["elements"][1]["actions"][0]["value"]
+    btn_value = json.loads(card["body"]["elements"][1]["columns"][0]["elements"][0]["value"])
     if "alert_id" in btn_value:
         fail(f"None alert_id 不应写入 value，实际: {btn_value}")
     ok("None alert_id 不写入按钮 value")
 
-    # 9.7 config.wide_screen_mode
-    if card["config"].get("wide_screen_mode") is not True:
-        fail(f"应启用宽屏模式，实际: {card.get('config')}")
-    ok("config.wide_screen_mode=True（PC 端友好）")
+    # 9.7 Card 2.0 schema 顶层验证
+    if card.get("schema") != "2.0":
+        fail(f"Card 2.0 强制 schema='2.0'，实际: {card.get('schema')}")
+    if card["body"]["elements"][0]["tag"] != "markdown":
+        fail(f"Card 2.0 文本元素应为 markdown，实际: {card['body']['elements'][0].get('tag')}")
+    ok("Card 2.0 schema：schema='2.0' + body.elements[0].tag=markdown")
 
     # 9.8 序列化往返（ensure_ascii=False 支持中文）
     card = build_feishu_card(

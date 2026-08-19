@@ -254,6 +254,40 @@ cg:v1:<channel>:<accountId>:<sha256摘要>
 - `docs/DEPLOYMENT.md`：本机、Docker、反向代理和飞书部署；
 - `THIRD_PARTY_NOTICES.md`：上游参考与许可证说明。
 
+### 9.1 配套 Python CLI 封装（`feishu_gateway_cli/`）
+
+本目录 `feishu_gateway_cli/` 是 **Python 端的飞书通道封装层**（与 Node Gateway 物理上同目录），把 Gateway REST 接口包成易用的 Python 函数 / CLI 工具 / Gradio 配置 UI：
+
+| 文件 | 用途 |
+|------|------|
+| `feishu_gateway_cli/__init__.py` | re-export 公开 API（`send_to_group` / `send_to_user` / `start_gateway` 等） |
+| `feishu_gateway_cli/feishu_sender.py` | 主动发文本 / Card 2.0 消息；`FEISHU_USER_MAP` / `FEISHU_GROUP_MAP` 反查 |
+| `feishu_gateway_cli/feishu_receiver.py` | 入站事件轮询 / 过滤 / ACK / CLI 多维查询 |
+| `feishu_gateway_cli/feishu_card.py` | 飞书 Card 2.0 渲染 + 异步 cardkit 更新 + 字段兜底 |
+| `feishu_gateway_cli/feishu_config_app.py` | Gradio 配置 UI（USER_MAP / GROUP_MAP / 多账号编辑） |
+| `feishu_gateway_cli/start_gateway.py` | Gateway 进程启停 / 状态查询 / 重启 |
+| `feishu_gateway_cli/templates/feishu_config.html` | 配置 UI 模板 |
+| `feishu_gateway_cli/FEISHU_CHANNEL_GATEWAY.md` | **Python CLI 完整接口文档**（命令 / 函数 / env 变量 / 故障排查） |
+
+**安装方式**（在仓库根目录执行）：
+
+```bash
+pip install -e openclaw-channel-gateway-standalone/
+```
+
+**调用示例**（安装后任何脚本均可直接 import）：
+
+```python
+from feishu_gateway_cli import send_to_group, send_to_user
+send_to_group(text="【P8 通知】... ", group_name="应急响应群")
+
+# CLI
+python -m feishu_gateway_cli.start_gateway start
+python -m feishu_gateway_cli.feishu_receiver poll --once
+```
+
+> P8 业务专属的"飞书侧聊天回复"适配器（`chat_reply_handler`）不在本目录，而在仓库根 `A7/adapters/chat_reply.py`——详见 [`../../A7/adapters/chat_reply.py`](../../A7/adapters/chat_reply.py) 与 [`../../docs/P8_人机协同处置_需求与Demo设计.md` §7.5](../../docs/P8_人机协同处置_需求与Demo设计.md)。
+
 ## 10. 验证
 
 ```bash

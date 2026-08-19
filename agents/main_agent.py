@@ -46,7 +46,7 @@ from .p4_binding_agent import binding_match
 from .p5_verify_agent import verify_execute, verify_recommendation
 from .p6_monitor_agent import monitor_start, monitor_events
 from .p7_risk_agent import risk_analyze, risk_list
-from .p8_disposition_agent import disposition_create
+from .p8_disposition_agent import run_disposition_agent
 from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
 from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
 
@@ -539,7 +539,15 @@ def execute_p7(job_id: str) -> dict:
 
 
 def execute_p8(job_id: str) -> dict:
-    """执行 P8 阶段：人机协同处置"""
+    """执行 P8 阶段：人机协同处置（蓝图 § 7.4 主流程自动模式）。
+
+    流程：
+        1. 读 p7_result.json.risk_events
+        2. 调 `run_disposition_agent(message, job_id=job_id, walltime=now)` 启动 P8 Agent
+        3. Agent 内部通过 read_p7_events 工具读 P7 → update_job 写入 working_memory
+        4. P8ArchiveMiddleware 在 P8_job 进入终态时自动归档
+        5. 不在主流程等待人工决策（HITL 中断由其他通道恢复）
+    """
     log = get_stage_logger("P8")
     log.log_enter(job_id)
     p7_result = read_json_file(get_stage_result_path(job_id, "p7"))
@@ -554,24 +562,32 @@ def execute_p8(job_id: str) -> dict:
     }
 
     try:
-        disposition_tasks = []
-        for event in risk_events:
-            event_id = event.get("event_id", "")
-            if event_id:
-                logger.info(f"[P8] 调用 disposition_create.invoke: event_id={event_id}")
-                disp_result = json.loads(disposition_create.invoke(event_id))
-                log.log_tool_call("disposition_create", {"event_id": event_id}, disp_result)
-                if "result" in disp_result:
-                    disposition_tasks.append(disp_result["result"])
+        # 构造 P8 Agent 启动消息（job_id 通过 HumanMessage 内容传入；
+        # thread_id 由 run_disposition_agent 内部按 `p8-{job_id}` 生成）
+        walltime = datetime.now(timezone.utc).isoformat()
+        initial_msg = (
+            f"处理作业 {job_id} 的 P7 风险事件（共 {len(risk_events)} 个）"
+        )
+        if risk_events:
+            initial_msg += "；请先调 read_p7_events 工具读 p7_result.json"
 
-        result["disposition_tasks"] = disposition_tasks
+        logger.info(f"[P8] 启动 P8 Agent: job_id={job_id}, walltime={walltime}")
+        # P8 Agent 接管：LLM 自主决策 → update_job 写 working_memory → 中间件归档
+        p8_summary = run_disposition_agent(
+            initial_msg,
+            job_id=job_id,
+            walltime=walltime,
+        )
+        result["p8_llm_summary"] = p8_summary
         result["completed"] = True
         result["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-        if disposition_tasks:
+        # 若有 P8_job 进入 waiting_decision 则请求人工确认
+        # （简化处理：只要 P8 跑完就请求 confirm；细节后续按 working_memory 二次校验）
+        if risk_events:
             result["pending_confirmation"] = {
-                "type": "disposition_confirm",
-                "message": "请确认处置任务"
+                "type": "p8_decision",
+                "message": "P8 处置任务已创建；请查看工作记忆或飞书通知确认",
             }
 
     except Exception as e:

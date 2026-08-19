@@ -687,6 +687,7 @@ def poll_once(
                 after_sequence=0,
                 limit=POLL_LIMIT,
                 channel=channel,
+                status="pending",
             )
             seqs = [
                 int(ev.get("sequence", 0))
@@ -712,6 +713,7 @@ def poll_once(
             after_sequence=current,
             limit=POLL_LIMIT,
             channel=channel,
+            status="pending",
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
@@ -819,6 +821,7 @@ def poll_and_print(
                 after_sequence=0,
                 limit=POLL_LIMIT,
                 channel=channel,
+                status="pending",
             )
             seqs = [
                 int(ev.get("sequence", 0))

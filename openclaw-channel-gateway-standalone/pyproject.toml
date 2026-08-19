@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openclaw-channel-gateway-standalone"
+version = "1.0.0"
+description = "Python CLI tooling for the OpenClaw Channel Gateway (feishu_gateway_cli)."
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "python-dotenv>=1.0",
+]
+[project.optional-dependencies]
+# feishu_config_app 的 Flask UI；不需要 UI 时可省略
+ui = ["flask>=3.0"]
+
+[tool.hatch.build.targets.wheel]
+# 只把 feishu_gateway_cli Python 包打进 wheel；
+# 不包含 Node.js 部分（src/ start.mjs package.json ...）
+packages = ["feishu_gateway_cli"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+# feishu_config_app 的 HTML 模板作为 wheel 的 data files，
+# wheel 安装后由 importlib.resources 定位
+"feishu_gateway_cli/templates" = "feishu_gateway_cli/templates"

@@ -128,6 +128,59 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/api/feishu/card-callbacks":
             feishu_card_api.handle_card_callback_list(self)
 
+        elif path.startswith("/api/jobs/") and path.endswith("/working-memory"):
+            # 蓝图 § 8.1：P8 工作记忆快照查询
+            # 路径格式：/api/jobs/{job_id}/working-memory
+            parts = path.strip("/").split("/")
+            # 期望 ["api","jobs","{job_id}","working-memory"] → len==4
+            if len(parts) != 4 or not parts[2]:
+                logger.warning(
+                    f"[GET] /api/jobs/.../working-memory 路径非法: path={path}"
+                )
+                self.send_json(
+                    {
+                        "status": "error",
+                        "error": "路径必须是 /api/jobs/{job_id}/working-memory",
+                    },
+                    status=400,
+                )
+            else:
+                job_id = parts[2]
+                logger.info(
+                    f"[GET] /api/jobs/{job_id}/working-memory 进入: job_id={job_id}"
+                )
+                try:
+                    from A7.api.p8_working_memory_ctrl import (
+                        get_working_memory_snapshot,
+                    )
+                    result = get_working_memory_snapshot(job_id)
+                    logger.info(
+                        f"[GET] /api/jobs/{job_id}/working-memory 响应: "
+                        f"status={result.get('status')}, "
+                        f"working_count={len(result.get('working_memory') or [])}, "
+                        f"archived_count={len(result.get('archived_recent') or [])}"
+                    )
+                    self.send_json(result)
+                except ValueError as exc:
+                    # job_id 为空（控制器兜底，正常不会到这里）
+                    logger.warning(
+                        f"[GET] /api/jobs/{job_id}/working-memory 参数非法: {exc}"
+                    )
+                    self.send_json(
+                        {"status": "error", "error": str(exc)[:200]}, status=400
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        f"[GET] /api/jobs/{job_id}/working-memory 异常: {exc}"
+                    )
+                    self.send_json(
+                        {
+                            "status": "error",
+                            "error": f"internal: {exc}"[:200],
+                        },
+                        status=500,
+                    )
+
         else:
             super().do_GET()
 

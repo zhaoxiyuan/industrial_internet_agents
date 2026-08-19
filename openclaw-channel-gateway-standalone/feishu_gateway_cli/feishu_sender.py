@@ -55,6 +55,31 @@ CLI 命令（在任何项目终端运行）
     # 群聊发送【交互式 Card】（带 alert_id 但不带 option —— 仅作标识，便于后续卡片回调匹配）
     python -m feishu_gateway_cli.feishu_sender send_group --group-name "动火作业群" --text "收到请回复处理结果" --card --alert-id "job_20260817_001"
 
+--------------------------------------------------------------------------------
+多账号机器人（按 account_id 路由）
+--------------------------------------------------------------------------------
+
+所有 send_group / send_user 都可加 ``--account-id`` 选择 Gateway 上的飞书机器人账号；
+不传则走 channel_gateway_client 的默认账号（``default``，由 ``CG_DEFAULT_ACCOUNT_ID``
+控制）。凭证解析完全在 Gateway 侧完成，Python 端只做透传。
+
+配置方法（Gateway .env，多账户三级 fallback，详见 feishu_config_app 多账户表）：
+    FEISHU_APP_ID=cli_xxx                      # 默认账号（顶层 fallback）
+    FEISHU_APP_SECRET=xxx
+    FEISHU_P8_APP_ID=cli_yyy                   # account_id='P8' 专用
+    FEISHU_P8_APP_SECRET=yyy
+    FEISHU_P8_VERIFICATION_TOKEN=zzz
+
+用法示例：
+    # 群聊发送（指定 P8 bot 身份；消息由 P8 bot 发出，回调也由 P8 bot 接收）
+    python -m feishu_gateway_cli.feishu_sender send_group --chat-id oc_xxxx --text "..." --account-id "P8"
+
+    # 单聊发送（指定告警 bot 身份）
+    python -m feishu_gateway_cli.feishu_sender send_user --name "张三" --text "..." --account-id "alert-bot"
+
+    # Python API 等价（send_to_group / send_to_user 都支持 account_id 关键字参数）
+    python -c "from feishu_gateway_cli import send_to_group; send_to_group('【告警】...', chat_id='oc_xxx', account_id='P8')"
+
 注：以上示例均为单行，bash / PowerShell / CMD 直接复制即可执行。
 如要换行提升可读性：
     - bash / Git Bash：行尾加 ``\\`` 作为续行
@@ -373,8 +398,8 @@ def send_to_group(
         log_tag = f"chat_id={resolved_chat_id}（直传，不走 GROUP_MAP）"
 
     logger.info(
-        "[p8-notify] send_to_group 进入: %s text_len=%d",
-        log_tag, len(text),
+        "[p8-notify] send_to_group 进入: %s account_id=%s text_len=%d",
+        log_tag, account_id or "<default>", len(text),
     )
     try:
         result = send_message(
@@ -468,8 +493,8 @@ def send_to_user(
         log_tag = f"open_id={resolved_open_id}（直传，不走 USER_MAP）"
 
     logger.info(
-        "[p8-notify] send_to_user 进入: %s text_len=%d",
-        log_tag, len(text),
+        "[p8-notify] send_to_user 进入: %s account_id=%s text_len=%d",
+        log_tag, account_id or "<default>", len(text),
     )
     try:
         result = send_message(
@@ -606,14 +631,15 @@ def build_feishu_card(
         - ``header.template = "red"``（告警主题）
         - ``header.title``: plain_text（默认 "告警通知"）
         - ``body.elements[0]``: ``markdown``，正文 text（Card 2.0 用 markdown 而非 div+lark_md）
-        - ``body.elements[1]``: ``action`` + 按钮（仅当 options 非空时追加）
+        - ``body.elements[1]``（仅 options 非空时追加）: ``column_set`` 横向布局，
+          每个按钮一个 column；columns 默认等宽 stretch
         - 每个按钮 ``value``: JSON 字符串 ``{"action": "...", "alert_id": "..."}``
           （Card 2.0 强制 value 是 string；alert_id 缺省时不写该字段）
 
     Args:
         text: 卡片正文（飞书 ``markdown``，支持 Markdown 语法）。
         options: ``[(label, action), ...]``，按 :func:`parse_options` 解析；
-            空列表表示"纯展示卡片"，不生成按钮 action 元素。
+            空列表表示"纯展示卡片"，不生成按钮 column_set 元素。
         title: 卡片标题；空字符串回落到默认 "告警通知"。
         alert_id: 业务 ID；会写入每个按钮的 ``value`` JSON 字符串里，
             缺省时省略。
@@ -642,22 +668,34 @@ def build_feishu_card(
         },
     ]
 
-    # 按钮区（Card 2.0 不再支持 tag:"action" 容器；按钮直接放 elements 数组）
+    # 按钮区（Card 2.0 横向布局：column_set 容器，每个按钮一个 column）
     if options:
+        columns: List[Dict[str, Any]] = []
         for label, action in options:
             value_dict: Dict[str, str] = {"action": action}
             if has_alert_id:
                 value_dict[_ALERT_ID_KEY] = clean_alert_id
-            elements.append({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": label,
-                },
-                "type": get_button_type(action),
-                # Card 2.0 强制 value 是 string（dict 不行）；用紧凑 separators 跟 cardkit 一致
-                "value": json.dumps(value_dict, ensure_ascii=False, separators=(",", ":")),
+            columns.append({
+                "tag": "column",
+                "width": "auto",
+                "vertical_align": "center",
+                "elements": [{
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": label,
+                    },
+                    "type": get_button_type(action),
+                    # Card 2.0 强制 value 是 string（dict 不行）；用紧凑 separators 跟 cardkit 一致
+                    "value": json.dumps(value_dict, ensure_ascii=False, separators=(",", ":")),
+                }],
             })
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "stretch",  # 多列等宽拉伸，PC/移动端均友好
+            "background_style": "default",
+            "columns": columns,
+        })
 
     card: Dict[str, Any] = {
         "schema": "2.0",  # Card 2.0 强制

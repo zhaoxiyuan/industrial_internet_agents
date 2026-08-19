@@ -54,11 +54,30 @@
 ├── A6/                       # A6: 风险评估子系统
 │   └── agent/
 │       └── a6_agent.py      # A6 风险评估 Agent
+├── A7/                       # A7: 飞书通道 + P8 业务适配层
+│   ├── adapters/            # P8 业务专属适配器（chat_reply：飞书侧 ↔ P8 Agent）
+│   ├── prompt/              # A7 Prompt 资产
+│   ├── schema/              # A7 Pydantic Schema
+│   └── storage/             # A7 状态存储
+├── openclaw-channel-gateway-standalone/  # OpenClaw Channel Gateway (Node.js + Python CLI)
+│   ├── src/                 # Node.js Gateway 主体（监听 :8787）
+│   ├── config/              # Gateway 配置文件
+│   ├── openapi/             # OpenAPI 3.1 定义
+│   └── feishu_gateway_cli/  # 飞书通道 Python CLI 封装（与 Node Gateway 同目录）
+│       ├── __init__.py      # re-export 公开 API
+│       ├── feishu_sender.py # 主动发消息 / Card / USER+GROUP_MAP 反查
+│       ├── feishu_receiver.py # 入站事件轮询 / ACK / CLI
+│       ├── feishu_card.py   # 飞书 Card 2.0 渲染 + cardkit 更新
+│       ├── feishu_config_app.py # Gradio 配置 UI（多账号 / USER+GROUP_MAP）
+│       ├── start_gateway.py # Gateway 进程启停
+│       ├── templates/       # 配置 UI 模板
+│       └── FEISHU_CHANNEL_GATEWAY.md # Python CLI 接口文档
 ├── data/                     # 数据持久化目录
 │   └── jobs/{job_id}/       # 作业数据（application.json, p1-p10_result.json 等）
 ├── docs/                     # 文档
 │   ├── architecture.md      # 技术架构详述
 │   ├── index.md             # 执行链路
+│   ├── CHANNEL_GATEWAY_CLIENT.md # Python 客户端 API 说明
 │   └── spec/
 │       ├── SDD.md           # 软件设计说明书
 │       └── task.md          # P1-P10 阶段定义
@@ -105,7 +124,20 @@
 ┌──────────────────────────────────────────────────────────────┐
 │                   MiniMax LLM (OpenAI 兼容)                   │
 └──────────────────────────────────────────────────────────────┘
+
+                              │ P8 处置下发
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│           飞书通道 (A7/adapters + feishu_gateway_cli)        │
+│   P8 Agent → agents/channel_gateway_client (REST 客户端)     │
+│        ↓                                                      │
+│   OpenClaw Channel Gateway Standalone (Node.js :8787)        │
+│        ↓                                                      │
+│   飞书 Open Platform (群 / 单聊 / Card 2.0 / 回调)           │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+> 飞书通道由三层组成：`agents/channel_gateway_client.py`（REST 客户端叶子节点）+ `openclaw-channel-gateway-standalone/feishu_gateway_cli/`（Python CLI 封装，含 USER/GROUP_MAP 反查与 Gradio 配置 UI）+ `A7/adapters/chat_reply.py`（P8 业务专属聊天回复适配器）。详见 [`docs/CHANNEL_GATEWAY_CLIENT.md`](docs/CHANNEL_GATEWAY_CLIENT.md) 与 [`openclaw-channel-gateway-standalone/feishu_gateway_cli/FEISHU_CHANNEL_GATEWAY.md`](openclaw-channel-gateway-standalone/feishu_gateway_cli/FEISHU_CHANNEL_GATEWAY.md)。
 
 ## P1-P10 作业流程
 
@@ -164,10 +196,25 @@ OPENAI_MAX_TOKENS=2000
 ### 2. 安装依赖
 
 ```bash
+# 主项目依赖
 uv pip install -r requirements.txt
+
+# 飞书通道 CLI（必装：`web/server.py` / `agents/_test_notify_e2e.py` 均 import 它）
+pip install -e openclaw-channel-gateway-standalone/
 ```
 
-### 3. 启动 Web 服务
+> **为何要 `pip install -e`？**`openclaw-channel-gateway-standalone/feishu_gateway_cli/` 不在主项目 `requirements.txt` 里——它是 Node.js Gateway 的**配套 Python 封装**（含 Gradio 配置 UI / 启停脚本 / USER+GROUP_MAP 反查）。`web/server.py` 通过 `from feishu_gateway_cli import feishu_card` 等导入，必须以 editable 模式安装才能让该包在 `sys.path` 上。
+
+### 3. 启动 Channel Gateway（飞书通道，必需）
+
+```bash
+python -m feishu_gateway_cli.start_gateway start   # 默认 127.0.0.1:8787
+python -m feishu_gateway_cli.start_gateway status  # 查看状态
+```
+
+详细说明见 [openclaw-channel-gateway-standalone/README.md](openclaw-channel-gateway-standalone/README.md) 与 [feishu_gateway_cli/FEISHU_CHANNEL_GATEWAY.md](openclaw-channel-gateway-standalone/feishu_gateway_cli/FEISHU_CHANNEL_GATEWAY.md)。
+
+### 4. 启动 Web 服务
 
 ```bash
 python web/server.py
@@ -175,7 +222,7 @@ python web/server.py
 
 访问 http://localhost:8080 打开作业监测界面。
 
-### 4. 启动 A5/A6 监控服务（可选）
+### 5. 启动 A5/A6 监控服务（可选）
 
 ```bash
 python agents/p6_monitor_agent.py
