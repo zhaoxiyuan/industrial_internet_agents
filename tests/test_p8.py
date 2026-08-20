@@ -34,7 +34,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # 让 tests/ 能 import 项目根模块 + openclaw-channel-gateway-standalone（无 __init__.py 的子仓库）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,10 +57,33 @@ JOB_DIR = _PROJECT_ROOT / "data" / "jobs" / JOB_ID
 P7_DIR = JOB_DIR / "P7"
 P8_DIR = JOB_DIR / "P8"
 
-# 长期记忆全局目录（save_archived_job 会写这里 —— 测试需备份 + 还原）
-LONG_TERM_DIR = _PROJECT_ROOT / "data" / "jobs" / "_long_term"
-LONG_TERM_ARCHIVE = LONG_TERM_DIR / "p8_archive.json"
-LONG_TERM_INDEX = LONG_TERM_DIR / "p8_archive.index.json"
+# 长期记忆目录（2026-08-20 重构：删除全局 _long_term/，所有 P8 状态 per-job 持久化）
+# 测试隔离：备份/还原每个 data/jobs/*/P8/archived.json
+JOBS_ROOT = _PROJECT_ROOT / "data" / "jobs"
+
+
+def _backup_archived_files() -> Dict[str, Optional[bytes]]:
+    """扫描所有 data/jobs/*/P8/archived.json；备份字节内容供 setUpClass 备份。
+
+    跳过 _ 开头目录（_long_term / _legacy 等历史目录）；返回 {str(path): bytes | None}。
+    """
+    out: Dict[str, Optional[bytes]] = {}
+    for p in JOBS_ROOT.glob("*/P8/archived.json"):
+        if p.parent.parent.name.startswith("_"):
+            continue
+        out[str(p)] = p.read_bytes() if p.exists() else None
+    return out
+
+
+def _restore_archived_files(backup: Dict[str, Optional[bytes]]) -> None:
+    """tearDownClass 还原：按 backup 字典逐文件写回（None → 删除）。"""
+    for path_str, backup_bytes in backup.items():
+        p = Path(path_str)
+        if backup_bytes is not None:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(backup_bytes)
+        elif p.exists():
+            p.unlink()
 
 # 真实作业票里 2 条 A6 事件（确定性 → 测试断言不依赖随机）
 A6_FILE_1 = P7_DIR / "a6_2026-08-20T15-25-48_812704.json"
@@ -280,29 +303,18 @@ class TestApplyCardActionStateMachine(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """一次性备份全局长期记忆（save_archived_job 会写这里）。"""
-        cls._long_term_archive_backup = LONG_TERM_ARCHIVE.read_bytes() if LONG_TERM_ARCHIVE.exists() else None
-        cls._long_term_index_backup = LONG_TERM_INDEX.read_bytes() if LONG_TERM_INDEX.exists() else None
-        # 测试前清空全局归档（避免污染既有 P8_job）
+        """备份所有 per-job archived.json（2026-08-20 重构：删除全局 _long_term/）。"""
+        cls._archived_files_backup = _backup_archived_files()
+        # 测试前清空长期记忆（避免污染既有 P8_job）
         from A7.storage import reset_archive
         reset_archive()
 
     @classmethod
     def tearDownClass(cls):
-        """还原全局长期记忆（per-job working_memory 由各 test tearDown 处理）。"""
-        # 先清空，再还原（reset_archive 已把内存清空）
+        """还原所有 per-job archived.json（per-job working_memory 由各 test tearDown 处理）。"""
         from A7.storage import reset_archive
         reset_archive()
-        if cls._long_term_archive_backup is not None:
-            LONG_TERM_ARCHIVE.write_bytes(cls._long_term_archive_backup)
-        else:
-            if LONG_TERM_ARCHIVE.exists():
-                LONG_TERM_ARCHIVE.unlink()
-        if cls._long_term_index_backup is not None:
-            LONG_TERM_INDEX.write_bytes(cls._long_term_index_backup)
-        else:
-            if LONG_TERM_INDEX.exists():
-                LONG_TERM_INDEX.unlink()
+        _restore_archived_files(cls._archived_files_backup)
 
     def setUp(self):
         # 备份现有 per-job working_memory（如有）
@@ -561,25 +573,17 @@ class TestCardActionAgentE2E(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        """备份所有 per-job archived.json（2026-08-20 重构：删除全局 _long_term/）。"""
+        cls._archived_files_backup = _backup_archived_files()
         from A7.storage import reset_archive
-        cls._long_term_archive_backup = LONG_TERM_ARCHIVE.read_bytes() if LONG_TERM_ARCHIVE.exists() else None
-        cls._long_term_index_backup = LONG_TERM_INDEX.read_bytes() if LONG_TERM_INDEX.exists() else None
         reset_archive()
 
     @classmethod
     def tearDownClass(cls):
+        """还原所有 per-job archived.json（先清空 + 备份写回）。"""
         from A7.storage import reset_archive
         reset_archive()
-        if cls._long_term_archive_backup is not None:
-            LONG_TERM_ARCHIVE.write_bytes(cls._long_term_archive_backup)
-        else:
-            if LONG_TERM_ARCHIVE.exists():
-                LONG_TERM_ARCHIVE.unlink()
-        if cls._long_term_index_backup is not None:
-            LONG_TERM_INDEX.write_bytes(cls._long_term_index_backup)
-        else:
-            if LONG_TERM_INDEX.exists():
-                LONG_TERM_INDEX.unlink()
+        _restore_archived_files(cls._archived_files_backup)
 
     def setUp(self):
         self._wm_path = P8_DIR / "working_memory.json"
@@ -678,25 +682,17 @@ class TestPipelineIntegration(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        """备份所有 per-job archived.json（2026-08-20 重构：删除全局 _long_term/）。"""
+        cls._archived_files_backup = _backup_archived_files()
         from A7.storage import reset_archive
-        cls._long_term_archive_backup = LONG_TERM_ARCHIVE.read_bytes() if LONG_TERM_ARCHIVE.exists() else None
-        cls._long_term_index_backup = LONG_TERM_INDEX.read_bytes() if LONG_TERM_INDEX.exists() else None
         reset_archive()
 
     @classmethod
     def tearDownClass(cls):
+        """还原所有 per-job archived.json（先清空 + 备份写回）。"""
         from A7.storage import reset_archive
         reset_archive()
-        if cls._long_term_archive_backup is not None:
-            LONG_TERM_ARCHIVE.write_bytes(cls._long_term_archive_backup)
-        else:
-            if LONG_TERM_ARCHIVE.exists():
-                LONG_TERM_ARCHIVE.unlink()
-        if cls._long_term_index_backup is not None:
-            LONG_TERM_INDEX.write_bytes(cls._long_term_index_backup)
-        else:
-            if LONG_TERM_INDEX.exists():
-                LONG_TERM_INDEX.unlink()
+        _restore_archived_files(cls._archived_files_backup)
 
     def setUp(self):
         self._wm_path = P8_DIR / "working_memory.json"
@@ -801,25 +797,17 @@ class TestP8MainAgentE2E(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        """备份所有 per-job archived.json（2026-08-20 重构：删除全局 _long_term/）。"""
+        cls._archived_files_backup = _backup_archived_files()
         from A7.storage import reset_archive
-        cls._long_term_archive_backup = LONG_TERM_ARCHIVE.read_bytes() if LONG_TERM_ARCHIVE.exists() else None
-        cls._long_term_index_backup = LONG_TERM_INDEX.read_bytes() if LONG_TERM_INDEX.exists() else None
         reset_archive()
 
     @classmethod
     def tearDownClass(cls):
+        """还原所有 per-job archived.json（先清空 + 备份写回）。"""
         from A7.storage import reset_archive
         reset_archive()
-        if cls._long_term_archive_backup is not None:
-            LONG_TERM_ARCHIVE.write_bytes(cls._long_term_archive_backup)
-        else:
-            if LONG_TERM_ARCHIVE.exists():
-                LONG_TERM_ARCHIVE.unlink()
-        if cls._long_term_index_backup is not None:
-            LONG_TERM_INDEX.write_bytes(cls._long_term_index_backup)
-        else:
-            if LONG_TERM_INDEX.exists():
-                LONG_TERM_INDEX.unlink()
+        _restore_archived_files(cls._archived_files_backup)
 
     def setUp(self):
         self._wm_path = P8_DIR / "working_memory.json"
@@ -984,7 +972,7 @@ class TestP8MainAgentE2E(unittest.TestCase):
 
     # PA-04：LLM 调 notify_feishu（真实 Gateway :8787）
     @unittest.skipUnless(
-        _OCG_STANDALONE.exists() and _PROJECT_ROOT.joinpath("data/jobs/_long_term").exists(),
+        _OCG_STANDALONE.exists() and JOB_DIR.joinpath("P8").exists(),
         "需 openclaw-channel-gateway-standalone + 真实 Gateway",
     )
     def test_pa04_llm_calls_notify_feishu(self):
@@ -1057,27 +1045,19 @@ class TestCardClickLoopE2E(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        """备份所有 per-job archived.json（2026-08-20 重构：删除全局 _long_term/）。"""
+        cls._archived_files_backup = _backup_archived_files()
         from A7.storage import reset_archive
-        cls._long_term_archive_backup = LONG_TERM_ARCHIVE.read_bytes() if LONG_TERM_ARCHIVE.exists() else None
-        cls._long_term_index_backup = LONG_TERM_INDEX.read_bytes() if LONG_TERM_INDEX.exists() else None
         # 备份全局 card_callbacks.jsonl（避免污染既有审计）
         cls._audit_backup = cls.AUDIT_LOG.read_bytes() if cls.AUDIT_LOG.exists() else None
         reset_archive()
 
     @classmethod
     def tearDownClass(cls):
+        """还原所有 per-job archived.json + card_callbacks.jsonl。"""
         from A7.storage import reset_archive
         reset_archive()
-        if cls._long_term_archive_backup is not None:
-            LONG_TERM_ARCHIVE.write_bytes(cls._long_term_archive_backup)
-        else:
-            if LONG_TERM_ARCHIVE.exists():
-                LONG_TERM_ARCHIVE.unlink()
-        if cls._long_term_index_backup is not None:
-            LONG_TERM_INDEX.write_bytes(cls._long_term_index_backup)
-        else:
-            if LONG_TERM_INDEX.exists():
-                LONG_TERM_INDEX.unlink()
+        _restore_archived_files(cls._archived_files_backup)
         # 还原 card_callbacks.jsonl
         if cls._audit_backup is not None:
             cls.AUDIT_LOG.write_bytes(cls._audit_backup)

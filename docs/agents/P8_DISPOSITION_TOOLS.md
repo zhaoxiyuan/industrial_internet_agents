@@ -414,7 +414,7 @@ def list_active_p8_jobs() -> str:
 
 ### 用途
 
-**罗盘长期记忆 LLM 入口**。从 [`A7/storage/p8_long_term.py`](../../A7/storage/p8_long_term.py) 索引层 + 数据层接口查询历史 P8_job。仅在用户**明确**要求查询历史时调用（"昨天那个事件最后怎么处理的？"）。
+**罗盘长期记忆 LLM 入口**。从 [`A7/storage/p8_long_term.py`](../../A7/storage/p8_long_term.py) 数据层 + 索引层接口查询历史 P8_job。底层为 per-job `archived.json` 按需扫描聚合（2026-08-20 重构，删除了全局 `_long_term/` 目录）。仅在用户**明确**要求查询历史时调用（"昨天那个事件最后怎么处理的？"）。
 
 ### 「两步走」检索模式
 

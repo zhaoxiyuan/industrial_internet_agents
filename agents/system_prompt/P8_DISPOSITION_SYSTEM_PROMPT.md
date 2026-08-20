@@ -41,7 +41,7 @@
 4. 用户："要看"
 5. LLM：`recall_jobs(detail_p8_job_id="P8J-...")` → 数据层完整 archived P8Job
 
-数据源：`A7/storage/p8_long_term.py`（仓库级双层 JSON；索引层 + 数据层）。
+数据源：`A7/storage/p8_long_term.py`（per-job `archived.json` 持久化 + 跨 job 按需扫描聚合；2026-08-20 重构）。
 不要绕开此工具直接访问 A7/storage（其他代码层接入点是 P8ArchiveMiddleware，不在此暴露给 LLM）。
 
 ## 飞书回复格式约束（2026-08-19）

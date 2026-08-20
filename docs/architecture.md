@@ -428,16 +428,13 @@ industrial_internet_agents/
 
 ---
 
-## 9. P8 per-job 路径规范（2026-08-20 新增）
+## 9. P8 per-job 路径规范（2026-08-20 新增，2026-08-20 重构）
 
-P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`）；P8 在 2026-08-20 跟进，
-保留**仓库级全局**长期记忆 + **per-job** 落地：
+P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`）；P8 在 2026-08-20 跟进。
+**2026-08-20 重构**：删除全局 `data/jobs/_long_term/`，改为**单一 per-job 真相源**；跨 job 视图通过按需扫描聚合。
 
 ```
 data/jobs/
-├── _long_term/                          # 仓库级全局（行业追溯）
-│   ├── p8_archive.index.json
-│   └── p8_archive.json
 └── {job_id}/                            # 单 job 数据
     ├── application.json                 # 申请
     ├── p7_result.json                   # P7 输出（主流程聚合）
@@ -446,9 +443,9 @@ data/jobs/
     ├── P7/
     │   ├── a6_*.json                    # 每个 a6_event 单独文件
     │   └── ...
-    └── P8/                              # P8 per-job 持久化（2026-08-20 新增）
-        ├── working_memory.json          # 工作记忆 snapshot
-        ├── archived.json                # per-job 归档副本（{pid → archived dict}）
+    └── P8/                              # P8 per-job 持久化
+        ├── working_memory.json          # 工作记忆 snapshot（list[P8Job]）
+        ├── archived.json                # 长期记忆（唯一真相源；dict{pid → archived}）
         └── result.json                  # execute_p8 主流程结果
 ```
 
@@ -456,14 +453,16 @@ data/jobs/
 
 | 文件 | 写入入口 |
 |------|---------|
-| `_long_term/p8_archive{,.index}.json` | `A7.storage.p8_long_term.save_archived_job`（必写） |
-| `{job_id}/P8/archived.json` | 同上 `save_archived_job(job_id=...)` 触发 per-job 双写 |
+| `{job_id}/P8/archived.json` | `A7.storage.p8_long_term.save_archived_job(pid, job, job_id=...)`（**2026-08-20 重构**：job_id 必填；唯一长期记忆真相源） |
 | `{job_id}/P8/working_memory.json` | `P8ArchiveMiddleware.after_model`（终态归档后）<br>+ `run_disposition_agent` invoke end flush |
 | `{job_id}/P8/result.json` | `agents.main_agent.execute_p8` 结束 |
 | `{job_id}/p8_result.json` | 同上（向后兼容；1 cycle 保留期） |
 
 **Bot 模式说明**：chat_reply 解析消息正文 `[job_id=...]` 前缀；无前缀 → `job_id=None`
-→ middleware 不触发 per-job 双写 + working_memory 不 dump（临时会话无需持久化）。
+→ middleware 跳过 per-job 写（save_archived_job 抛 ValueError 提前返回）+ working_memory 不 dump（临时会话无需持久化）。
+
+**thread_id 按 job 隔离方案**：Bot 场景下 thread_id 当前仍按 `chat_id/open_id` 拼装（同群多 job 会串台）。
+完整方案设计见 [`docs/P8_BOT_THREAD_ID_按作业票隔离_方案设计.md`](P8_BOT_THREAD_ID_按作业票隔离_方案设计.md)（推荐方案 D：智能焦点 + 事件 metadata + 显式前缀兜底）。
 
 **详见**：[docs/P8_人机协同处置_文件组织与职责.md § 5.1.5](P8_人机协同处置_文件组织与职责.md#515p5.1.5)
 及 [tests/test_p8.py](../tests/test_p8.py)（28 个测试：3 PR + 4 FC + 13 AC + 2 CA + 1 PIPELINE + 4 PA + 1 PA-05 全闭环）。

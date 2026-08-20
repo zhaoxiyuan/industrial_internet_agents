@@ -202,17 +202,18 @@ LLM → notify_feishu(p8_job_id, title, body, ..., options=["已知悉:ack", "�
 
 数据源：[`A7/storage/p8_long_term.py`](../../A7/storage/p8_long_term.py)
 
-- **双层 JSON 持久化**：索引层（`p8_archive.index.json`，轻量）+ 数据层（`p8_archive.json`，完整）
-- **仓库级全局**：路径 `data/jobs/_long_term/`；跨 job_id 共享
-- **per-job 双写（2026-08-20 新增）**：每次 `save_archived_job(pid, job, job_id=...)` 额外写一份到 `data/jobs/{job_id}/P8/archived.json`（按 job 清理 / 导出用）；行业追溯靠全局文件
-- **9 个公共函数**（详见源码顶部注释块）：
-  - 写入（仅 P8ArchiveMiddleware）：`save_archived_job`
+> **2026-08-20 重构**：删除全局 `data/jobs/_long_term/`；改为单一 per-job 真相源 `data/jobs/{job_id}/P8/archived.json`，跨 job 查询通过按需扫描聚合。
+
+- **per-job 真相源**：单一文件 `data/jobs/{job_id}/P8/archived.json`（dict 结构：`p8_job_id → archived dict`）
+- **跨 job 查询**：通过 `load_all_archived_jobs()` / `search_*` 按需扫描所有 per-job 文件聚合（O(J)，J ≤ 1000）
+- **无内存缓存 / 无 lock / 无 init**：每次读直接扫盘，避免跨进程 divergence
+- **索引条目按需构造**：`_make_index_entry()` 在 `search_archived_descriptions()` 时实时计算（不再单独持久化 index 文件）
+- **7 个公共函数**（详见源码顶部注释块）：
+  - 写入（仅 P8ArchiveMiddleware / CardActionAgent）：`save_archived_job(pid, job, job_id=...)` — **job_id 必填**
   - 数据层：`get_archived_job` / `search_archived_jobs` / `load_all_archived_jobs`
-  - 索引层：`get_index_entry` / `search_archived_descriptions` / `load_all_index_entries`
-  - 维护：`reset_archive`
+  - 索引层：`get_index_entry` / `search_archived_descriptions`
+  - 维护：`reset_archive(job_id=None)`
 - **索引条目格式**：`[<max_level>] <risk_basis 前 30 字>；<decision> by <decider> @ <archived_at 截 YYYY-MM-DD HH:MM>`
-- **线程安全**：模块级 `threading.Lock` 包裹所有 IO
-- **进程重启可恢复**：模块导入时自动 `_init()` 从 JSON 加载到内存
 
 ## per-job 持久化（2026-08-20 新增）
 
@@ -221,8 +222,7 @@ P8 采用 **三层职责分离**：
 
 | 层 | 路径 | 写入入口 | 用途 |
 |----|------|---------|------|
-| **全局长期记忆** | `data/jobs/_long_term/p8_archive{,.index}.json` | `save_archived_job` 必写 | 行业追溯（recall_jobs 跨 job 检索） |
-| **per-job 归档** | `data/jobs/{job_id}/P8/archived.json` | 同上 `save_archived_job(job_id=...)` 触发 | 单 job 清理 / 导出 |
+| **per-job 归档（唯一长期记忆）** | `data/jobs/{job_id}/P8/archived.json` | `save_archived_job(pid, job, job_id=...)` 必写 | 行业追溯 + 单 job 清理 + 跨 job 聚合读取（recall_jobs / load_all_archived_jobs） |
 | **per-job working_memory** | `data/jobs/{job_id}/P8/working_memory.json` | middleware.after_model dump + run_disposition_agent invoke end flush | MemorySaver 进程内数据持久化（重启不丢） |
 | **per-job 主流程结果** | `data/jobs/{job_id}/P8/result.json` | `execute_p8` 写 | 主流程结果（命名对齐 P6/P7 扁平风格） |
 
@@ -230,7 +230,7 @@ P8 采用 **三层职责分离**：
 
 1. **`P8Job.job_id` 字段（2026-08-20 新增）**：archived dict 自带归属，`data/jobs/{job_id}/P8/archived.json` 可独立反序列化
 3. **`MemorySaver` 进程内问题**：模块级 `_p8_checkpointer = MemorySaver()` 单例，重启即丢；通过**异步 dump**到 per-job JSON 兜底
-4. **Bot 模式不持久化**：`chat_reply_handler` 无 `[job_id=...]` 前缀 → `job_id=None` → middleware 跳过双写 + working_memory 不 dump（临时会话无需持久化）
+4. **Bot 模式不持久化**：`chat_reply_handler` 无 `[job_id=...]` 前缀 → `job_id=None` → middleware 跳过 per-job 写（save_archived_job 抛 ValueError 触发提前返回）+ working_memory 不 dump（临时会话无需持久化）
 5. **路径安全**：`^[A-Za-z0-9_-]+$` 正则校验 job_id；非法 → `ValueError`
 6. **cache key 隔离**：`create_disposition_agent(user_ctx, job_id)` cache key 拼 `job={job_id}` 防 working_memory 跨 job 串台
 

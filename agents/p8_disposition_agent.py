@@ -36,11 +36,11 @@ from .utils.logging_handler import get_agent_config
 from .utils.system_prompt import load_system_prompt
 
 # ★★★ 长期记忆接入（罗盘长期记忆） ★★★
+# 2026-08-20 重构：删除全局 _long_term/ 目录，所有 P8 状态 per-job 持久化；
+# load_all_index_entries / INDEX_FILE / ARCHIVE_FILE 已废弃，不再导出。
 from A7.storage import (
-    search_archived_descriptions,   # 索引层：子串搜索（LLM "两步走" 第一步）
-    get_archived_job,              # 数据层：精确查询（LLM "两步走" 第二步）
-    load_all_index_entries,        # 索引层：列出全部（前端面板 / LLM "列出所有归档"）
-    INDEX_FILE, ARCHIVE_FILE,      # 路径常量（诊断用）
+    search_archived_descriptions,   # 索引层：子串搜索（LLM "两步走" 第一步；按需扫描 per-job）
+    get_archived_job,              # 数据层：精确查询（LLM "两步走" 第二步；按需扫描 per-job）
 )
 from A7.schema import (
     P8Job, P8JobUpdate, P8JobStatus, RiskLevel, Channel, ActionType, P8State,
@@ -839,7 +839,7 @@ def list_active_p8_jobs() -> str:
     "query: 关键词（如 '昨天可燃气体' / 'P8J-20260813-180000-001'）。"
     "默认返回索引层一句话描述（轻量；最多 20 条）；如需完整归档详情，"
     "请再用 detail_p8_job_id='<p8_job_id>' 再调一次。"
-    "★ 长期记忆入口（罗盘长期记忆）：数据源 = A7/storage/p8_long_term.py"
+    "★ 长期记忆入口（罗盘长期记忆）：数据源 = A7/storage/p8_long_term.py（per-job ``archived.json`` 按需扫描聚合）"
 ))
 def recall_jobs(query: str, detail_p8_job_id: Optional[str] = None) -> str:
     """从长期记忆查询历史 P8_job（罗盘长期记忆 LLM 工具入口）。
@@ -877,9 +877,9 @@ def recall_jobs(query: str, detail_p8_job_id: Optional[str] = None) -> str:
         ), ensure_ascii=False)
 
     # === 路径 B：索引层子串搜索（"两步走" 第一步 — 拿概览） ===
+    # 2026-08-20 重构：删除 "if not query: hits = load_all_index_entries()" 分支——
+    # line 858 已 guard 空 query（query 与 detail_p8_job_id 至少给一个），此分支不可达。
     hits = search_archived_descriptions(query, limit=20)
-    if not query:
-        hits = load_all_index_entries()
 
     return json.dumps(make_response(
         "recall_jobs (index)",
