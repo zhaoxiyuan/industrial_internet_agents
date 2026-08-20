@@ -756,11 +756,14 @@ def notify_feishu(
 
         # 构造 Card 2.0 JSON dict（必带 options 按钮）
         resolved_alert_id = alert_id or push_msg.p8_job_id
+        # 2026-08-20 新增：透传 job_id 给 build_feishu_card（卡片 callback 反查 per-job 目录用）
+        resolved_job_id = job_id or push_msg.job_id
         card = build_feishu_card(
             text=push_msg.body,                    # 卡片正文用 body（title 走 header）
             options=parsed_options,                # ★ 必带按钮（hits HITL 回调）
             title=push_msg.title,
             alert_id=resolved_alert_id,            # 默认 alert_id=p8_job_id
+            job_id=resolved_job_id,                # 2026-08-20 新增：主流程作业 ID
         )
 
         result = send_to_group_card(

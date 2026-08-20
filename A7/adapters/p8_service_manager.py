@@ -9,17 +9,17 @@ P8 联调需要同时启动三类进程：
 
 用法：
     # CLI
-    python agents/p8_service_manager.py                # 默认 start
-    python agents/p8_service_manager.py start
-    python agents/p8_service_manager.py stop
-    python agents/p8_service_manager.py restart
-    python agents/p8_service_manager.py status
-    python agents/p8_service_manager.py start --foreground gateway   # 仅前台跑 gateway
-    python agents/p8_service_manager.py start --no-wait-health      # 不等健康检查
-    python agents/p8_service_manager.py stop --force                 # 强杀（gateway 默认走它自己的 --force）
+    python A7/adapters/p8_service_manager.py                # 默认 start
+    python A7/adapters/p8_service_manager.py start
+    python A7/adapters/p8_service_manager.py stop
+    python A7/adapters/p8_service_manager.py restart
+    python A7/adapters/p8_service_manager.py status
+    python A7/adapters/p8_service_manager.py start --foreground gateway   # 仅前台跑 gateway
+    python A7/adapters/p8_service_manager.py start --no-wait-health      # 不等健康检查
+    python A7/adapters/p8_service_manager.py stop --force                 # 强杀（gateway 默认走它自己的 --force）
 
     # Python API
-    from agents.p8_service_manager import start_all, stop_all, status_all
+    from A7.adapters.p8_service_manager import start_all, stop_all, status_all
     start_all()
     status_all()
     stop_all()
@@ -424,7 +424,7 @@ def status_all() -> dict:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="agents.p8_service_manager",
+        prog="A7.adapters.p8_service_manager",
         description=(
             "P8 服务管理（Channel Gateway + chat_reply + Web server）："
             "一键 start/stop/restart/status"

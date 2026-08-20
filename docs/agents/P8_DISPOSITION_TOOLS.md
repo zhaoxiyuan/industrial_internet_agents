@@ -406,7 +406,7 @@ def list_active_p8_jobs() -> str:
 |--------|------|
 | 前端 Web 面板 | `GET /api/jobs/{job_id}/working-memory`（[`A7/api/p8_working_memory_ctrl.py`](../../A7/api/p8_working_memory_ctrl.py)） |
 | chat_reply daemon | 自动把 working_memory 快照拼到 LLM 回复下方 |
-| 单元测试 | [`tests/test_a7_api_p8_working_memory.py`](../../tests/test_a7_api_p8_working_memory.py) |
+| 单元测试 | [`tests/test_p8.py`](../../tests/test_p8.py)（AC-* 覆盖 per-job working_memory dump + 终态双写长期记忆；PA-* 覆盖 P8 主 Agent 6 个工具的真实 LLM 端到端调用 + PA-05 验证卡片推送→点击回调→CardActionAgent 全闭环） |
 
 ---
 

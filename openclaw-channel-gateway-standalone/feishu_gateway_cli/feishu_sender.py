@@ -551,6 +551,9 @@ def send_to_user(
 DEFAULT_CARD_TITLE: str = "告警通知"
 # alert_id 缺省时使用的 JSON key 哨兵（前端按此判断是否写入 value）
 _ALERT_ID_KEY: str = "alert_id"
+# 2026-08-20 新增：job_id 缺省时使用的 JSON key 哨兵（与 _ALERT_ID_KEY 同模式）
+# 用于卡片回调时反查主流程作业 ID（不依赖 alert_id 反查 card_index 即可定位 job）
+_JOB_ID_KEY: str = "job_id"
 
 
 def parse_options(raw_options: Optional[List[str]]) -> List[Tuple[str, str]]:
@@ -623,6 +626,7 @@ def build_feishu_card(
     options: List[Tuple[str, str]],
     title: str = DEFAULT_CARD_TITLE,
     alert_id: Optional[str] = None,
+    job_id: Optional[str] = None,    # 2026-08-20 新增：主流程作业 ID（callback 反查用）
 ) -> Dict[str, Any]:
     """构建飞书交互式卡片 JSON dict（不调用网络；Card 2.0 schema）。
 
@@ -633,8 +637,9 @@ def build_feishu_card(
         - ``body.elements[0]``: ``markdown``，正文 text（Card 2.0 用 markdown 而非 div+lark_md）
         - ``body.elements[1]``（仅 options 非空时追加）: ``column_set`` 横向布局，
           每个按钮一个 column；columns 默认等宽 stretch
-        - 每个按钮 ``value``: JSON 字符串 ``{"action": "...", "alert_id": "..."}``
-          （Card 2.0 强制 value 是 string；alert_id 缺省时不写该字段）
+        - 每个按钮 ``value``: JSON 字符串
+          ``{"action": "...", "alert_id": "...", "job_id": "..."}``
+          （Card 2.0 强制 value 是 string；alert_id / job_id 缺省时不写该字段）
 
     Args:
         text: 卡片正文（飞书 ``markdown``，支持 Markdown 语法）。
@@ -643,6 +648,9 @@ def build_feishu_card(
         title: 卡片标题；空字符串回落到默认 "告警通知"。
         alert_id: 业务 ID；会写入每个按钮的 ``value`` JSON 字符串里，
             缺省时省略。
+        job_id: 2026-08-20 新增：主流程作业 ID；与 alert_id 同模式写入 value；
+            卡片回调时由 feishu_card._extract_action 反查，按钮点击后由
+            CardActionAgent 用 job_id 定位 per-job working_memory.json。
 
     Returns:
         Card JSON dict（可直接 ``json.dumps(..., ensure_ascii=False)``）。
@@ -660,6 +668,9 @@ def build_feishu_card(
     # alert_id 空白视为 None（不写入 value）
     has_alert_id = bool(alert_id and str(alert_id).strip())
     clean_alert_id = str(alert_id).strip() if has_alert_id else None
+    # 2026-08-20 新增：job_id 同模式处理
+    has_job_id = bool(job_id and str(job_id).strip())
+    clean_job_id = str(job_id).strip() if has_job_id else None
 
     elements: List[Dict[str, Any]] = [
         {
@@ -675,6 +686,9 @@ def build_feishu_card(
             value_dict: Dict[str, str] = {"action": action}
             if has_alert_id:
                 value_dict[_ALERT_ID_KEY] = clean_alert_id
+            # 2026-08-20 新增：job_id 写入 value（callback 反查用）
+            if has_job_id:
+                value_dict[_JOB_ID_KEY] = clean_job_id
             columns.append({
                 "tag": "column",
                 "width": "auto",

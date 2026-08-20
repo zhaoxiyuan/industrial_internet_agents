@@ -36,7 +36,7 @@
 | `update_job` | 用户创建/更新处置任务 | 创建或更新 P8_job（reducer 按 pid upsert to working_memory）。**2026-08-20 新增 `job_id` 入参** —— P8Job 自带归属，archived dict 可按作业定位 / 清理 | ✅ 需要确认 |
 | `hitl_decide` | 用户进入 HITL 决策 | 强制 channel=HITL + status=waiting_decision | ✅ 需要确认 |
 | `read_p7_events` | 用户查看 P7 风险事件 | 读 `data/jobs/{job_id}/p7_result.json` | ❌ 自动批准 |
-| `notify_feishu` | channel=PUSH 决策完成后推送 | **飞书交互式卡片推送（2026-08-19 重构走 feishu_sender 封装）** | ✅ 需要确认 |
+| `notify_feishu` | channel=PUSH 决策完成后推送 | **飞书交互式卡片推送（2026-08-19 重构走 feishu_sender 封装）**。**2026-08-20 新增**：透传 `job_id` 给 `build_feishu_card`，写入每个按钮 `value.job_id`（callback 反查用） | ✅ 需要确认 |
 | `list_active_p8_jobs` | 用户列出当前 in-progress P8_job | 读 working_memory（仅占位，REST 走 `/api/jobs/{job_id}/working-memory`） | ❌ 自动批准 |
 | `recall_jobs` | 用户明确查询历史（"昨天那个事件最后怎么处理的"） | **长期记忆查询（罗盘长期记忆 LLM 入口）**：索引层子串搜索 + 数据层精确查询；两步走检索模式 | ❌ 自动批准（只读） |
 
@@ -251,4 +251,44 @@ P8 采用 **三层职责分离**：
 - **跨进程"伪恢复"** → `MemorySaver` 注入是 best-effort；完整持久化建议后续迁移 SqliteSaver
 
 **详见**：[`docs/P8_人机协同处置_文件组织与职责.md` § 5.1.5](../../docs/P8_人机协同处置_文件组织与职责.md)
-及 [`tests/test_a7_p8_per_job_persistence.py`](../../tests/test_a7_p8_per_job_persistence.py)（17 个测试）。
+及 [`tests/test_p8.py`](../../tests/test_p8.py)（28 个测试：3 PR-读真实 P7 + 4 FC-飞书卡片 + 13 AC-状态机 + 2 CA-真实 LLM E2E + 1 PIPELINE-端到端管道 + 4 PA-P8 主 Agent LLM 端到端 + 1 PA-05-卡片推送→点击回调→CardActionAgent 全闭环）。
+
+## 卡片按钮回调 → CardActionAgent（2026-08-20 新增）
+
+飞书卡片按钮点击**现**会真正驱动 P8_job 状态变更（之前只写审计 + 视觉替换）。
+
+### 链路
+
+```
+飞书用户点击按钮
+   ↓ Gateway /webhooks/feishu → web /api/feishu/card-callback
+feishu_card.process_card_callback
+   ├─ _write_audit(record)              ← 同步：审计 JSONL
+   ├─ _replace_card_async(...)          ← daemon：删原卡 + 重发绿卡（视觉替换）
+   └─ _handle_card_action_with_llm_async(...)  ← daemon（2026-08-20 新增）
+        └─ A7.middleware.p8_card_action_agent.run_card_action_agent(...)
+             └─ apply_card_action 工具（闭包绑 job_id）
+                  ├─ load_working_memory(job_id)         读 per-job JSON
+                  ├─ 计算新 status / decision（按 ACTION_TO_STATUS 映射表）
+                  ├─ dump_working_memory(job_id, ...)     原子写 per-job JSON
+                  └─ 终态 → save_archived_job(..., job_id=job_id)  全局+per-job 双写
+```
+
+### 与 P8 处置 Agent 的差异
+
+| 维度 | P8 处置 Agent | CardActionAgent（slim） |
+|------|---------------|-------------------------|
+| 入口函数 | `run_disposition_agent` | `run_card_action_agent` |
+| checkpointer | `MemorySaver`（单例） | **无**（fire-and-forget） |
+| HITL middleware | `HumanInTheLoopMiddleware` | **无**（异步链路不再二次确认） |
+| 工具数 | 6（update_job/hitl_decide/...） | 1（apply_card_action） |
+| 持久化 | middleware.after_model + flush | 工具内部直接 dump + 双写 |
+| system_prompt | P8_DISPOSITION_SYSTEM_PROMPT | P8_CARD_ACTION_SYSTEM_PROMPT（slim） |
+
+### 反向路径：`alert_id → job_id`
+
+旧实现下，card callback 拿到的 `alert_id` 必须经过 `data/feishu_card_index.json` 反查 → `card_id` → `message_id` 才能关联到主流程 job_id。**现在**卡片推送时即把 `job_id` 写入 `value.job_id`，callback 直接透传，无中间反查步骤。
+
+**向后兼容**：旧卡片（action.value 缺 `job_id`）→ `_handle_card_action_with_llm_async` 检测 `job_id is None` → 直接跳过，**仅走审计 + 视觉替换**，不影响既有行为。
+
+详见：[`P8_CARD_ACTION_AGENT.md`](P8_CARD_ACTION_AGENT.md)

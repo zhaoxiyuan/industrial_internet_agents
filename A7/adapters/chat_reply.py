@@ -95,7 +95,7 @@ chat_reply_handler(event) 单事件处理（按调用顺序）：
 
 本模块**不**实现以下职责：
 
-    - 持续轮询 / daemon 进程管理   → agents.p8_service_manager / 手动启停
+    - 持续轮询 / daemon 进程管理   → A7.adapters.p8_service_manager / 手动启停
     - 入站事件拉取 / 过滤 / ACK     → feishu_gateway_cli.feishu_receiver
     - 消息拼装 / Card 渲染 / 按钮回调 → feishu_gateway_cli.feishu_sender / feishu_card
     - LLM 内部推理 / 工具调用 / 工作记忆 → agents.p8_disposition_agent
