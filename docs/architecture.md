@@ -187,7 +187,9 @@ main_agent.py: confirm_and_continue(thread_id, stage, decision)
     ┌─────────────────────────────────────────────────────┐
     │ P8: execute_p8()                                    │
     │  disposition_create (遍历风险事件)                   │
-    │  → 保存 p8_result.json                              │
+    │  → 保存 p8_result.json（向后兼容）                  │
+    │  → 保存 P8/result.json（per-job 新约定，2026-08-20）│
+    │  → middleware 自动归档 → per-job 双写 + dump        │
     │  → pending: 处置任务确认                            │
     └─────────────────────────────────────────────────────┘
           ↓ 用户确认
@@ -423,3 +425,45 @@ industrial_internet_agents/
 ├── CLAUDE.md                   # Claude Code 指导文件
 └── requirements.txt            # Python 依赖
 ```
+
+---
+
+## 9. P8 per-job 路径规范（2026-08-20 新增）
+
+P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`）；P8 在 2026-08-20 跟进，
+保留**仓库级全局**长期记忆 + **per-job** 落地：
+
+```
+data/jobs/
+├── _long_term/                          # 仓库级全局（行业追溯）
+│   ├── p8_archive.index.json
+│   └── p8_archive.json
+└── {job_id}/                            # 单 job 数据
+    ├── application.json                 # 申请
+    ├── p7_result.json                   # P7 输出（主流程聚合）
+    ├── p8_result.json                   # P8 输出快照（向后兼容保留 1 cycle）
+    ├── P6/                              # P6 per-job 产物
+    ├── P7/
+    │   ├── a6_*.json                    # 每个 a6_event 单独文件
+    │   └── ...
+    └── P8/                              # P8 per-job 持久化（2026-08-20 新增）
+        ├── working_memory.json          # 工作记忆 snapshot
+        ├── archived.json                # per-job 归档副本（{pid → archived dict}）
+        └── result.json                  # execute_p8 主流程结果
+```
+
+**写入时机**：
+
+| 文件 | 写入入口 |
+|------|---------|
+| `_long_term/p8_archive{,.index}.json` | `A7.storage.p8_long_term.save_archived_job`（必写） |
+| `{job_id}/P8/archived.json` | 同上 `save_archived_job(job_id=...)` 触发 per-job 双写 |
+| `{job_id}/P8/working_memory.json` | `P8ArchiveMiddleware.after_model`（终态归档后）<br>+ `run_disposition_agent` invoke end flush |
+| `{job_id}/P8/result.json` | `agents.main_agent.execute_p8` 结束 |
+| `{job_id}/p8_result.json` | 同上（向后兼容；1 cycle 保留期） |
+
+**Bot 模式说明**：chat_reply 解析消息正文 `[job_id=...]` 前缀；无前缀 → `job_id=None`
+→ middleware 不触发 per-job 双写 + working_memory 不 dump（临时会话无需持久化）。
+
+**详见**：[docs/P8_人机协同处置_文件组织与职责.md § 5.1.5](P8_人机协同处置_文件组织与职责.md#515p5.1.5)
+及 [tests/test_a7_p8_per_job_persistence.py](../tests/test_a7_p8_per_job_persistence.py)（17 个测试）。

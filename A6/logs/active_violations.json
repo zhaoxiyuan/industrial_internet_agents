@@ -1,10 +1,10 @@
 {
   "P7+ppe缺失": {
-    "a6_event_id": "A6-20260813-094556-646",
+    "a6_event_id": "A6-20260820-141955-295",
     "person_id": "P7",
     "violation_type": "PPE缺失",
-    "first_seen": "2026-08-13T09:45:00.700",
-    "last_seen": "2026-08-13T09:45:08.700",
+    "first_seen": "2026-08-20T14:19:22.145",
+    "last_seen": "2026-08-20T14:19:28.145",
     "duration_sec": 0,
     "status": "ongoing"
   }

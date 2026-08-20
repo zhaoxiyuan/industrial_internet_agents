@@ -186,9 +186,32 @@ class AgentLoggingCallback(BaseCallbackHandler):
         self._log(logging.ERROR, f"!!! 工具调用错误: {tool_name} - {str(error)}")
 
     def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], **kwargs) -> None:
-        """Chain 入口"""
-        chain_name = serialized.get("name", serialized.get("id", ["unknown"])[-1])
-        self._log(logging.INFO, f">>> Chain 开始: {chain_name}", {"inputs": _truncate_content(inputs, 300)})
+        """Chain 入口
+
+        注意：langchain 在内部组件（RunnableLambda、Pregel 子节点、checkpoint loader 等）
+        触发 on_chain_start 时，serialized 可能是 None（不是 dict）。这是 langchain 的
+        标准合约 —— callback 必须能容忍 serialized=None 的情况。我们之前直接
+        `serialized.get(...)` 会抛 AttributeError('NoneType' object has no attribute 'get')，
+        表现为 WARNING 但不致命（langchain 内部 try/except 包裹）。
+        """
+        # langchain 标准合约：serialized 允许为 None（如内部子组件、checkpoint loader）
+        if not isinstance(serialized, dict):
+            chain_name = "internal"
+        else:
+            name = serialized.get("name")
+            if name:
+                chain_name = str(name)
+            else:
+                # serialized["id"] 通常是 ['langchain', 'schema', 'runnable'] 这种 list
+                rid = serialized.get("id")
+                if isinstance(rid, list) and rid:
+                    chain_name = str(rid[-1])
+                elif rid:
+                    chain_name = str(rid)
+                else:
+                    chain_name = "unknown"
+        # inputs 也可能为 None（如内部组件无入参），同样防御
+        self._log(logging.INFO, f">>> Chain 开始: {chain_name}", {"inputs": _truncate_content(inputs, 300) if inputs else {}})
 
     def on_chain_end(self, outputs: Dict[str, Any], **kwargs) -> None:
         """Chain 出口"""

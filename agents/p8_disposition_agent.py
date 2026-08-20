@@ -118,24 +118,109 @@ def _format_user_context_block(user_ctx: Optional[Dict[str, str]]) -> str:
     )
 
 
-def _user_ctx_cache_key(user_ctx: Optional[Dict[str, str]], variant: str) -> str:
-    """user_ctx → cache key 字符串。
+# ============================================================
+# job_id 注入 + bootstrap（2026-08-20 新增）
+# ============================================================
+# 设计要点：
+# - **job_id → system_prompt 段**：让 LLM 明确知道当前作业归属，避免跨 job 串台
+# - **cache key 含 job_id**：同 user_ctx 不同 job 必须各自独立 agent 实例
+#   （否则 working_memory / 长期归档按 thread_id 隔离但 system_prompt 串台）
+# - **bootstrap：仅 log 加载状态，不强制 put 到 MemorySaver**
+#   （MemorySaver 进程内特性，跨重启"伪恢复"不可靠；强制 put 风险大于收益）
+# - **invoke end flush**：调用方（run_disposition_agent）主动 dump，
+#   保证下一次启动能读到最新 working_memory
+
+_JOB_ID_BLOCK_TEMPLATE: str = """
+
+
+---
+
+## 当前主流程作业（2026-08-20 新增）
+
+- **作业 ID**：`{job_id}`
+
+P8 工作记忆 / 长期归档均归属此 job；按此作业清理 per-job 文件时定位用。
+"""
+
+
+def _format_job_id_block(job_id: Optional[str]) -> str:
+    """job_id → system_prompt 末尾追加的"当前作业"段；None/空 → 返回空串。
+
+    Args:
+        job_id: 主流程作业 ID；None / 空 → 返回空串（Bot 模式或无作业上下文）
+
+    Returns:
+        Markdown 格式的"当前作业"段；None/空 → 空串
+    """
+    if not job_id:
+        return ""
+    return _JOB_ID_BLOCK_TEMPLATE.format(job_id=job_id)
+
+
+def _bootstrap_working_memory_into_checkpointer(job_id: str) -> None:
+    """启动时从 per-job JSON 加载 working_memory（伪恢复，仅 log）。
+
+    Note:
+        - 不强制 put 到 MemorySaver（避免污染 reducer 状态）
+        - MemorySaver 进程内特性决定跨进程"伪恢复"不可靠
+        - 加载失败不阻断 agent 创建（仅 logger.warning）
+        - 完整持久化建议升级 SqliteSaver（参见方案 C 决策 D1）
+    """
+    try:
+        from A7.storage.p8_working_memory_store import load_working_memory
+        working = load_working_memory(job_id)
+        if not working:
+            logger.info("P8 bootstrap: job_id=%s per-job 文件为空/不存在", job_id)
+            return
+        config = {"configurable": {"thread_id": f"p8-{job_id}"}}
+        existing_snapshot = _p8_checkpointer.get(config)
+        existing_working = (
+            existing_snapshot.get("channel_values", {}).get("working_memory", [])
+            if existing_snapshot else []
+        )
+        if existing_working:
+            logger.info(
+                "P8 bootstrap: job_id=%s 已有 %d 条 working_memory，跳过加载",
+                job_id, len(existing_working),
+            )
+            return
+        # 仅 log（不强制 put；MemorySaver 进程内单例，跨重启不持久）
+        logger.info(
+            "P8 bootstrap: job_id=%s 从 per-job JSON 读到 %d 条 working_memory"
+            "（MemorySaver 跨重启需 SqliteSaver；当前仅在 invoke end flush 持久化）",
+            job_id, len(working),
+        )
+    except Exception as exc:
+        logger.warning(
+            "P8 bootstrap: job_id=%s 加载失败（不阻断 agent 创建）: %s",
+            job_id, exc,
+        )
+
+
+def _user_ctx_cache_key(
+    user_ctx: Optional[Dict[str, str]],
+    variant: str,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
+) -> str:
+    """user_ctx + variant + job_id → cache key 字符串。
 
     Args:
         user_ctx: 身份 dict；None 表示"无身份"模式。
-        variant: agent 变体标识（"basic" / "hitl"）。
+        variant:  agent 变体标识（"basic" / "hitl"）。
+        job_id:   2026-08-20 新增。主流程作业 ID；None → Bot 模式占位。
 
     Returns:
         cache key 字符串（json.dumps 保证 dict 稳定哈希；None 用固定 sentinel）。
+        同 user_ctx 不同 job_id 必须返回不同 key（防止 working_memory 串台）。
     """
     if user_ctx is None:
-        return f"{variant}:<none>"
-    try:
-        ctx_json = json.dumps(user_ctx, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        # user_ctx 含不可 JSON 序列化的值（如 datetime）→ 用 repr 兜底
-        ctx_json = repr(sorted(user_ctx.items()))
-    return f"{variant}:{ctx_json}"
+        ctx_part = "<none>"
+    else:
+        try:
+            ctx_part = json.dumps(user_ctx, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            ctx_part = repr(sorted(user_ctx.items()))
+    return f"{variant}:{ctx_part}:job={job_id or '<none>'}"
 
 
 # Agent 缓存：按 (variant, user_ctx) 复用 compiled graph 实例。
@@ -240,6 +325,7 @@ def update_job(
     level: str,
     risk_basis: str,
     p8_job_id: Optional[str] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增：主流程作业 ID（per-job 持久化依据）
     status: Optional[str] = None,
     channel: Optional[str] = None,
     note: Optional[str] = None,
@@ -252,6 +338,9 @@ def update_job(
         level:        风险等级（LOW/MEDIUM/HIGH/CRITICAL）—— LLM 从 a6 events 推断
         risk_basis:   风险依据（拼接各 a6_event 的 basis；聚合 P8_job 必须记录聚合原因）
         p8_job_id:    None → 新建；已存在 ID → 更新该 P8_job
+        job_id:       2026-08-20 新增。主流程作业 ID（如 JOB-20260813-001 / 17 位时间戳）；
+                      透传到 working_memory / 长期归档 → per-job 清理依据。
+                      Bot 模式 + 无作业上下文场景可留 None。
         status:       要变更的目标状态（pending/notified/waiting_decision/...）
         channel:      要设置的通道（HITL/PUSH）
         note:         要追加的备注（覆盖式）
@@ -286,11 +375,12 @@ def update_job(
             recoverable=False,
         ), ensure_ascii=False))
 
-    # 验证 P8JobUpdate（自动校验 a6_event_ids 唯一性 + p8_job_id 格式）
+    # 验证 P8JobUpdate（自动校验 a6_event_ids 唯一性 + p8_job_id 格式 + job_id 透传）
     try:
         update = P8JobUpdate(
             a6_event_ids=a6_event_ids,
             p8_job_id=p8_job_id,
+            job_id=job_id,                 # 2026-08-20 新增
             status=P8JobStatus(status) if status else None,
             channel=Channel(channel) if channel else None,
             note=note,
@@ -308,6 +398,7 @@ def update_job(
 
     job: dict[str, Any] = {
         "p8_job_id":      update.p8_job_id or _gen_p8_job_id(),
+        "job_id":         update.job_id,       # 2026-08-20 新增：主流程作业归属
         "a6_event_ids":   list(update.a6_event_ids),
         "risk_basis":     risk_basis,
         "max_level":      level_enum,
@@ -418,23 +509,31 @@ def hitl_decide(
 
 
 # ============================================================
-# 工具 3：read_p7_events — 读 p7_result.json（蓝图 § 7 工具 5）
+# 工具 3：read_p7_events — 读 P7 风险研判产物（蓝图 § 7 工具 5）
+# ============================================================
+# 2026-08-20 修复：P6/P7 per-job 化后，A6 评估文件路径由
+# `data/jobs/{job_id}/p7_result.json`（主流程聚合）改为
+# `data/jobs/{job_id}/P7/a6_*.json`（per-job 阶段产物，每个文件 = 一条 risk event）。
+# 本工具同时扫两个位置，主流程产物优先（向后兼容）；per-job 目录追加。
 # ============================================================
 @tool(description=(
-    "读取 P7 风险研判阶段输出（data/jobs/{job_id}/p7_result.json）。"
-    "返回 risk_event 列表（每个 event 含 event_id / level / risk_basis / ...）。"
+    "读取 P7 风险研判阶段输出，返回 risk_event 列表"
+    "（每个 event 含 event_id / level / risk_basis / suggestions ...）。\n"
+    "数据源（按优先级合并）：\n"
+    "  1) 主流程格式：data/jobs/{job_id}/p7_result.json（events 或 risk_events 数组）\n"
+    "  2) per-job 格式：data/jobs/{job_id}/P7/a6_*.json（每个文件 = 一条 risk event）\n"
     "Bot 模式下用户在群内问『这个作业有什么风险』时调用。"
 ))
 def read_p7_events(job_id: str) -> str:
     """读取 P7 阶段产出的风险事件列表。
 
     Args:
-        job_id: 主流程作业 ID（如 JOB-20260813-001）
+        job_id: 主流程作业 ID（如 JOB-20260813-001 / 17 位时间戳）
 
     Returns:
         标准 JSON 响应：
-        - 找到 p7_result.json → {"status":"ok", "events":[...]}
-        - 文件缺失 → {"status":"ok", "events":[]}（空列表而非 404）
+        - 找到 P7 数据 → {"status":"ok", "events":[...], "sources":[...]}
+        - 无任何 P7 数据 → {"status":"ok", "events":[]}（空列表而非 404）
     """
     if not job_id:
         return json.dumps(make_error(
@@ -443,30 +542,77 @@ def read_p7_events(job_id: str) -> str:
             recoverable=False,
         ), ensure_ascii=False)
 
-    # 项目根 = <root>/agents/p8_disposition_agent.py → parent.parent.parent
-    project_root = Path(__file__).resolve().parent.parent.parent
-    p7_path = project_root / "data" / "jobs" / job_id / "p7_result.json"
-
-    if not p7_path.exists():
-        # 不抛 404 — 蓝图 § 8.1 约定：缺数据 → 空列表
-        return json.dumps(make_response(
-            "read_p7_events",
-            {"job_id": job_id, "events": [], "note": "p7_result.json 不存在"},
-        ), ensure_ascii=False)
-
+    # 使用 file_utils.get_job_dir（与 P6/P7 per-job 路径解析一致；
+    # 之前用 Path(__file__).parent.parent.parent 会多解一层到 agent-skill/ 而非 industrial_internet_agents/）
     try:
-        data = json.loads(p7_path.read_text(encoding="utf-8"))
+        from agents.workflow.file_utils import get_job_dir
+        job_dir = Path(get_job_dir(job_id))
     except Exception as exc:
         return json.dumps(make_error(
-            code="P7_READ_FAILED",
-            message=f"p7_result.json 解析失败: {exc}"[:200],
+            code="P7_PATH_RESOLVE_FAILED",
+            message=f"job_dir 解析失败: {exc}"[:200],
             recoverable=True,
         ), ensure_ascii=False)
 
-    events = data.get("events", []) or data.get("risk_events", []) or []
+    events: list = []
+    sources: list = []
+
+    # === 1) 主流程格式（向后兼容）===
+    p7_result_path = job_dir / "p7_result.json"
+    if p7_result_path.exists():
+        try:
+            data = json.loads(p7_result_path.read_text(encoding="utf-8"))
+            main_events = data.get("events", []) or data.get("risk_events", []) or []
+            events.extend(main_events)
+            sources.append("p7_result.json")
+        except Exception as exc:
+            return json.dumps(make_error(
+                code="P7_READ_FAILED",
+                message=f"p7_result.json 解析失败: {exc}"[:200],
+                recoverable=True,
+            ), ensure_ascii=False)
+
+    # === 2) per-job 格式（P6/P7 独立触发的真实数据）===
+    p7_dir = job_dir / "P7"
+    if p7_dir.exists() and p7_dir.is_dir():
+        a6_files = sorted(p7_dir.glob("a6_*.json"))
+        for f in a6_files:
+            try:
+                a6 = json.loads(f.read_text(encoding="utf-8"))
+            except Exception as exc:
+                # 单文件损坏不阻断整体读取（参考 P7_READ_FAILED 处理但降级为 warning）
+                logger.warning(f"[read_p7_events] 跳过损坏文件 {f.name}: {exc}")
+                continue
+            # 映射 a6_*.json → 标准 risk event 结构
+            events.append({
+                "event_id":         a6.get("a6_event_id"),
+                "type":             a6.get("event_type"),
+                "risk_level":       a6.get("risk_level"),
+                "risk_level_name":  a6.get("risk_level_name"),
+                "risk_basis":       a6.get("risk_basis"),
+                "suggestions":      a6.get("suggestions", []) or [],
+                "reasoning":        a6.get("reasoning"),
+                "evidence":         a6.get("evidence", {}) or {},
+                "involved_persons": a6.get("involved_persons", []) or [],
+                "first_seen":       a6.get("first_seen"),
+                "last_seen":        a6.get("last_seen"),
+                "wall_time":        a6.get("wall_time"),
+                "timestamp":        a6.get("timestamp"),
+                "source_file":      f.name,
+            })
+        if a6_files:
+            sources.append(f"P7/a6_*.json({len(a6_files)})")
+
+    # 无任何 P7 数据 → 蓝图 § 8.1：缺数据 → 空列表（不抛 404）
+    if not sources:
+        return json.dumps(make_response(
+            "read_p7_events",
+            {"job_id": job_id, "events": [], "note": "P7 数据不存在（p7_result.json 与 P7/ 均未找到）"},
+        ), ensure_ascii=False)
+
     return json.dumps(make_response(
         "read_p7_events",
-        {"job_id": job_id, "events": events, "event_count": len(events)},
+        {"job_id": job_id, "events": events, "event_count": len(events), "sources": sources},
     ), ensure_ascii=False)
 
 
@@ -749,21 +895,36 @@ def recall_jobs(query: str, detail_p8_job_id: Optional[str] = None) -> str:
 # Agent 工厂（蓝图 § 7）
 # ============================================================
 
-def create_disposition_agent(user_ctx: Optional[Dict[str, str]] = None):
+def create_disposition_agent(
+    user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
+):
     """创建 P8 人机协同处置 Agent（基础版本，无 HITL）。
 
     蓝图 § 7：state_schema=P8State, middleware=[HITL, Archive],
     checkpointer=_p8_checkpointer；无 HITL 版本不挂 HITL middleware（仅 Archive）。
+
+    2026-08-20 改造：
+    - ``job_id`` 非空时 → middleware 触发 per-job 双写 + working_memory dump
+    - 启动时若 job_id 非空，懒加载 ``data/jobs/{job_id}/P8/working_memory.json``
+      （伪恢复，详见 :func:`_bootstrap_working_memory_into_checkpointer`）
+    - cache key 拼接 ``job={job_id}`` 防止 working_memory 跨 job 串台
 
     Args:
         user_ctx: 2026-08-19 新增。chat_reply_handler 构造的"当前用户"身份 dict，
                   含 ``role`` / ``name`` / ``open_id`` 字段（未识别时含 ``note``）。
                   注入到 system_prompt 末尾，让 LLM 知道跟谁对话、避免幻觉身份。
                   默认 None（Gradio / 离线调用场景，无身份注入）。
+        job_id:   2026-08-20 新增。主流程作业 ID；非空时启用 per-job 持久化。
+                  Bot 模式 + 无作业上下文场景传 None。
     """
-    cache_key = _user_ctx_cache_key(user_ctx, "basic")
+    cache_key = _user_ctx_cache_key(user_ctx, "basic", job_id=job_id)
     if cache_key in _AGENT_CACHE:
         return _AGENT_CACHE[cache_key]
+
+    # 2026-08-20 新增：启动时 bootstrap working_memory
+    if job_id:
+        _bootstrap_working_memory_into_checkpointer(job_id)
 
     llm = create_chat_model_with_logging("P8")
     tools = [
@@ -771,33 +932,47 @@ def create_disposition_agent(user_ctx: Optional[Dict[str, str]] = None):
         notify_feishu, list_active_p8_jobs, recall_jobs,
     ]
 
-    sys_prompt = load_system_prompt("P8") + _format_user_context_block(user_ctx)
+    sys_prompt = (
+        load_system_prompt("P8")
+        + _format_user_context_block(user_ctx)
+        + _format_job_id_block(job_id)   # 2026-08-20 新增
+    )
 
     agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=sys_prompt,
         state_schema=P8State,
-        middleware=[P8ArchiveMiddleware()],
+        middleware=[P8ArchiveMiddleware(job_id=job_id)],   # 2026-08-20：透传
         checkpointer=_p8_checkpointer,
     )
     _AGENT_CACHE[cache_key] = agent
     return agent
 
 
-def create_disposition_agent_with_hitl(user_ctx: Optional[Dict[str, str]] = None):
+def create_disposition_agent_with_hitl(
+    user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
+):
     """创建 P8 人机协同处置 Agent - 支持 HumanInTheLoop（蓝图 § 7）。
 
     HumanInTheLoopMiddleware 在指定工具调用前中断等待人工确认；
     P8ArchiveMiddleware 在 after_model 自动归档终态 P8_job。
 
+    2026-08-20 改造：同 :func:`create_disposition_agent`，``job_id`` 透传到 middleware。
+
     Args:
         user_ctx: 同 create_disposition_agent。chat_reply 默认走基础版（非 HITL），
                   此参数保留以保持 API 对称、便于未来切换。
+        job_id:   2026-08-20 新增。主流程作业 ID；非空时启用 per-job 持久化。
     """
-    cache_key = _user_ctx_cache_key(user_ctx, "hitl")
+    cache_key = _user_ctx_cache_key(user_ctx, "hitl", job_id=job_id)
     if cache_key in _AGENT_CACHE:
         return _AGENT_CACHE[cache_key]
+
+    # 2026-08-20 新增：启动时 bootstrap working_memory
+    if job_id:
+        _bootstrap_working_memory_into_checkpointer(job_id)
 
     llm = create_chat_model_with_logging("P8")
     tools = [
@@ -816,14 +991,18 @@ def create_disposition_agent_with_hitl(user_ctx: Optional[Dict[str, str]] = None
         }
     )
 
-    sys_prompt = load_system_prompt("P8") + _format_user_context_block(user_ctx)
+    sys_prompt = (
+        load_system_prompt("P8")
+        + _format_user_context_block(user_ctx)
+        + _format_job_id_block(job_id)   # 2026-08-20 新增
+    )
 
     agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=sys_prompt,
         state_schema=P8State,
-        middleware=[hitl_middleware, P8ArchiveMiddleware()],
+        middleware=[hitl_middleware, P8ArchiveMiddleware(job_id=job_id)],   # 2026-08-20：透传
         checkpointer=_p8_checkpointer,
     )
     _AGENT_CACHE[cache_key] = agent
@@ -839,8 +1018,12 @@ def run_disposition_agent(
     *,
     thread_id: str = "default",
     user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
 ) -> str:
     """运行 P8 人机协同处置 Agent（基础版，无 HITL）。
+
+    2026-08-20 改造：``job_id`` 非空时 → invoke end 自动
+    :func:`flush_working_memory` 持久化 working_memory 到 per-job JSON。
 
     Args:
         message:   用户消息
@@ -852,14 +1035,29 @@ def run_disposition_agent(
         user_ctx:  2026-08-19 新增。chat_reply 注入的"当前用户"身份 dict。
                    透传到 create_disposition_agent，按 user_ctx 复用 agent 实例。
                    **不**影响 thread_id。
+        job_id:    2026-08-20 新增。主流程作业 ID；非空时启用 per-job 持久化。
+                   Bot 模式 + 无作业上下文场景传 None（不持久化）。
     """
-    agent = create_disposition_agent(user_ctx=user_ctx)
+    agent = create_disposition_agent(user_ctx=user_ctx, job_id=job_id)
     agent_config = get_agent_config(
         thread_id=thread_id,
         agent_name="P8",
         llm_params=get_llm_params(),
     )
     result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
+
+    # 2026-08-20 新增：invoke end flush working_memory 到 per-job JSON
+    # flush 失败不阻断 LLM 输出（已成功 invoke；持久化是 best-effort）
+    if job_id:
+        try:
+            from A7.storage.p8_working_memory_store import flush_working_memory
+            flush_working_memory(job_id)
+        except Exception as exc:
+            logger.warning(
+                "run_disposition_agent: flush_working_memory(%s) 失败: %s",
+                job_id, exc,
+            )
+
     return extract_output(result)
 
 
@@ -869,6 +1067,7 @@ def disposition_demo(
     *,
     user_ctx: Optional[Dict[str, str]] = None,
     thread_id: Optional[str] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增：主流程作业 ID
 ) -> str:
     """Gradio ChatInterface / chat_reply 兼容入口（chat_reply.py L330 硬依赖）。
 
@@ -880,6 +1079,10 @@ def disposition_demo(
         - ``thread_id``（2026-08-19 新增）：chat_reply 按"群=chat_id / 单聊=open_id"
           决定 LangGraph checkpointer key。``None`` → 回退 ``"default"``
           （向后兼容过渡版 / 单元测试）。
+    2026-08-20 新增第三个 keyword-only 参数：
+        - ``job_id``：chat_reply 从消息正文 ``[job_id=...]`` 解析或 None（Bot 临时会话）。
+          透传到 ``run_disposition_agent`` → middleware 触发 per-job 持久化。
+          ``None`` → 不持久化（D5 决策：Bot 临时会话不持久 working_memory）。
 
     Args:
         message:   用户消息文本。
@@ -887,10 +1090,12 @@ def disposition_demo(
         user_ctx:  chat_reply_handler 构造的"当前用户"身份 dict（keyword-only）。
         thread_id: LangGraph thread_id（keyword-only；``None`` 回退 ``"default"``）。
                    Bot 模式由 chat_reply 注入；主流程 / 测试可显式指定。
+        job_id:    2026-08-20 新增。主流程作业 ID（keyword-only；``None`` → Bot 临时会话）。
     """
     # 历史参数仅用于 Gradio 兼容；P8 状态由 MemorySaver 通过 thread_id 维护
     return run_disposition_agent(
         message,
         user_ctx=user_ctx,
         thread_id=thread_id or "default",   # ← None 回退 "default"（向后兼容）
+        job_id=job_id,                      # 2026-08-20 透传
     )

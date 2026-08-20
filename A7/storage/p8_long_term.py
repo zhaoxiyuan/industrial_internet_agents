@@ -46,10 +46,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("p8_long_term")
 
 
 # ============================================================================
@@ -60,6 +64,30 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 LONG_TERM_DIR = _PROJECT_ROOT / "data" / "jobs" / "_long_term"
 INDEX_FILE = LONG_TERM_DIR / "p8_archive.index.json"   # 索引层
 ARCHIVE_FILE = LONG_TERM_DIR / "p8_archive.json"       # 数据层
+
+
+# ============================================================================
+# 2026-08-20 新增：per-job 归档路径（P6/P7 per-job 化延续）
+# ============================================================================
+def _get_job_archive_path(job_id: str) -> Path:
+    """获取 per-job 归档文件路径：data/jobs/{job_id}/P8/archived.json。
+
+    Args:
+        job_id: 主流程作业 ID
+
+    Returns:
+        Path 对象（**不**自动创建目录；调用方按需 mkdir）
+
+    Raises:
+        ValueError: job_id 为空或含非法字符（path traversal 防护）
+    """
+    if not job_id or not isinstance(job_id, str):
+        raise ValueError("[p8_long_term] _get_job_archive_path: job_id 必须为非空字符串")
+    # path traversal 防护：仅允许 [A-Za-z0-9_-]
+    if not re.match(r"^[A-Za-z0-9_-]+$", job_id):
+        raise ValueError(f"[p8_long_term] _get_job_archive_path: job_id 非法: {job_id!r}")
+    from agents.workflow.file_utils import get_job_dir
+    return Path(get_job_dir(job_id)) / "P8" / "archived.json"
 
 # ============================================================================
 # 模块级状态（in-memory cache；磁盘为权威）
@@ -223,7 +251,11 @@ _init()
 # [3] 写入入口（仅 P8ArchiveMiddleware 调用 — LLM 不调）
 # ============================================================================
 
-def save_archived_job(p8_job_id: str, archived_job: dict) -> bool:
+def save_archived_job(
+    p8_job_id: str,
+    archived_job: dict,
+    job_id: Optional[str] = None,   # 2026-08-20 新增：可选 per-job 双写触发
+) -> bool:
     """保存归档 P8_job（覆盖式）；同时更新索引层；写后立即落盘。
 
     ★★★ 长期记忆写入入口（罗盘长期记忆） ★★★
@@ -233,6 +265,8 @@ def save_archived_job(p8_job_id: str, archived_job: dict) -> bool:
     Args:
         p8_job_id: 归档 P8_job 的标识符（如 "P8J-20260813-180000-001"）
         archived_job: 完整 archived P8Job dict（含 summary / archived_at 等附加字段）
+        job_id: 2026-08-20 新增：主流程作业 ID；不为空时**额外**写 per-job 归档文件
+                （向后兼容：旧调用方不传时仅写全局）
 
     Returns:
         True 成功
@@ -245,9 +279,14 @@ def save_archived_job(p8_job_id: str, archived_job: dict) -> bool:
         - 双层一致性：索引层与数据层**同时**更新；任一写盘失败抛异常（不部分写入）
         - 自动生成索引条目：调用 _make_index_entry() 生成一句话描述
         - 写入后立即落盘（不依赖进程退出）
+        - per-job 双写失败仅警告（全局已成功；不影响 LLM 行为）
     """
     if not p8_job_id:
         raise ValueError("[p8_long_term] save_archived_job: p8_job_id 不能为空")
+
+    # 2026-08-20 新增：注入 job_id 到 archived_job（确保 archived dict 自带归属）
+    if job_id and "job_id" not in archived_job:
+        archived_job = {**archived_job, "job_id": job_id}
 
     with _lock:
         # 1. 更新内存 dict
@@ -262,6 +301,26 @@ def save_archived_job(p8_job_id: str, archived_job: dict) -> bool:
             # 回滚内存（数据层已写盘，但保持内存与磁盘一致）
             # 注意：磁盘数据层已写入，但调用方可以重试；若重试需要传相同参数幂等
             raise
+
+        # 3. 2026-08-20 新增：per-job 双写（仅 job_id 非空时）
+        if job_id:
+            try:
+                job_archive_path = _get_job_archive_path(job_id)
+                existing = _load_json(job_archive_path) if job_archive_path.exists() else {}
+                existing[p8_job_id] = archived_job
+                job_archive_path.parent.mkdir(parents=True, exist_ok=True)
+                _flush_json(job_archive_path, existing)
+                logger.info(
+                    "[p8_long_term] per-job 双写: job_id=%s pid=%s path=%s",
+                    job_id, p8_job_id, job_archive_path,
+                )
+            except Exception as exc:
+                # per-job 写失败仅警告（全局层已成功；不影响 LLM 行为）
+                logger.warning(
+                    "[p8_long_term] per-job 双写失败: job_id=%s, pid=%s, err=%s",
+                    job_id, p8_job_id, exc,
+                )
+                # 不向上抛（向后兼容：旧调用方不依赖 per-job）
 
         return True
 

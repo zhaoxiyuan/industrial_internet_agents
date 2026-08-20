@@ -41,6 +41,7 @@ def update_job(
     level: str,
     risk_basis: str,
     p8_job_id: Optional[str] = None,
+    job_id: Optional[str] = None,           # 2026-08-20 新增
     status: Optional[str] = None,
     channel: Optional[str] = None,
     note: Optional[str] = None,
@@ -56,6 +57,7 @@ def update_job(
 | `level` | `str` | ✅ | 风险等级：`LOW` / `MEDIUM` / `HIGH` / `CRITICAL` |
 | `risk_basis` | `str` | ✅ | 风险依据（拼接各 a6_event 的 basis；聚合 P8_job 必须记录聚合原因） |
 | `p8_job_id` | `Optional[str]` | ❌ | `None` → 新建（自动生成 `P8J-YYYYMMDD-HHMMSS-NNN`）；已有 ID → 更新该 P8_job |
+| `job_id` | `Optional[str]` | ❌ | **2026-08-20 新增**。主流程作业 ID（如 `JOB-20260813-001` / 17 位时间戳）；透传到 working_memory / 长期归档 → per-job 持久化依据。Bot 模式 + 无作业上下文可留 None。 |
 | `status` | `Optional[str]` | ❌ | 目标状态（`pending` / `notified` / `waiting_decision` / `completed` / `rejected` / ...） |
 | `channel` | `Optional[str]` | ❌ | 通道：`HITL` / `PUSH` |
 | `note` | `Optional[str]` | ❌ | 备注（覆盖式） |
@@ -492,7 +494,10 @@ def recall_jobs(
 ### 签名
 
 ```python
-def create_disposition_agent(user_ctx: Optional[Dict[str, str]] = None) -> CompiledStateGraph:
+def create_disposition_agent(
+    user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
+) -> CompiledStateGraph:
 ```
 
 ### 入参
@@ -500,6 +505,7 @@ def create_disposition_agent(user_ctx: Optional[Dict[str, str]] = None) -> Compi
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `user_ctx` | `Optional[Dict[str, str]]` | ❌ | chat_reply_handler 构造的 dict，含 `role` / `name` / `open_id`（未识别时含 `note`）。注入到 system_prompt 末尾；同身份复用 Agent 实例（cache key = `json.dumps(user_ctx, sort_keys=True)`） |
+| `job_id` | `Optional[str]` | ❌ | **2026-08-20 新增**。主流程作业 ID；非空时启用 per-job 持久化（middleware 触发 `data/jobs/{job_id}/P8/archived.json` 双写 + working_memory dump）。Bot 模式 + 无作业上下文传 `None`。cache key 拼 `job={job_id}` 防止 working_memory 跨 job 串台。 |
 
 ### 出参
 
@@ -533,8 +539,18 @@ def create_disposition_agent(user_ctx: Optional[Dict[str, str]] = None) -> Compi
 ### 签名
 
 ```python
-def create_disposition_agent_with_hitl(user_ctx: Optional[Dict[str, str]] = None) -> CompiledStateGraph:
+def create_disposition_agent_with_hitl(
+    user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
+) -> CompiledStateGraph:
 ```
+
+### 入参
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `user_ctx` | `Optional[Dict[str, str]]` | ❌ | 同 7。chat_reply_handler 构造的 dict；同身份复用 Agent 实例（cache key = `"hitl:<user_ctx_json>:job=<job_id>"`） |
+| `job_id` | `Optional[str]` | ❌ | **2026-08-20 新增**。主流程作业 ID；非空时启用 per-job 持久化（middleware 触发 `data/jobs/{job_id}/P8/archived.json` 双写 + working_memory dump）。Bot 模式 + 无作业上下文传 `None`。cache key 拼 `job={job_id}` 防止 working_memory 跨 job 串台（与基础版相同语义）。 |
 
 ### HITL 中断矩阵
 
@@ -557,9 +573,9 @@ HumanInTheLoopMiddleware(interrupt_on={
 
 | 项 | 基础版 | HITL 版 |
 |---|---|---|
-| `middleware` | `[P8ArchiveMiddleware()]` | `[HumanInTheLoopMiddleware(...), P8ArchiveMiddleware()]` |
+| `middleware` | `[P8ArchiveMiddleware(job_id=job_id)]` | `[HumanInTheLoopMiddleware(...), P8ArchiveMiddleware(job_id=job_id)]` |
 | 写入类工具 | 直接执行 | 中断等待 `confirm_and_continue(...)` |
-| cache key | `"basic:<user_ctx_json>"` | `"hitl:<user_ctx_json>"` |
+| cache key | `"basic:<user_ctx_json>:job=<job_id>"` | `"hitl:<user_ctx_json>:job=<job_id>"` |
 | 适用场景 | 单元测试 / 离线仿真 | chat_reply 生产 / 前端交互 |
 
 ---
@@ -578,6 +594,7 @@ def run_disposition_agent(
     *,
     thread_id: str = "default",
     user_ctx: Optional[Dict[str, str]] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增
 ) -> str:
 ```
 
@@ -596,10 +613,11 @@ def run_disposition_agent(
 ### 调用链
 
 ```
-run_disposition_agent(message, thread_id=..., user_ctx=...)
-  → agent = create_disposition_agent(user_ctx=user_ctx)
+run_disposition_agent(message, thread_id=..., user_ctx=..., job_id=...)
+  → agent = create_disposition_agent(user_ctx=user_ctx, job_id=job_id)
   → agent_config = get_agent_config(thread_id=thread_id, agent_name="P8", llm_params=...)
   → result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
+  → if job_id: flush_working_memory(job_id)   # 2026-08-20 新增：invoke end dump
   → extract_output(result)
 ```
 
@@ -620,6 +638,7 @@ def disposition_demo(
     *,
     user_ctx: Optional[Dict[str, str]] = None,
     thread_id: Optional[str] = None,
+    job_id: Optional[str] = None,   # 2026-08-20 新增：主流程作业 ID
 ) -> str:
 ```
 
@@ -631,6 +650,7 @@ def disposition_demo(
 | `history` | `list` | ❌ 默认 `None` | Gradio 兼容参数（**不使用**；P8 状态由 MemorySaver 通过 thread_id 维护） |
 | `user_ctx` | `Optional[Dict[str, str]]` | ❌ | chat_reply_handler 注入身份（keyword-only） |
 | `thread_id` | `Optional[str]` | ❌ | LangGraph thread_id（keyword-only；`None` 回退 `"default"`） |
+| `job_id` | `Optional[str]` | ❌ | **2026-08-20 新增**。主流程作业 ID（keyword-only）。chat_reply_handler 从消息正文 `[job_id=...]` 前缀解析；无前缀 → `None`（Bot 临时会话，不写 per-job 文件）。 |
 
 ### 出参
 
@@ -643,6 +663,7 @@ return run_disposition_agent(
     message,
     user_ctx=user_ctx,
     thread_id=thread_id or "default",   # ← None 回退 "default"（向后兼容）
+    job_id=job_id,                      # 2026-08-20 透传
 )
 ```
 

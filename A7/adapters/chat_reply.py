@@ -136,8 +136,28 @@ from agents.channel_gateway_client import (
     GatewayError,
     ack_event,
     reply_to_event,
+    SendMessageResult,
 )
 from agents.p8_disposition_agent import disposition_demo
+
+# 2026-08-20：reply_to_event 重试机制 + outbox 持久化。
+# - tenacity 装饰器对 safe 错误做指数退避重试（1s/2s/4s，最多 3 次）
+# - ambiguous 错误落盘 data/runtime/feishu_outbox/，等手动/worker 重发
+# - 详见 docs/AGENT_REPLY_RETRY.md（待写）与 chat_reply_handler 注释
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    retry_if_exception,
+)
+
+from A7.adapters.feishu_outbox import (
+    enqueue_failed_reply,
+    list_outbox,
+    retry_outbox,
+    OUTBOX_DIR,
+)
 
 # 2026-08-19：FEISHU_USER_MAP 反查 key（.env 的 JSON 字符串变量名）。
 # 数据形态：``{"ou_xxx": {"role": "...", "name": "李宗睿"}}``。
@@ -195,10 +215,90 @@ _FEISHU_TRUNCATE_RESERVED: int = len(_FEISHU_TRUNCATE_TAIL)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%%Y-%m-%d %H:%M:%S",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("A7.chat_reply")
 logger.setLevel(logging.INFO)
+
+
+# ============================================================
+# 1.6 reply_to_event 重试配置（2026-08-20）
+# ============================================================
+
+# safe 错误最大重试次数（含首次调用）。1s/2s/4s 指数退避后仍失败 → 放弃 + ACK。
+REPLY_RETRY_MAX_ATTEMPTS: int = 3
+REPLY_RETRY_BASE_DELAY: float = 1.0   # 第 1 次退避 1s
+REPLY_RETRY_MAX_DELAY: float = 8.0    # 上限 8s（实际：1s, 2s, 4s）
+
+
+def _classify_gateway_error(exc: GatewayError) -> str:
+    """根据 Gateway 错误字段把失败分三档。
+
+    Returns:
+        - ``"safe"``       : ``retryable=True`` 且 ``ambiguous=False``
+                             → 安全重试（如 token 阶段失败，消息未发出）
+        - ``"ambiguous"``  : ``ambiguous=True``
+                             → 飞书实际是否收到未知；需 idempotency_key 防重复
+        - ``"permanent"``  : ``retryable=False`` 且 ``ambiguous=False``
+                             → 永久失败（4xx / VALIDATION_ERROR），重试无意义
+    """
+    if exc.ambiguous:
+        return "ambiguous"
+    if exc.retryable:
+        return "safe"
+    return "permanent"
+
+
+def _is_safe_error(exc: BaseException) -> bool:
+    """tenacity predicate：仅对 safe 错误触发重试。
+
+    ambiguous（飞书是否收到未知）**不**重试 —— 立即落盘 outbox
+    等手动/worker 重发（同 idempotency_key 防重复）。这样：
+    - safe 错误（临时网络）→ 自动重试恢复，消息最终可达
+    - ambiguous 错误（状态未知）→ 不浪费 7s 等待，立即落盘 + ACK
+
+    permanent（4xx / VALIDATION_ERROR）显然不重试。
+    """
+    return (
+        isinstance(exc, GatewayError)
+        and _classify_gateway_error(exc) == "safe"
+    )
+
+
+@retry(
+    # 注意：用 ``retry_if_exception_type(...) & retry_if_exception(...)`` 复合，
+    # 不用 ``retry_if_exception_type(...) and _is_retryable_gateway_error`` —
+    # 后者会被 Python ``and`` 短路求值返回函数（不是 RetryError 复合），
+    # tenacity 启动时不会报错但实际行为不符预期。
+    retry=(
+        retry_if_exception_type(GatewayError)
+        & retry_if_exception(_is_safe_error)
+    ),
+    wait=wait_exponential(multiplier=REPLY_RETRY_BASE_DELAY, max=REPLY_RETRY_MAX_DELAY),
+    stop=stop_after_attempt(REPLY_RETRY_MAX_ATTEMPTS),
+    reraise=True,
+    before_sleep=lambda rs: logger.warning(
+        "[%s] reply_to_event 重试: attempt=%d/%d exc=%s",
+        LOG_TAG, rs.attempt_number, REPLY_RETRY_MAX_ATTEMPTS, rs.outcome.exception(),
+    ),
+)
+def _reply_with_safe_retry(
+    event_id: str,
+    text: str,
+    *,
+    account_id: Optional[str],
+    idempotency_key: str,
+) -> SendMessageResult:
+    """safe / ambiguous 错误自动重试；permanent 直接抛 GatewayError 由调用方处理。
+
+    重试耗尽后 tenacity ``reraise=True`` 重抛原始 GatewayError。
+    """
+    return reply_to_event(
+        event_id=event_id,
+        text=text,
+        account_id=account_id,
+        idempotency_key=idempotency_key,
+    )
 
 
 # ============================================================
@@ -698,12 +798,14 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
     # ===== 调 LLM（disposition_demo = P8 独立对话模式统一入口）=====
     # 2026-08-19：thread_id 落地 —— 群=chat_id / 单聊=open_id，确保 MemorySaver
     # 按会话隔离 working_memory 与 messages（之前默认 "default" 多群串台）。
+    # 2026-08-20：job_id 透传（解析 [job_id=...] 后，None → Bot 临时会话不持久化）
     try:
         llm_response = disposition_demo(
             human_message,
             history=None,
             user_ctx=user_ctx,
             thread_id=thread_id,
+            job_id=job_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
@@ -765,18 +867,51 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
     #   1. "好的/已收到" 这种短回复包卡片视觉冗余（红 header + 边框）
     #   2. markdown 格式约束已在 system_prompt 约束 LLM 输出（禁 ### / __）
     #   3. 真正需要可交互卡片的场景（告警/处置）由工具层负责，与普通对话解耦
+    # idempotency_key：reply-{event_id} 让 Gateway 同 key 去重
+    # （防重投+重试双重发送 — 这是 ambiguous 场景能重发的关键）
+    reply_idem_key = f"reply-{event_id}"
     try:
-        reply_to_event(
+        _reply_with_safe_retry(
             event_id=event_id,
             text=response_text,
             account_id=account_id,
+            idempotency_key=reply_idem_key,
         )
     except GatewayError as exc:
-        logger.error(
-            "[%s] chat_reply_handler reply_to_event 失败: event_id=%s err=%s",
-            LOG_TAG, event_id, exc,
-        )
-        # 回写失败时仍 ACK（避免无限重投；用户可手动重发）
+        category = _classify_gateway_error(exc)
+        if category == "safe":
+            # 极端网络中断：safe 重试 3 次后仍 fail；ACK 让 Gateway 不再重投
+            logger.error(
+                "[%s] reply_to_event safe 重试耗尽: event_id=%s err=%s "
+                "code=%s retryable=%s ambiguous=%s intent_id=%s",
+                LOG_TAG, event_id, exc, exc.code, exc.retryable,
+                exc.ambiguous, exc.details.get("intent_id"),
+            )
+        elif category == "ambiguous":
+            # 飞书是否收到未知：落盘 outbox 等手动/worker 重发（同 idempotency_key 防重复）
+            outbox_path = enqueue_failed_reply(
+                event_id=event_id,
+                text=response_text,
+                account_id=account_id,
+                idempotency_key=reply_idem_key,
+                channel="feishu",
+                error_code=exc.code,
+                error_message=exc.message,
+                intent_id=exc.details.get("intent_id"),
+                request_id=exc.request_id,
+            )
+            logger.error(
+                "[%s] reply_to_event ambiguous → 落盘 outbox: event_id=%s path=%s "
+                "code=%s retryable=%s ambiguous=%s intent_id=%s",
+                LOG_TAG, event_id, outbox_path, exc.code, exc.retryable,
+                exc.ambiguous, exc.details.get("intent_id"),
+            )
+        else:
+            # permanent（4xx / VALIDATION_ERROR）：重试无意义；直接 ACK
+            logger.error(
+                "[%s] reply_to_event permanent: event_id=%s code=%s msg=%s",
+                LOG_TAG, event_id, exc.code, exc.message,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "[%s] chat_reply_handler reply_to_event 异常: event_id=%s err=%s",

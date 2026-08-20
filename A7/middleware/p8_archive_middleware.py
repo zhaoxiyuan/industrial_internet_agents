@@ -19,10 +19,16 @@
    - 用 `__p8__delete__` 哨兵删除 working_memory 中已归档条目（reducer 接受）
    - `long_term_memory` 是 plain dict，LangGraph 默认 `merge` 语义（覆盖同 pid）
 
+5. **2026-08-20 改造**：__init__ 接收 ``job_id`` 参数，非空时透传给 save_archived_job 触发
+   per-job 双写；归档成功后调 :func:`dump_working_memory` 持久化"删后 working_memory"到
+   ``data/jobs/{job_id}/P8/working_memory.json``，解决 MemorySaver 进程内丢失。
+
 依赖：
 - `langchain.agents.middleware.AgentMiddleware` —— LangGraph 1.x 钩子
 - `A7.schema.p8_state._TERMINAL_STATUSES` —— 终态判定
+- `A7.schema.p8_state._working_memory_reducer` —— 模拟 reducer 应用 delete_sentinels
 - `A7.storage.p8_long_term.save_archived_job` —— 长期记忆写入
+- `A7.storage.p8_working_memory_store.dump_working_memory` —— per-job working_memory dump
 """
 from __future__ import annotations
 
@@ -32,7 +38,7 @@ from typing import Any, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 
-from A7.schema.p8_state import _TERMINAL_STATUSES
+from A7.schema.p8_state import _TERMINAL_STATUSES, _working_memory_reducer
 
 logger = logging.getLogger("p8_archive_middleware")
 
@@ -72,6 +78,19 @@ def _summarize_p8_job(job: dict) -> str:
     return " | ".join(parts)
 
 
+def _apply_sentinels_for_dump(existing: list, sentinels: list) -> list:
+    """模拟 reducer 应用 delete_sentinels，用于 dump（middleware 不依赖真实 reducer chain）。
+
+    Args:
+        existing: 当前 working_memory 列表
+        sentinels: 哨兵 list（元素形如 ``{"__p8__delete__": pid}``）
+
+    Returns:
+        应用哨兵后的新 list（不修改原引用）
+    """
+    return _working_memory_reducer(existing, sentinels)
+
+
 class P8ArchiveMiddleware(AgentMiddleware):
     """P8 归档中间件：监听 working_memory 终态 → 自动归档到长期记忆。
 
@@ -80,16 +99,30 @@ class P8ArchiveMiddleware(AgentMiddleware):
     `A7.storage.p8_long_term.save_archived_job()` 持久化，并通过
     `__p8__delete__` 哨兵从 working_memory 移除。
 
+    2026-08-20 新增：``__init__(job_id=None)`` 接收主流程作业 ID。非空时：
+    - ``save_archived_job`` 触发 ``data/jobs/{job_id}/P8/archived.json`` per-job 双写
+    - 归档成功后 ``dump_working_memory(job_id, remaining)`` 持久化删后 working_memory
+
     Returns:
         - 若扫描到任意终态 P8_job → `{"working_memory": [sentinels], "long_term_memory": {pid: archived}}`
         - 若无终态 P8_job → `None`（不修改 state；零开销）
 
     Failure modes:
         - `save_archived_job` 抛异常 → logger.exception，不向上抛（保留 in working_memory 等待重试）
+        - `dump_working_memory` 抛异常 → logger.warning，不向上抛（dump 不阻断 LLM 行为）
         - 无效字段（缺 p8_job_id / status）→ 跳过该 job（不影响其他 job 归档）
     """
 
     name: str = "P8ArchiveMiddleware"  # LangGraph 标识
+
+    def __init__(self, job_id: Optional[str] = None) -> None:
+        """初始化。
+
+        Args:
+            job_id: 2026-08-20 新增。主流程作业 ID（如 JOB-20260813-001）；非空时触发
+                per-job 双写 + working_memory dump；``None`` 时仅全局归档（向后兼容）。
+        """
+        self.job_id = job_id
 
     def after_model(
         self,
@@ -147,8 +180,9 @@ class P8ArchiveMiddleware(AgentMiddleware):
             pid = archived_job["p8_job_id"]
             try:
                 # ★★★ 长期记忆写入入口（罗盘长期记忆） ★★★
+                # 2026-08-20：job_id 透传 → 触发 per-job 双写
                 from A7.storage.p8_long_term import save_archived_job
-                save_archived_job(pid, archived_job)
+                save_archived_job(pid, archived_job, job_id=self.job_id)
                 succeeded_pids.append(pid)
             except Exception as exc:
                 logger.exception(
@@ -162,10 +196,23 @@ class P8ArchiveMiddleware(AgentMiddleware):
                 ]
                 long_term_patch.pop(pid, None)
 
-        # 3. 即使全部失败也返回 patch（空 patch 等价于 None；仍返回以保持一致性）
+        # 3. 2026-08-20 新增：归档成功后 dump working_memory 到 per-job JSON
+        #    仅在 self.job_id 非空 + 有成功归档时触发；dump 失败不抛（不阻断 LLM）
+        if succeeded_pids and self.job_id:
+            try:
+                from A7.storage.p8_working_memory_store import dump_working_memory
+                remaining = _apply_sentinels_for_dump(working, delete_sentinels)
+                dump_working_memory(self.job_id, remaining)
+            except Exception as exc:
+                logger.warning(
+                    "P8ArchiveMiddleware: dump_working_memory(%s) 失败: %s",
+                    self.job_id, exc,
+                )
+
+        # 4. 即使全部失败也返回 patch（空 patch 等价于 None；仍返回以保持一致性）
         logger.info(
-            "P8ArchiveMiddleware: scanned=%d, archived=%d, failed=%d",
-            len(to_archive), len(succeeded_pids), len(failed_pids),
+            "P8ArchiveMiddleware: job_id=%s scanned=%d, archived=%d, failed=%d",
+            self.job_id, len(to_archive), len(succeeded_pids), len(failed_pids),
         )
 
         if not succeeded_pids:

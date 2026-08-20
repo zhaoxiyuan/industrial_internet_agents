@@ -185,6 +185,43 @@ def test_t12_enum_values_aligned():
     print('T12 PASS: 7 P8JobStatus enum values aligned with strings')
 
 
+def test_t13_p8job_job_id_field():
+    """T13 (2026-08-20): P8Job / P8JobUpdate 加 job_id 字段（per-job 持久化依据）。"""
+    # P8Job.job_id：默认 None；显式传入字符串成功
+    j1 = P8Job(
+        p8_job_id='P8J-20260813-180000-013',
+        a6_event_ids=['A6-X'],
+        **make_kwargs(),
+    )
+    assert j1.job_id is None, 'P8Job.job_id 默认 None'
+
+    j2 = P8Job(
+        p8_job_id='P8J-20260813-180000-013',
+        job_id='JOB-20260813-001',
+        a6_event_ids=['A6-X'],
+        **make_kwargs(),
+    )
+    assert j2.job_id == 'JOB-20260813-001'
+
+    # 17 位时间戳格式（主流程实际常用格式）
+    j3 = P8Job(
+        p8_job_id='P8J-20260813-180000-013',
+        job_id='20260813180000001',
+        a6_event_ids=['A6-X'],
+        **make_kwargs(),
+    )
+    assert j3.job_id == '20260813180000001'
+    print('T13a PASS: P8Job.job_id 字段 OK')
+
+    # P8JobUpdate.job_id：默认 None；显式传入字符串成功
+    u1 = P8JobUpdate(a6_event_ids=['A6-X'])
+    assert u1.job_id is None
+
+    u2 = P8JobUpdate(a6_event_ids=['A6-X'], job_id='JOB-X')
+    assert u2.job_id == 'JOB-X'
+    print('T13b PASS: P8JobUpdate.job_id 字段 OK')
+
+
 if __name__ == '__main__':
     tests = [
         test_t1_n1_single_event,
@@ -199,6 +236,7 @@ if __name__ == '__main__':
         test_t10_terminal_set_complete,
         test_t11_is_terminal_status_all_seven,
         test_t12_enum_values_aligned,
+        test_t13_p8job_job_id_field,
     ]
     passed = 0
     for t in tests:

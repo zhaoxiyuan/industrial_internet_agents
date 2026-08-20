@@ -506,7 +506,7 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
                        注意：per-job 数据通过 ?job_id=xxx 查询参数按需访问，
                        此参数仅控制默认（不传 job_id）的路径。
     """
-    from fastapi.responses import Response
+    from fastapi.responses import Response, JSONResponse
 
     a5_log_path = Path(a5_log_dir) if a5_log_dir else _ROOT / "A5" / "logs"
     a6_output_path = Path(a6_output_dir) if a6_output_dir else _ROOT / "A6" / "logs"
@@ -693,7 +693,7 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
         """
         job_id = (body or {}).get("job_id", "")
         if not job_id or not re.match(r"^\d{17}$", job_id):
-            return {"error": "job_id 必传且须为 17 位数字"}, 400
+            return JSONResponse(content={"error": "job_id 必传且须为 17 位数字"}, status_code=400)
         import shutil
         from agents.p6_monitor_agent import get_p7_log_dir
         log_dir = Path(get_p7_log_dir(job_id))

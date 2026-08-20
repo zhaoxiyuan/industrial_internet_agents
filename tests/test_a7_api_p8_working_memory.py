@@ -12,6 +12,7 @@
 - 测试用 P8Job 简化 dict（不依赖 Pydantic 校验）
 """
 import sys
+import shutil
 from pathlib import Path
 
 # 让 tests/ 能找到 A7/ 与 agents/
@@ -355,6 +356,58 @@ def test_u9d_chat_reply_with_prefix_still_works():
     print("U9d PASS: backward-compat with-prefix path still works")
 
 
+def test_u10_middleware_job_id_pass_through():
+    """U10 (2026-08-20): P8ArchiveMiddleware(job_id=...) 透传 → 触发 per-job 双写。
+
+    验证：
+    - middleware 构造时接受 job_id
+    - 终态触发 after_model 时 save_archived_job 透传 job_id → per-job 归档文件生成
+    """
+    import json
+    from pathlib import Path
+    from A7.middleware.p8_archive_middleware import P8ArchiveMiddleware
+    from agents.workflow.file_utils import get_job_dir
+
+    reset_archive()
+    job_id = "JOB-U10-PASS-001"
+    per_job_dir = Path(get_job_dir(job_id)) / "P8"
+    if per_job_dir.exists():
+        shutil.rmtree(per_job_dir)
+
+    mw = P8ArchiveMiddleware(job_id=job_id)
+    assert mw.job_id == job_id, "job_id 未保存"
+
+    state = {
+        "working_memory": [
+            {
+                "p8_job_id": "P8J-U10-001",
+                "status": "completed",  # 终态
+                "max_level": "HIGH",
+                "risk_basis": "CH4 4.8%",
+                "decision": "rectify",
+                "note": "by=zhang",
+                "a6_event_ids": ["A6-001"],
+                "created_at": "2026-08-13T18:00:00Z",
+            }
+        ],
+        "long_term_memory": {},
+    }
+    patch = mw.after_model(state, runtime=None)
+    assert patch is not None
+
+    # per-job 文件应生成
+    per_job_path = per_job_dir / "archived.json"
+    assert per_job_path.exists(), f"per-job 归档文件未生成: {per_job_path}"
+    per_data = json.loads(per_job_path.read_text(encoding='utf-8'))
+    assert "P8J-U10-001" in per_data
+    assert per_data["P8J-U10-001"]["job_id"] == job_id
+
+    # 清理
+    if per_job_dir.exists():
+        shutil.rmtree(per_job_dir)
+    print('U10 PASS: middleware job_id 透传 → per-job 双写 OK')
+
+
 if __name__ == '__main__':
     tests = [
         test_u1_reducer_upsert_existing,
@@ -370,6 +423,8 @@ if __name__ == '__main__':
         test_u9b_build_human_message_without_job_id,
         test_u9c_chat_reply_no_prefix_passes_to_disposition_demo,
         test_u9d_chat_reply_with_prefix_still_works,
+        # 2026-08-20 per-job 化
+        test_u10_middleware_job_id_pass_through,
     ]
     passed = 0
     failed = 0

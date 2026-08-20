@@ -19,14 +19,21 @@
 
 | 函数 | 说明 |
 |------|------|
-| `run_disposition_agent(message)` | 运行 P8 Agent |
-| `disposition_demo(message, history)` | Gradio ChatInterface 兼容格式 |
+| `run_disposition_agent(message, *, thread_id="default", user_ctx=None, job_id=None)` | 运行 P8 Agent（基础版，无 HITL） |
+| `run_disposition_agent_with_hitl(message, *, thread_id="default", user_ctx=None, job_id=None)` | 运行 P8 Agent（生产用，HITL 中断） |
+| `disposition_demo(message, history=None, *, user_ctx=None, thread_id=None, job_id=None)` | Gradio ChatInterface / chat_reply 兼容格式 |
+
+> **`job_id` 参数（2026-08-20 新增）**：所有入口函数接受可选 `job_id`。
+> - **主流程**（`execute_p8` 调 `run_disposition_agent`）：传 `job_id`，启用 per-job 持久化（middleware 触发归档双写 + working_memory dump）
+> - **Bot 模式**（`chat_reply_handler` 调 `disposition_demo`）：从消息正文 `[job_id=...]` 前缀解析；无前缀 → `None`，**不**触发 per-job 持久化（临时会话无需持久化）
+>
+> 详细签名 / 入参 / 出参 / 默认值：[`P8_DISPOSITION_TOOLS.md` § 7 / § 8 / § 9 / § 10](P8_DISPOSITION_TOOLS.md)。
 
 ## 工具定义
 
 | 工具 | 触发条件 | 说明 | HITL |
 |------|----------|------|------|
-| `update_job` | 用户创建/更新处置任务 | 创建或更新 P8_job（reducer 按 pid upsert to working_memory） | ✅ 需要确认 |
+| `update_job` | 用户创建/更新处置任务 | 创建或更新 P8_job（reducer 按 pid upsert to working_memory）。**2026-08-20 新增 `job_id` 入参** —— P8Job 自带归属，archived dict 可按作业定位 / 清理 | ✅ 需要确认 |
 | `hitl_decide` | 用户进入 HITL 决策 | 强制 channel=HITL + status=waiting_decision | ✅ 需要确认 |
 | `read_p7_events` | 用户查看 P7 风险事件 | 读 `data/jobs/{job_id}/p7_result.json` | ❌ 自动批准 |
 | `notify_feishu` | channel=PUSH 决策完成后推送 | **飞书交互式卡片推送（2026-08-19 重构走 feishu_sender 封装）** | ✅ 需要确认 |
@@ -197,6 +204,7 @@ LLM → notify_feishu(p8_job_id, title, body, ..., options=["已知悉:ack", "�
 
 - **双层 JSON 持久化**：索引层（`p8_archive.index.json`，轻量）+ 数据层（`p8_archive.json`，完整）
 - **仓库级全局**：路径 `data/jobs/_long_term/`；跨 job_id 共享
+- **per-job 双写（2026-08-20 新增）**：每次 `save_archived_job(pid, job, job_id=...)` 额外写一份到 `data/jobs/{job_id}/P8/archived.json`（按 job 清理 / 导出用）；行业追溯靠全局文件
 - **9 个公共函数**（详见源码顶部注释块）：
   - 写入（仅 P8ArchiveMiddleware）：`save_archived_job`
   - 数据层：`get_archived_job` / `search_archived_jobs` / `load_all_archived_jobs`
@@ -205,3 +213,42 @@ LLM → notify_feishu(p8_job_id, title, body, ..., options=["已知悉:ack", "�
 - **索引条目格式**：`[<max_level>] <risk_basis 前 30 字>；<decision> by <decider> @ <archived_at 截 YYYY-MM-DD HH:MM>`
 - **线程安全**：模块级 `threading.Lock` 包裹所有 IO
 - **进程重启可恢复**：模块导入时自动 `_init()` 从 JSON 加载到内存
+
+## per-job 持久化（2026-08-20 新增）
+
+P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`，参考 [`docs/architecture.md` § 9](../../docs/architecture.md)）；P8 在 2026-08-20 跟进。
+P8 采用 **三层职责分离**：
+
+| 层 | 路径 | 写入入口 | 用途 |
+|----|------|---------|------|
+| **全局长期记忆** | `data/jobs/_long_term/p8_archive{,.index}.json` | `save_archived_job` 必写 | 行业追溯（recall_jobs 跨 job 检索） |
+| **per-job 归档** | `data/jobs/{job_id}/P8/archived.json` | 同上 `save_archived_job(job_id=...)` 触发 | 单 job 清理 / 导出 |
+| **per-job working_memory** | `data/jobs/{job_id}/P8/working_memory.json` | middleware.after_model dump + run_disposition_agent invoke end flush | MemorySaver 进程内数据持久化（重启不丢） |
+| **per-job 主流程结果** | `data/jobs/{job_id}/P8/result.json` | `execute_p8` 写 | 主流程结果（命名对齐 P6/P7 扁平风格） |
+
+### 设计要点
+
+1. **`P8Job.job_id` 字段（2026-08-20 新增）**：archived dict 自带归属，`data/jobs/{job_id}/P8/archived.json` 可独立反序列化
+3. **`MemorySaver` 进程内问题**：模块级 `_p8_checkpointer = MemorySaver()` 单例，重启即丢；通过**异步 dump**到 per-job JSON 兜底
+4. **Bot 模式不持久化**：`chat_reply_handler` 无 `[job_id=...]` 前缀 → `job_id=None` → middleware 跳过双写 + working_memory 不 dump（临时会话无需持久化）
+5. **路径安全**：`^[A-Za-z0-9_-]+$` 正则校验 job_id；非法 → `ValueError`
+6. **cache key 隔离**：`create_disposition_agent(user_ctx, job_id)` cache key 拼 `job={job_id}` 防 working_memory 跨 job 串台
+
+### 持久化时序
+
+```
+1. create_disposition_agent(job_id=...)    → 启动时 lazy load working_memory.json 到 MemorySaver
+2. P8ArchiveMiddleware.after_model(终态)    → save_archived_job 全局+per-job 双写 + dump working_memory
+3. run_disposition_agent invoke end         → flush_working_memory 从 MemorySaver 实时 dump
+4. execute_p8 end                          → 写 P8/result.json + 保留 p8_result.json 1 cycle
+```
+
+### 失败语义
+
+- **load 失败** → 返空 list，不阻断 agent 创建
+- **dump 失败** → `logger.warning`，不抛错（不影响 LLM 行为）
+- **per-job 双写失败** → 仅 warning；全局层已成功（行业追溯不受影响）
+- **跨进程"伪恢复"** → `MemorySaver` 注入是 best-effort；完整持久化建议后续迁移 SqliteSaver
+
+**详见**：[`docs/P8_人机协同处置_文件组织与职责.md` § 5.1.5](../../docs/P8_人机协同处置_文件组织与职责.md)
+及 [`tests/test_a7_p8_per_job_persistence.py`](../../tests/test_a7_p8_per_job_persistence.py)（17 个测试）。

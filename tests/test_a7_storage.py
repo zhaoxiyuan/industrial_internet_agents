@@ -361,6 +361,74 @@ def test_t18_init_recovery_missing_index_entry():
         pass
 
 
+def test_t19_per_job_dual_write_with_job_id():
+    """T19 (2026-08-20): save_archived_job(job_id=...) 同时写全局 + per-job。"""
+    import os, shutil
+    from pathlib import Path
+    from agents.workflow.file_utils import get_job_dir
+
+    reset_archive()
+    job_id = "JOB-T19-DUAL-001"
+    # 清理可能残留
+    per_job_dir = Path(get_job_dir(job_id)) / "P8"
+    if per_job_dir.exists():
+        shutil.rmtree(per_job_dir)
+
+    job = make_archived_job("P8J-20260813-180019-001")
+    # 透传 job_id
+    save_archived_job("P8J-20260813-180019-001", job, job_id=job_id)
+
+    # 1. 全局层：仍能查到
+    got_global = get_archived_job("P8J-20260813-180019-001")
+    assert got_global is not None, '全局层缺失'
+
+    # 2. per-job 文件：data/jobs/{job_id}/P8/archived.json 应存在
+    per_job_path = per_job_dir / "archived.json"
+    assert per_job_path.exists(), f'per-job 文件未生成: {per_job_path}'
+
+    # 3. per-job 文件含 archived dict + 含 job_id 字段（自动注入）
+    import json
+    per_data = json.loads(per_job_path.read_text(encoding='utf-8'))
+    assert "P8J-20260813-180019-001" in per_data
+    assert per_data["P8J-20260813-180019-001"]["job_id"] == job_id
+    print('T19 PASS: per-job 双写 OK; 路径 =', per_job_path)
+
+    # 清理
+    if per_job_dir.exists():
+        shutil.rmtree(per_job_dir)
+
+
+def test_t20_per_job_optional_backward_compat():
+    """T20 (2026-08-20): save_archived_job 不传 job_id → 仅全局（向后兼容）。"""
+    reset_archive()
+    job = make_archived_job("P8J-20260813-180020-001")
+    # 不传 job_id
+    save_archived_job("P8J-20260813-180020-001", job)
+
+    # 全局能查到
+    got = get_archived_job("P8J-20260813-180020-001")
+    assert got is not None
+
+    # 不会抛错，且没有 per-job 文件生成（因 job_id=None）
+    print('T20 PASS: backward-compat OK (no job_id = only global write)')
+
+
+def test_t21_per_job_path_traversal_protection():
+    """T21 (2026-08-20): _get_job_archive_path 非法 job_id → ValueError。"""
+    import pytest as _pytest  # noqa: F401
+    from A7.storage.p8_long_term import _get_job_archive_path
+
+    # 非法字符（含 path traversal）
+    for bad in ("../../etc/passwd", "../", "job/with/slash", "job.with.dot",
+                "", None, "job with space"):
+        try:
+            _get_job_archive_path(bad)
+            assert False, f'should have raised for {bad!r}'
+        except (ValueError, TypeError):
+            pass
+    print('T21 PASS: path traversal protection OK')
+
+
 if __name__ == '__main__':
     tests = [
         test_t1_save_and_get_basic,
@@ -381,6 +449,9 @@ if __name__ == '__main__':
         test_t16_search_limit_respected,
         test_t17_corrupted_json_raises_runtime_error,
         test_t18_init_recovery_missing_index_entry,
+        test_t19_per_job_dual_write_with_job_id,
+        test_t20_per_job_optional_backward_compat,
+        test_t21_per_job_path_traversal_protection,
     ]
     passed = 0
     for t in tests:

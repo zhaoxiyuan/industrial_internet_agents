@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TypedDict, Optional, Any, List
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
@@ -547,6 +548,12 @@ def execute_p8(job_id: str) -> dict:
         3. Agent 内部通过 read_p7_events 工具读 P7 → update_job 写入 working_memory
         4. P8ArchiveMiddleware 在 P8_job 进入终态时自动归档
         5. 不在主流程等待人工决策（HITL 中断由其他通道恢复）
+
+    2026-08-20 改造：per-job 化
+        - 透传 ``job_id`` 到 ``run_disposition_agent`` → middleware 触发
+          ``data/jobs/{job_id}/P8/archived.json`` 双写 + working_memory dump
+        - result 同时写入 ``data/jobs/{job_id}/P8/result.json``（新约定）+ 旧
+          ``p8_result.json``（保留 1 cycle 向后兼容）
     """
     log = get_stage_logger("P8")
     log.log_enter(job_id)
@@ -575,7 +582,7 @@ def execute_p8(job_id: str) -> dict:
         # P8 Agent 接管：LLM 自主决策 → update_job 写 working_memory → 中间件归档
         p8_summary = run_disposition_agent(
             initial_msg,
-            job_id=job_id,
+            job_id=job_id,         # 2026-08-20 透传：触发 per-job 双写 + dump
             walltime=walltime,
         )
         result["p8_llm_summary"] = p8_summary
@@ -594,6 +601,12 @@ def execute_p8(job_id: str) -> dict:
         log.log_error(job_id, e)
         result["error"] = str(e)
 
+    # 2026-08-20 新增：per-job result 写入（与 P6/P7 命名风格对齐）
+    p8_dir = Path(get_job_dir(job_id)) / "P8"
+    p8_dir.mkdir(parents=True, exist_ok=True)
+    write_json_file(str(p8_dir / "result.json"), result)
+
+    # 向后兼容：保留 p8_result.json 1 cycle（旧接口契约；P9 等仍会读此路径）
     write_json_file(get_stage_result_path(job_id, "p8"), result)
     add_job_log(job_id, {"action": "execute_p8", "result": "success" if result["completed"] else "failed"})
     log.log_exit(job_id, result)
