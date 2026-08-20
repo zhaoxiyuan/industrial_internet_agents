@@ -696,6 +696,14 @@ async function stopAgent() {
 }
 
 // ── per-job 监测（2026-08-19 新增） ──────────────────────────────────────────
+// 调试日志：UI 没有 addLog 容器,这里只在 console 输出,绝不抛错
+//   之前 8 处 addLog 调用未定义 → ReferenceError 抛错
+//   → startMonitorPoll 终态分支里后续的 disabled = false 等 4 行永不执行
+//   → 30s 后按钮 + 文本框"看似没解锁"就是这原因
+function addLog(msg) {
+  try { console.log("[monitor]", msg); } catch(e) {}
+}
+
 let _monitorJobId = "";
 let _monitorPollTimer = null;
 
