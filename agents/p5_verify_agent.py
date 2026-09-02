@@ -6,34 +6,33 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p5_verify_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 系统提示词
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
-SYSTEM_PROMPT = """你是一个作业前条件核验专家，负责在作业开始前核验各项安全措施是否落实。
-
-核验结果枚举：
-- PASS: 符合
-- PENDING: 待确认
-- FAIL: 不符合
-- N/A: 不适用
-
-核验项目包括：
-1. 隔离措施（隔离阀、电源切断等）
-2. 警戒标识（警戒带、警示牌等）
-3. 消防器材（灭火器、消防栓等）
-4. 气体检测（可燃气体、有毒气体、氧气含量）
-5. 人员资质（证书有效期、作业授权）
-6. PPE配备（呼吸器、防护服等）
-
-当用户请求生成核验清单时，调用 verify_checklist 工具。
-当用户执行核验时，调用 verify_execute 工具。
-当用户获取开工建议时，调用 verify_recommendation 工具。"""
+_verify_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -188,19 +187,108 @@ def verify_recommendation(task_id: str) -> str:
 # ============================================================
 
 def create_verify_agent():
-    """创建 P5 作业前条件核验 Agent"""
-    llm = create_chat_model()
+    """创建 P5 作业前条件核验 Agent（基础版本，无 HITL）"""
+    llm = create_chat_model_with_logging("P5")
     tools = [verify_checklist, verify_execute, verify_recommendation]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P5"))
+
+
+def create_verify_agent_with_hitl():
+    """创建 P5 作业前条件核验 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model_with_logging("P5")
+    tools = [verify_checklist, verify_execute, verify_recommendation]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "verify_checklist": False,          # 查询清单自动批准
+            "verify_execute": True,              # 执行核验需要确认
+            "verify_recommendation": True,       # 开工建议需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=load_system_prompt("P5"),
+        middleware=[hitl_middleware],
+        checkpointer=_verify_checkpointer,
+    )
 
 
 def run_verify_agent(message: str) -> str:
     """运行 P5 作业前条件核验 Agent"""
     agent = create_verify_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P5", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
 def verify_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_verify_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P5 阶段执行入口：开工前条件核验
+
+    读取 P4 结果中的 task_id，执行条件核验
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P5")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P5",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p4_result = read_json_file(get_stage_result_path(job_id, "p4"))
+        task_id = p4_result.get("task_id", "")
+        logger.info(f"[P5] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P5] 调用 verify_execute: task_id={task_id}")
+        verify_result = json.loads(verify_execute.invoke(task_id))
+        log.log_tool_call("verify_execute", {"task_id": task_id}, verify_result)
+        if "result" in verify_result:
+            result["verification_result"] = verify_result["result"]
+
+        logger.info(f"[P5] 调用 verify_recommendation: task_id={task_id}")
+        rec_result = json.loads(verify_recommendation.invoke(task_id))
+        log.log_tool_call("verify_recommendation", {"task_id": task_id}, rec_result)
+        if "result" in rec_result:
+            result["recommendation"] = rec_result["result"]
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "verification_approve",
+            "decision": rec_result.get("result", {}).get("decision", ""),
+            "message": "请确认开工条件核验结果"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p5"), result)
+    add_job_log(job_id, {"action": "execute_p5", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

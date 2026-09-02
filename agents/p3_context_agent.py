@@ -1,32 +1,38 @@
 """
 P3: 作业上下文理解与标准化
 Context Agent - 聚合作业类型、区域、设备、介质等11维信息
+支持 HumanInTheLoop - Agent 层级中断
 """
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p3_context_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 系统提示词
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
-SYSTEM_PROMPT = """你是一个作业上下文理解专家，负责构建标准化的作业上下文包。
-
-标准上下文包包含 11 个维度：
-作业对象 — 区域 — 设备 — 介质 — 人员 — 资质 — 风险 — 措施 — 时间 — 关联作业 — 数据源
-
-你需要：
-1. 调用 context_build 聚合任务相关信息
-2. 调用 context_validate 验证上下文完整性
-3. 调用 context_history 获取上下文变更历史
-4. 上下文不完整时提示人工补充
-
-数据溯源：每项数据记录来源系统、获取时间、有效期
-缺失确认：上下文不完整时暂停流程，等待人工补充"""
+_context_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -56,7 +62,7 @@ def context_build(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "context": {
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101", "管道P-205"],
             "medium": "原油",
@@ -151,13 +157,13 @@ def context_history(task_id: str) -> str:
     result = [
         {
             "version": 1,
-            "context": {"work_type": "受限空间作业", "region": "炼油厂区01"},
+            "context": {"job_content": "受限空间作业", "region": "炼油厂区01"},
             "changed_at": now,
             "changed_by": "system"
         },
         {
             "version": 2,
-            "context": {"work_type": "受限空间作业", "region": "炼油厂区01",
+            "context": {"job_content": "受限空间作业", "region": "炼油厂区01",
                       "equipment": ["反应器R-101"]},
             "changed_at": now,
             "changed_by": "system"
@@ -168,23 +174,111 @@ def context_history(task_id: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
 def create_context_agent():
-    """创建 P3 上下文理解 Agent"""
-    llm = create_chat_model()
+    """创建 P3 上下文理解 Agent（基础版本，无 HITL）"""
+    llm = create_chat_model_with_logging("P3")
     tools = [context_build, context_validate, context_history]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P3"))
+
+
+def create_context_agent_with_hitl():
+    """创建 P3 上下文理解 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model_with_logging("P3")
+    tools = [context_build, context_validate, context_history]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "context_build": True,       # 构建上下文需要确认
+            "context_validate": True,     # 验证需要确认
+            "context_history": False,     # 查询历史自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=load_system_prompt("P3"),
+        middleware=[hitl_middleware],
+        checkpointer=_context_checkpointer,
+    )
 
 
 def run_context_agent(message: str) -> str:
     """运行 P3 上下文理解 Agent"""
     agent = create_context_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P3", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
 def context_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_context_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P3 阶段执行入口：作业上下文理解
+
+    读取 P2 结果中的 task_id，构建标准作业上下文包
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P3")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P3",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p2_result = read_json_file(get_stage_result_path(job_id, "p2"))
+        task_id = p2_result.get("task_id", "")
+        logger.info(f"[P3] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P3] 调用 context_build: task_id={task_id}")
+        context_result = json.loads(context_build.invoke(task_id))
+        log.log_tool_call("context_build", {"task_id": task_id}, context_result)
+
+        # 3. 提取结果
+        if "result" in context_result:
+            result["context"] = context_result["result"].get("context", {})
+            result["missing_fields"] = context_result["result"].get("missing_fields", [])
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        if result.get("missing_fields"):
+            result["pending_confirmation"] = {
+                "type": "context_missing",
+                "fields": result["missing_fields"],
+                "message": "上下文存在缺失字段，需要人工确认"
+            }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p3"), result)
+    add_job_log(job_id, {"action": "execute_p3", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

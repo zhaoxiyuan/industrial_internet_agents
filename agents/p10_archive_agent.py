@@ -6,38 +6,33 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p10_archive_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 系统提示词
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
-SYSTEM_PROMPT = """你是一个归档与复盘专家，负责归档全过程记录并挖掘误报、漏报、规则冲突案例。
-
-归档内容：
-- 作业票证（结构化 + 扫描件）
-- 视频证据片段
-- 风险事件记录
-- 处置全记录
-- 作业报告
-
-案例挖掘类型：
-- misdetection: 检测模型误报
-- missed: 人工发现的风险事件
-- rule_conflict: 同场景不同规则的冲突点
-
-知识沉淀：
-- 案例摘要Embedding → 向量数据库
-- 规则冲突报告 → 规则管理系统
-- 模型优化建议 → 模型训练平台
-
-当用户归档任务数据时，调用 archive_task 工具。
-当用户挖掘案例时，调用 archive_cases 工具。
-当用户分析处置效果时，调用 archive_performance 工具。
-当用户生成规则优化建议时，调用 archive_suggestions 工具。"""
+_archive_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -214,19 +209,120 @@ def archive_suggestions(task_id: str) -> str:
 # ============================================================
 
 def create_archive_agent():
-    """创建 P10 归档复盘 Agent"""
-    llm = create_chat_model()
+    """创建 P10 归档复盘 Agent（基础版本，无 HITL）"""
+    llm = create_chat_model_with_logging("P10")
     tools = [archive_task, archive_cases, archive_performance, archive_suggestions]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P10"))
+
+
+def create_archive_agent_with_hitl():
+    """创建 P10 归档复盘 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model_with_logging("P10")
+    tools = [archive_task, archive_cases, archive_performance, archive_suggestions]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "archive_task": True,                # 归档任务需要确认
+            "archive_cases": False,              # 挖掘案例自动批准
+            "archive_performance": False,        # 分析性能自动批准
+            "archive_suggestions": True,         # 生成建议需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=load_system_prompt("P10"),
+        middleware=[hitl_middleware],
+        checkpointer=_archive_checkpointer,
+    )
 
 
 def run_archive_agent(message: str) -> str:
     """运行 P10 归档复盘 Agent"""
     agent = create_archive_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P10", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
 def archive_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_archive_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P10 阶段执行入口：归档与复盘
+
+    读取 P9 结果中的 task_id，执行归档操作
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P10")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P10",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p9_result = read_json_file(get_stage_result_path(job_id, "p9"))
+        task_id = p9_result.get("task_id", "")
+        logger.info(f"[P10] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P10] 调用 archive_task: task_id={task_id}")
+        archive_result = json.loads(archive_task.invoke(task_id))
+        log.log_tool_call("archive_task", {"task_id": task_id}, archive_result)
+        if "result" in archive_result:
+            result["archive_result"] = archive_result["result"]
+
+        logger.info(f"[P10] 调用 archive_cases: task_id={task_id}")
+        cases_result = json.loads(archive_cases.invoke(task_id))
+        log.log_tool_call("archive_cases", {"task_id": task_id}, cases_result)
+        if "result" in cases_result:
+            result["mined_cases"] = cases_result["result"]
+
+        logger.info(f"[P10] 调用 archive_performance: task_id={task_id}")
+        perf_result = json.loads(archive_performance.invoke(task_id))
+        log.log_tool_call("archive_performance", {"task_id": task_id}, perf_result)
+        if "result" in perf_result:
+            result["performance"] = perf_result["result"]
+
+        logger.info(f"[P10] 调用 archive_suggestions: task_id={task_id}")
+        suggestions_result = json.loads(archive_suggestions.invoke(task_id))
+        log.log_tool_call("archive_suggestions", {"task_id": task_id}, suggestions_result)
+        if "result" in suggestions_result:
+            result["suggestions"] = suggestions_result["result"]
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "report_confirm",
+            "message": "请确认归档报告"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p10"), result)
+    add_job_log(job_id, {"action": "execute_p10", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

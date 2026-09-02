@@ -1,33 +1,38 @@
 """
 P4: 监测资源绑定与数据关联
 Binding Agent - 匹配固定/移动摄像头、传感器、定位数据
+支持 HumanInTheLoop - Agent 层级中断
 """
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
+from .utils import get_stage_logger
+
+# 配置日志
+import logging
+logger = logging.getLogger("p4_binding_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 系统提示词
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
-SYSTEM_PROMPT = """你是一个监测资源绑定专家，负责将摄像头、传感器、定位设备与作业任务关联。
-
-匹配策略：
-- 固定摄像头：区域覆盖分析，选择最近且覆盖最好的N个
-- 移动设备：根据作业流动性动态调整
-- 传感器：选择同区域、同介质类型点位
-- 人员定位：作业人员工卡与定位基站关联
-
-当用户请求匹配资源时，调用 binding_match 工具。
-当用户查看绑定状态时，调用 binding_status 工具。
-当用户确认绑定时，调用 binding_confirm 工具。
-当用户请求人工补充资源时，调用 binding_request_manual 工具。
-
-无法自动匹配时触发人工补充流程。"""
+_binding_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -189,23 +194,109 @@ def binding_request_manual(task_id: str, resource_type: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
 def create_binding_agent():
-    """创建 P4 监测资源绑定 Agent"""
-    llm = create_chat_model()
+    """创建 P4 监测资源绑定 Agent（基础版本，无 HITL）"""
+    llm = create_chat_model_with_logging("P4")
     tools = [binding_match, binding_status, binding_confirm, binding_request_manual]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P4"))
+
+
+def create_binding_agent_with_hitl():
+    """创建 P4 监测资源绑定 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model_with_logging("P4")
+    tools = [binding_match, binding_status, binding_confirm, binding_request_manual]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "binding_match": True,              # 绑定匹配需要确认
+            "binding_status": False,            # 查询状态自动批准
+            "binding_confirm": True,             # 确认绑定需要确认
+            "binding_request_manual": True,      # 请求人工绑定需要确认
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=load_system_prompt("P4"),
+        middleware=[hitl_middleware],
+        checkpointer=_binding_checkpointer,
+    )
 
 
 def run_binding_agent(message: str) -> str:
     """运行 P4 监测资源绑定 Agent"""
     agent = create_binding_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P4", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
 def binding_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_binding_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P4 阶段执行入口：监测资源绑定
+
+    读取 P3 结果中的 task_id，匹配监测资源
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P4")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P4",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p3_result = read_json_file(get_stage_result_path(job_id, "p3"))
+        task_id = p3_result.get("task_id", "")
+        logger.info(f"[P4] task_id={task_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P4] 调用 binding_match: task_id={task_id}")
+        binding_result = json.loads(binding_match.invoke(task_id))
+        log.log_tool_call("binding_match", {"task_id": task_id}, binding_result)
+
+        # 3. 提取结果
+        if "result" in binding_result:
+            result["bindings"] = binding_result["result"].get("bindings", {})
+            result["unmatched_resources"] = binding_result["result"].get("unmatched_resources", [])
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "binding_confirm",
+            "message": "请确认监测资源绑定是否正确"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p4"), result)
+    add_job_log(job_id, {"action": "execute_p4", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

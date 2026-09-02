@@ -1,34 +1,39 @@
 """
 P2: 作业任务获取与实例化
 Task Agent - 处理任务列表、详情、订阅和实例创建
+支持 HumanInTheLoop - Agent 层级中断
 """
-from typing import Optional, List
+from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
-from model.chat_model import create_chat_model
-from utils.agent_utils import extract_output
-from .utils import make_response, make_error, SCHEMA_VERSION
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
+from .utils.agent_utils import extract_output
+from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
+from .utils.logging_handler import get_agent_config
+from .utils.system_prompt import load_system_prompt
+
+# 配置日志
+import logging
+logger = logging.getLogger("p2_task_agent")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 系统提示词
+# Agent 层级 Checkpointer - 用于 Agent 内部中断
 # ============================================================
-SYSTEM_PROMPT = """你是一个作业任务管理专家，负责处理作业任务的获取、列表查询和实例创建。
-
-你需要：
-1. 按时间、区域、状态筛选和列出作业任务
-2. 获取任务详情
-3. 创建唯一任务实例，确保幂等性
-4. 订阅任务变更事件
-
-Task ID 格式: {作业类型}_{区域代码}_{时间戳}_{序号}
-
-当用户列出任务时，调用 task_list 工具。
-当用户获取任务详情时，调用 task_get 工具。
-当用户创建任务实例时，调用 task_instance_create 工具。
-当用户订阅任务变更时，调用 task_subscribe 工具。"""
+_task_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -65,7 +70,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-WELD-01-20260804-001",
             "permit_id": "PD-20260804001",
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -73,7 +78,7 @@ def task_list(region: Optional[str] = None, status: Optional[str] = None) -> str
         {
             "task_id": "TASK-HIGH-02-20260804-002",
             "permit_id": "PD-20260804002",
-            "work_type": "高空作业",
+            "job_content": "高空作业",
             "region": "炼油厂区02",
             "status": "running",
             "created_at": datetime.now(timezone.utc).isoformat()
@@ -120,11 +125,11 @@ def task_get(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "permit_id": f"PD-{task_id.split('-')[-1]}",
-        "work_type": "受限空间作业",
+        "job_content": "受限空间作业",
         "region": "炼油厂区01",
         "status": "pending",
         "context": {
-            "work_type": "受限空间作业",
+            "job_content": "受限空间作业",
             "region": "炼油厂区01",
             "equipment": ["反应器R-101"],
             "medium": "原油"
@@ -239,23 +244,109 @@ def task_subscribe(task_id: str) -> str:
 
 
 # ============================================================
-# Agent 工厂
+# Agent 工厂 (HITL Enabled)
 # ============================================================
 
 def create_task_agent():
-    """创建 P2 作业任务 Agent"""
-    llm = create_chat_model()
+    """创建 P2 作业任务 Agent（基础版本，无 HITL）"""
+    llm = create_chat_model_with_logging("P2")
     tools = [task_list, task_get, task_instance_create, task_subscribe]
-    return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P2"))
+
+
+def create_task_agent_with_hitl():
+    """创建 P2 作业任务 Agent - 支持 HumanInTheLoop
+
+    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    """
+    llm = create_chat_model_with_logging("P2")
+    tools = [task_list, task_get, task_instance_create, task_subscribe]
+
+    # 创建 HITL Middleware
+    hitl_middleware = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "task_list": False,              # 查询自动批准
+            "task_get": False,               # 查询自动批准
+            "task_instance_create": True,     # 创建需要确认
+            "task_subscribe": False,          # 订阅自动批准
+        }
+    )
+
+    return create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=load_system_prompt("P2"),
+        middleware=[hitl_middleware],
+        checkpointer=_task_checkpointer,
+    )
 
 
 def run_task_agent(message: str) -> str:
     """运行 P2 作业任务 Agent"""
     agent = create_task_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=message)]})
+    agent_config = get_agent_config("default", "P2", get_llm_params())
+    result = agent.invoke({"messages": [HumanMessage(content=message)]}, agent_config)
     return extract_output(result)
 
 
 def task_demo(message: str, history: list = None) -> str:
     """Gradio ChatInterface 兼容格式"""
     return run_task_agent(message)
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P2 阶段执行入口：作业任务实例化
+
+    读取 P1 结果中的 permit_draft_id，创建任务实例
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P2")
+    log.log_enter(job_id)
+
+    result = {
+        "job_id": job_id,
+        "stage": "P2",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 1. 读取前置阶段结果
+        p1_result = read_json_file(get_stage_result_path(job_id, "p1"))
+        permit_draft_id = p1_result.get("permit_draft_id", "")
+        logger.info(f"[P2] permit_draft_id={permit_draft_id}")
+
+        # 2. 调用本模块工具
+        logger.info(f"[P2] 调用 task_instance_create: permit_draft_id={permit_draft_id}")
+        task_result = json.loads(task_instance_create.invoke(permit_draft_id))
+        log.log_tool_call("task_instance_create", {"permit_draft_id": permit_draft_id}, task_result)
+
+        # 3. 提取结果
+        if "result" in task_result:
+            result["task_instance"] = task_result["result"]
+            result["task_id"] = task_result["result"].get("task_id", "")
+
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["pending_confirmation"] = {
+            "type": "monitor_decide",
+            "message": "是否将此作业纳入智能监测"
+        }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    write_json_file(get_stage_result_path(job_id, "p2"), result)
+    add_job_log(job_id, {"action": "execute_p2", "result": "success" if result["completed"] else "failed"})
+    log.log_exit(job_id, result)
+    return result

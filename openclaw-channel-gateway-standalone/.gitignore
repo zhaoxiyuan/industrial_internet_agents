@@ -1,0 +1,10 @@
+node_modules/
+data/*.json
+data/*.tmp-*
+config/config.json
+.env
+*.log
+*.zip
+.DS_Store
+__pycache__/
+.venv/

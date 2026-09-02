@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>feishu_gateway_cli — 飞书通道配置</title>
+  <style>
+    :root {
+      --bg: #f5f6fa;
+      --card-bg: #ffffff;
+      --border: #e0e3eb;
+      --primary: #3370ff;
+      --primary-hover: #2858d9;
+      --danger: #e54545;
+      --warn: #f59e0b;
+      --ok: #16a34a;
+      --text: #1f2329;
+      --text-muted: #646a73;
+      --code-bg: #f0f2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .container { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .subtitle { color: var(--text-muted); margin: 0 0 20px; font-size: 13px; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .field {
+      display: grid;
+      grid-template-columns: 200px 1fr auto;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .field label { font-size: 13px; color: var(--text); }
+    .field label .key { font-family: monospace; color: var(--text-muted); font-size: 12px; }
+    .field input, .field textarea, .field select {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 13px;
+      background: #fff;
+    }
+    .field textarea { min-height: 90px; resize: vertical; }
+    .field .help { font-size: 11px; color: var(--text-muted); }
+    .btn {
+      padding: 7px 14px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn:hover { background: #f0f2f7; }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    .btn-danger { color: var(--danger); border-color: var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    th { color: var(--text-muted); font-weight: 500; vertical-align: bottom; white-space: nowrap; }
+    th .key { display: block; font-size: 11px; margin-top: 2px; }
+    input[type="text"] { font-family: monospace; }
+    /* 表格内按钮紧凑:防止 "删除" 等短文本被竖排 */
+    table .btn { padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+    .status { font-size: 13px; padding: 8px 12px; border-radius: 4px; margin-top: 8px; }
+    .status-ok { background: #ecfdf5; color: var(--ok); border: 1px solid #a7f3d0; }
+    .status-fail { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+    .status-info { background: #eff6ff; color: var(--primary); border: 1px solid #bfdbfe; }
+    .toast {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      z-index: 9999;
+      animation: fade-in 0.2s ease-out;
+    }
+    .toast-ok { background: var(--ok); color: #fff; }
+    .toast-fail { background: var(--danger); color: #fff; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+    pre.code-block {
+      background: var(--code-bg);
+      padding: 10px 12px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 4px 0 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 11px;
+      border-radius: 3px;
+      background: var(--code-bg);
+      color: var(--text-muted);
+    }
+    .badge-sens { background: #fef3c7; color: #92400e; }
+    .add-row {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .add-row input, .add-row select {
+      flex: 1 1 130px;
+      min-width: 110px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      background: #fff;
+    }
+    .add-row button { flex: 0 0 auto; }
+    /* 飞书后台配置指引块（Section ②）*/
+    .hint-block {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .hint-block summary {
+      cursor: pointer;
+      color: #92400e;
+      font-weight: 500;
+      font-size: 13px;
+      padding: 2px 0;
+    }
+    .hint-block summary:hover { color: #78350f; }
+    .hint-block ol { margin: 8px 0 0 0; padding-left: 22px; }
+    .hint-block ol li { margin: 4px 0; }
+    .hint-block code { background: #fef3c7; padding: 1px 4px; border-radius: 3px; }
+    .hint-block .hint-tip {
+      margin: 8px 0 0 0;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .hint-block a { color: var(--primary); text-decoration: none; }
+    .hint-block a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📡 飞书通道配置</h1>
+  <p class="subtitle">
+    feishu_gateway_cli → Channel Gateway → 飞书 Open API ·
+    写入 <span id="env-path-display" class="badge">…</span>
+    （备份到 .env.bak）
+  </p>
+
+  <!-- ============ Gateway 连接 ============ -->
+  <div class="card">
+    <div class="card-title">① Channel Gateway 连接</div>
+    <div class="field">
+      <label>GATEWAY_HOST <span class="key">(URL)</span></label>
+      <input id="gateway-host" type="text" placeholder="http://127.0.0.1:8787">
+      <button class="btn" onclick="testGateway()">测试连接</button>
+    </div>
+    <div class="field">
+      <label>CG_API_KEY <span class="key">(敏感)</span>
+        <span class="badge badge-sens">敏感</span>
+      </label>
+      <input id="cg-api-key" type="password" placeholder="(保持原值请留空；*** 表示不修改)">
+      <button class="btn" onclick="toggleSecret('cg-api-key')">显示</button>
+    </div>
+    <div id="gateway-test-result"></div>
+  </div>
+
+  <!-- ============ 飞书 App 凭据（多账户）============ -->
+  <div class="card">
+    <div class="card-title">② 飞书 App 凭据（多账户）<span class="badge">FEISHU_ACCOUNTS</span></div>
+    <p class="subtitle" style="margin-bottom:8px">
+      Channel Gateway 支持同一进程内路由多个飞书 App,每个账户对应一个
+      <code>account_id</code>(URL 路径 <code>/webhooks/feishu/&lt;accountId&gt;</code>)。
+      <strong>account_id 必填且唯一</strong>,规则 <code>^[a-zA-Z][a-zA-Z0-9_-]*$</code>。
+      <strong>description</strong> 仅 UI 注释用,不写入 gateway 配置。
+      敏感字段(APP_SECRET / VERIFICATION_TOKEN)UI 显示为 <code>***</code>。
+    </p>
+
+    <details class="hint-block" open>
+      <summary>📋 添加完账户后,还需要去飞书开发者后台配置回调 URL（点击折叠）</summary>
+      <ol>
+        <li>打开 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">飞书开放平台</a>
+            → 选相应 App（用本账户的 <code>app_id</code> 标识）</li>
+        <li>左侧导航 → <strong>事件与回调</strong> → <strong>事件订阅</strong></li>
+        <li>订阅方式选 <strong>「将回调发送至开发者服务器」</strong>（推荐）</li>
+        <li>请求地址填：
+          <pre class="code-block">https://&lt;你的公网IP或域名&gt;/webhooks/feishu/&lt;account_id&gt;</pre>
+          <span class="hint-tip">
+            <code>&lt;account_id&gt;</code> 须与本表 <code>account_id</code> 主键完全一致；
+            公网 IP 推荐用 <code>ngrok</code> / <code>frp</code> / 域名 等内网穿透工具
+          </span>
+        </li>
+        <li>点「保存」→ 飞书立即发 <code>url_verification</code> → 你的 Gateway 收到并返回 challenge →
+            红框「Challenge code没有返回」消失</li>
+        <li>启用后,到 <strong>权限管理</strong> 开通 Bot 需要的权限（<code>im:message</code>、<code>im:message:send_as_bot</code> 等）</li>
+      </ol>
+      <p class="hint-tip">
+        💡 <strong>url_verification 失败</strong>常见原因：
+        (1) Gateway 没启动 / 公网穿透掉线 → 访问 <code>https://&lt;你的公网IP&gt;/healthz</code> 应返回 <code>{"status":"ok"}</code>
+        (2) URL 路径末尾的 <code>account_id</code> 与 config.feishu.local.json 中 <code>accounts</code> 块的 key 不一致
+        (3) verificationToken 与飞书开发者后台不一致
+      </p>
+    </details>
+
+    <table id="accounts-table" style="margin-top:8px">
+      <thead>
+        <tr>
+          <th style="width:14%">account_id<span class="key">主键</span></th>
+          <th style="width:18%">description<span class="key">说明</span></th>
+          <th style="width:8%">domain</th>
+          <th style="width:14%">app_id</th>
+          <th style="width:15%">app_secret<span class="key">敏感</span></th>
+          <th style="width:18%">verification_token<span class="key">敏感</span></th>
+          <th style="width:92px">操作</th>
+        </tr>
+      </thead>
+      <tbody id="accounts-rows"></tbody>
+    </table>
+
+    <div class="add-row">
+      <input id="new-acc-id"     type="text"     placeholder="account_id" title="如 default / alerting-bot">
+      <input id="new-acc-desc"   type="text"     placeholder="说明（可选）">
+      <select id="new-acc-domain">
+        <option value="feishu">feishu</option>
+        <option value="lark">lark</option>
+      </select>
+      <input id="new-acc-appid"  type="text"     placeholder="app_id (cli_xxx)">
+      <input id="new-acc-secret" type="password" placeholder="app_secret" title="留空 = 保持原值">
+      <input id="new-acc-token"  type="password" placeholder="verification_token" title="留空 = 保持原值">
+      <button class="btn btn-primary" onclick="addAccountRow()">+ 添加</button>
+    </div>
+
+    <div id="accounts-status" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- ============ 群聊配置 ============ -->
+  <div class="card">
+    <div class="card-title">③ 飞书群聊（FEISHU_GROUP_MAP）</div>
+    <p class="subtitle" style="margin-bottom:8px">
+      主键：<code>chat_id</code>（飞书群 ID）。每条群聊三字段：
+      <code>name</code>（必填，发送时反查用）、<code>description</code>（可选，描述）。
+      同一 <code>chat_id</code> 被多个收件人共享时，名称/描述只需配一次。
+      <span class="key">（name 为空 = 占位条目标记，提示未命名）</span>
+    </p>
+
+    <table id="group-map-table" style="margin-top:8px">
+      <thead>
+        <tr>
+          <th style="width:30%">chat_id <span class="key">(主键)</span></th>
+          <th style="width:30%">name <span class="key">(必填)</span></th>
+          <th style="width:34%">description <span class="key">(可选)</span></th>
+          <th style="width:80px">操作</th>
+        </tr>
+      </thead>
+      <tbody id="group-map-rows"></tbody>
+    </table>
+
+    <div class="add-row">
+      <input id="new-gm-chat-id" type="text" placeholder="oc_xxx（chat_id）">
+      <input id="new-gm-name" type="text" placeholder="应急响应群">
+      <input id="new-gm-description" type="text" placeholder="P8 告警群（可选）">
+      <button class="btn btn-primary" onclick="addGroupMapRow()">+ 添加</button>
+    </div>
+
+    <div id="group-map-status" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- ============ 责任岗位映射 ============ -->
+  <div class="card">
+    <div class="card-title">④ 飞书收件人（FEISHU_USER_MAP）</div>
+    <p class="subtitle" style="margin-bottom:8px">
+      主键：<code>open_id</code>（飞书用户唯一 ID）。每个收件人三字段：
+      <code>open_id</code>（主键）、<code>role</code>（责任岗位）、<code>name</code>（中文姓名）。
+      同一 <code>role</code> 可对应多人 → P8 推送时群发。
+      <br><strong>群聊推送</strong>请到 ③ 配 <code>FEISHU_GROUP_MAP</code>，再单聊
+      <code>open_id</code> 用 <code>send_to_group(group_name=...)</code>；
+      USER_MAP 仅负责"人"的索引。
+    </p>
+
+    <table id="user-map-table" style="margin-top:8px">
+      <thead>
+        <tr>
+          <th style="width:28%">open_id <span class="key">(主键)</span></th>
+          <th style="width:24%">role <span class="key">(责任岗位)</span></th>
+          <th style="width:24%">name <span class="key">(中文姓名)</span></th>
+          <th style="width:80px">操作</th>
+        </tr>
+      </thead>
+      <tbody id="user-map-rows"></tbody>
+    </table>
+
+    <div class="add-row">
+      <input id="new-um-open-id" type="text" placeholder="ou_xxx（open_id）">
+      <input id="new-um-role" type="text" placeholder="作业负责人 / 车间主任">
+      <input id="new-um-name" type="text" placeholder="张三">
+      <button class="btn btn-primary" onclick="addUserMapRow()">+ 添加</button>
+    </div>
+
+    <div id="user-map-status" style="margin-top:8px;"></div>
+
+    <div id="legacy-warn" style="margin-top:8px; display:none;">
+      <div class="status status-warn">
+        ⚠ 检测到旧变量残留 <code id="legacy-list"></code>；
+        每次保存时会自动清理。
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 预演解析 ============ -->
+  <div class="card">
+    <div class="card-title">⑤ 预演 USER_MAP 收件人解析</div>
+    <div class="field">
+      <label>assignee_role <span class="key">(测试输入)</span></label>
+      <input id="test-assignee-role" type="text" placeholder="车间主任">
+      <button class="btn" onclick="testResolve()">解析</button>
+    </div>
+    <div id="resolve-result"></div>
+  </div>
+
+  <!-- ============ 实时监听：捕获 chat_id ============ -->
+  <div class="card" id="listener-card">
+    <div class="card-title">
+      ⑥ 实时捕获 chat_id
+      <span class="badge">前置：① + ② 已配置</span>
+    </div>
+
+    <p class="subtitle" style="margin: 0 0 12px;">
+      启动后端轮询 <code>Gateway /v1/events</code>，你去飞书群（或跟 Bot 单聊）发条消息，
+      这里会实时抓到 <code>chat_id</code>（群） / <code>open_id</code>（单聊），一键写入 <code>.env</code>。
+    </p>
+
+    <div class="btn-row" style="margin-bottom: 12px;">
+      <button class="btn btn-primary" id="btn-listener-start" onclick="startListener()">▶ 开始监听</button>
+      <button class="btn" id="btn-listener-refresh" onclick="refreshListener()">🔄 刷新</button>
+      <button class="btn btn-danger" id="btn-listener-stop" onclick="stopListener()">⏹ 停止</button>
+      <span id="listener-status-badge" class="badge" style="margin-left:8px;">未启动</span>
+    </div>
+
+    <div id="listener-info" class="status status-info" style="display:none;">
+      <span id="listener-info-text">点击「开始监听」启动</span>
+    </div>
+
+    <div id="listener-events" style="margin-top:12px;"></div>
+
+    <!-- 选中事件后：自动把 ID 填到 ③ 或 ④ 的输入框；写入由 ③/④ 的"+ 添加" + "保存到 .env" 完成 -->
+    <div id="captured-hint" style="margin-top:16px; display:none; border-top: 1px dashed var(--border); padding-top:12px;">
+      <strong style="font-size:13px;">✏️ 已选事件 → 自动填到对应 section</strong>
+      <div class="field" style="margin-top:8px;">
+        <label>事件摘要</label>
+        <code id="selected-event-summary" style="font-size:12px; padding:6px 10px; background:var(--code-bg); border-radius:4px;">（未选）</code>
+      </div>
+      <div style="color:var(--text-muted); font-size:12px; line-height:1.6;">
+        📌 选中事件后：
+        <ul style="margin:4px 0 0 0; padding-left:20px;">
+          <li><strong>群聊</strong> → <code>chat_id</code> 自动同步到「③ 飞书群聊」section 的 <code>chat_id</code> 主键输入框（去那里填 name + 点"+ 添加"）</li>
+          <li><strong>单聊</strong> → <code>open_id</code> 自动同步到「④ 飞书收件人」section 的 <code>open_id</code> 主键输入框（去那里填 role + name + 点"+ 添加"）</li>
+        </ul>
+        ✏️ <strong>写入路径</strong>：先在 3/4 表里点"+ 添加"把行加进表格 → 然后点页面底部「💾 保存到 .env」统一落盘
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 保存 ============ -->
+  <div class="card">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveAll()">💾 保存到 .env</button>
+      <button class="btn" onclick="loadAll()">🔄 重新加载</button>
+      <span style="color:var(--text-muted); font-size:12px; margin-left:8px;">
+        保存前会自动备份到 .env.bak
+      </span>
+    </div>
+    <div id="save-status"></div>
+  </div>
+</div>
+
+<script>
+let _view = null;
+
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind === 'ok' ? 'toast-ok' : 'toast-fail');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+function toggleSecret(id) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function renderManaged(view) {
+  const m = view.managed;
+  document.getElementById('env-path-display').textContent = view.env_path;
+  document.getElementById('gateway-host').value = m.GATEWAY_HOST.value || m.GATEWAY_HOST.default || '';
+  // 敏感字段：如果有值（has_value），占位符 "***"
+  const cgEl = document.getElementById('cg-api-key');
+  cgEl.value = m.CG_API_KEY.has_value ? '***' : '';
+  cgEl.placeholder = m.CG_API_KEY.has_value ? '(保持原值：*** ；输入新值覆盖)' : '(空 → 删除该 key)';
+  // FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_DOMAIN 已被 ② 多账户表接管,这里不再读取
+}
+
+function renderUserMapRows(user_map) {
+  const tbody = document.getElementById('user-map-rows');
+  tbody.innerHTML = '';
+  user_map.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" data-idx="${idx}" data-field="open_id" value="${escapeHtml(row.open_id || '')}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="role"    value="${escapeHtml(row.role || '')}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="name"    value="${escapeHtml(row.name || '')}"></td>
+      <td><button class="btn btn-danger" onclick="deleteUserMapRow(${idx})">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  // 旧 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE> 残留提示
+  const legacy = (_view && _view.legacy_group_overrides) || [];
+  const legacyWarn = document.getElementById('legacy-warn');
+  if (legacy.length) {
+    legacyWarn.style.display = 'block';
+    document.getElementById('legacy-list').textContent =
+      ['FEISHU_CONVERSATION_MAP', ...legacy.map(g => g.key)]
+        .filter((v, i, arr) => arr.indexOf(v) === i)  // 去重
+        .join(', ');
+  } else {
+    legacyWarn.style.display = 'none';
+  }
+}
+
+function collectUserMap() {
+  const rows = document.querySelectorAll('#user-map-rows tr');
+  const out = [];
+  rows.forEach(tr => {
+    const inputs = tr.querySelectorAll('input');
+    const row = {
+      open_id: inputs[0].value.trim(),
+      role:    inputs[1].value.trim(),
+      name:    inputs[2].value.trim(),
+    };
+    out.push(row);
+  });
+  return out;
+}
+
+function addUserMapRow() {
+  const open_id = document.getElementById('new-um-open-id').value.trim();
+  const role    = document.getElementById('new-um-role').value.trim();
+  const name    = document.getElementById('new-um-name').value.trim();
+  if (!open_id || !role || !name) {
+    toast('open_id / role / name 必填', 'fail');
+    return;
+  }
+  const tbody = document.getElementById('user-map-rows');
+  const idx = tbody.children.length;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" data-idx="${idx}" data-field="open_id" value="${escapeHtml(open_id)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="role"    value="${escapeHtml(role)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="name"    value="${escapeHtml(name)}"></td>
+    <td><button class="btn btn-danger" onclick="deleteUserMapRow(${idx})">删除</button></td>
+  `;
+  tbody.appendChild(tr);
+  document.getElementById('new-um-open-id').value = '';
+  document.getElementById('new-um-role').value = '';
+  document.getElementById('new-um-name').value = '';
+}
+
+function deleteUserMapRow(idx) {
+  const tbody = document.getElementById('user-map-rows');
+  const tr = tbody.children[idx];
+  if (!tr) return;
+  const openIdInput = tr.querySelector('input[data-field="open_id"]');
+  if (!openIdInput) return;
+  const open_id = openIdInput.value.trim();
+  if (!open_id) {
+    toast('该行 open_id 为空，无需删除', 'fail');
+    return;
+  }
+  deleteConfigItem('user', open_id);
+}
+
+// ===== GROUP_MAP 渲染 / 增删改 =====
+// 注：GROUP_MAP 与 USER_MAP 解耦；USER_MAP（人）和 GROUP_MAP（群）各自独立维护。
+// 群聊推送走 FEISHU_GROUP_MAP + send_to_group(group_name=...)。
+
+function renderGroupMapRows(group_map) {
+  const tbody = document.getElementById('group-map-rows');
+  tbody.innerHTML = '';
+  group_map.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    const isUnnamed = row.is_unnamed || (!row.name);
+    const nameDisplay = isUnnamed
+      ? `<input type="text" data-idx="${idx}" data-field="name" placeholder="未命名（点击填写）" style="border-color:#999;">`
+      : `<input type="text" data-idx="${idx}" data-field="name" value="${escapeHtml(row.name)}" oninput="onGroupMapNameChanged('${escapeAttr(row.chat_id)}')">`;
+    tr.innerHTML = `
+      <td><input type="text" data-idx="${idx}" data-field="chat_id" value="${escapeHtml(row.chat_id)}"></td>
+      <td>${nameDisplay}</td>
+      <td><input type="text" data-idx="${idx}" data-field="description" value="${escapeHtml(row.description || '')}"></td>
+      <td><button class="btn btn-danger" onclick="deleteGroupMapRow(${idx})">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function addGroupMapRow() {
+  const chat_id = document.getElementById('new-gm-chat-id').value.trim();
+  const name = document.getElementById('new-gm-name').value.trim();
+  const description = document.getElementById('new-gm-description').value.trim();
+  if (!chat_id) {
+    toast('chat_id 必填', 'fail');
+    return;
+  }
+  if (!name) {
+    toast('name 必填（占位条目不会被保存）', 'fail');
+    return;
+  }
+  // 校验：与现有 chat_id 重复 → 直接拒绝（后端 dict 主键会覆盖，前端先挡住）
+  const tbody = document.getElementById('group-map-rows');
+  for (let i = 0; i < tbody.children.length; i++) {
+    const ci = tbody.children[i].querySelector('input[data-field="chat_id"]');
+    if (ci && ci.value.trim() === chat_id) {
+      toast(`chat_id=${chat_id} 已存在（编辑现有行）`, 'fail');
+      return;
+    }
+  }
+  const idx = tbody.children.length;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" data-idx="${idx}" data-field="chat_id" value="${escapeHtml(chat_id)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="name" value="${escapeHtml(name)}" oninput="onGroupMapNameChanged('${escapeAttr(chat_id)}')"></td>
+    <td><input type="text" data-idx="${idx}" data-field="description" value="${escapeHtml(description)}"></td>
+    <td><button class="btn btn-danger" onclick="deleteGroupMapRow(${idx})">删除</button></td>
+  `;
+  tbody.appendChild(tr);
+  document.getElementById('new-gm-chat-id').value = '';
+  document.getElementById('new-gm-name').value = '';
+  document.getElementById('new-gm-description').value = '';
+  // 同步更新 _view.group_map 缓存（USER_MAP 不再依赖 chat_id，无需刷新）
+  _view = _view || {};
+  _view.group_map = _view.group_map || [];
+  _view.group_map.push({ chat_id, name, description, is_unnamed: false });
+}
+
+function deleteGroupMapRow(idx) {
+  const tbody = document.getElementById('group-map-rows');
+  const tr = tbody.children[idx];
+  if (!tr) return;
+  const chatIdInput = tr.querySelector('input[data-field="chat_id"]');
+  if (!chatIdInput) return;
+  const chat_id = chatIdInput.value.trim();
+  if (!chat_id) {
+    toast('该行 chat_id 为空，无需删除', 'fail');
+    return;
+  }
+  deleteConfigItem('group', chat_id);
+}
+
+// ===== 多账户（FEISHU_ACCOUNTS）渲染 / 增删改 =====
+/**
+ * 校验 account_id 是否合法。
+ * 规则: 1~64 字符,首字符字母,后续字母/数字/下划线/短横线。
+ * 返回 null 表示合法,否则返回错误信息。
+ */
+function validateAccountId(aid) {
+  if (!aid) return 'account_id 不能为空';
+  if (aid.length > 64) return 'account_id 长度不能超过 64 字符';
+  if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(aid)) {
+    return 'account_id 必须以字母开头,仅含字母/数字/下划线/短横线';
+  }
+  return null;
+}
+
+function renderAccountsRows(accounts) {
+  const tbody = document.getElementById('accounts-rows');
+  tbody.innerHTML = '';
+  accounts.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    // 敏感字段:有值显示 *** + 简短 placeholder + title 提示
+    const secretPh = row.app_secret.has_value ? '***' : '(空)';
+    const secretTitle = row.app_secret.has_value
+      ? '已配置,留空=保持原值'
+      : '未配置,新增时必填';
+    const tokenPh = row.verification_token.has_value ? '***' : '(空)';
+    const tokenTitle = row.verification_token.has_value
+      ? '已配置,留空=保持原值'
+      : '未配置,新增时必填';
+    tr.innerHTML = `
+      <td><input type="text" data-idx="${idx}" data-field="account_id" value="${escapeHtml(row.account_id)}"></td>
+      <td><input type="text" data-idx="${idx}" data-field="description" value="${escapeHtml(row.description || '')}" placeholder="说明（可选）"></td>
+      <td>
+        <select data-idx="${idx}" data-field="domain" style="width:100%;padding:6px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+          <option value="feishu" ${row.domain === 'feishu' ? 'selected' : ''}>feishu</option>
+          <option value="lark"   ${row.domain === 'lark'   ? 'selected' : ''}>lark</option>
+        </select>
+      </td>
+      <td><input type="text" data-idx="${idx}" data-field="app_id" value="${escapeHtml(row.app_id.value || '')}" placeholder="cli_xxx" title="飞书 App ID"></td>
+      <td><input type="password" data-idx="${idx}" data-field="app_secret" value="${row.app_secret.has_value ? '***' : ''}" placeholder="${secretPh}" title="${secretTitle}"></td>
+      <td><input type="password" data-idx="${idx}" data-field="verification_token" value="${row.verification_token.has_value ? '***' : ''}" placeholder="${tokenPh}" title="${tokenTitle}"></td>
+      <td><button class="btn btn-danger" onclick="deleteAccountRow(${idx})">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  const statusEl = document.getElementById('accounts-status');
+  if (accounts.length === 0) {
+    statusEl.innerHTML = '<div class="status status-info">尚无账户。下方填写 account_id + 凭据 → 点击"+ 添加"。</div>';
+  } else {
+    statusEl.innerHTML = `<div class="status status-ok">共 ${accounts.length} 个账户。account_id 可行内编辑（重命名后保存会自动迁移 env vars）。</div>`;
+  }
+}
+
+function addAccountRow() {
+  const account_id = document.getElementById('new-acc-id').value.trim();
+  const description = document.getElementById('new-acc-desc').value.trim();
+  const domain = document.getElementById('new-acc-domain').value;
+  const app_id = document.getElementById('new-acc-appid').value.trim();
+  const app_secret = document.getElementById('new-acc-secret').value;
+  const verification_token = document.getElementById('new-acc-token').value;
+
+  // 1. account_id 必填 + 合法字符
+  const err = validateAccountId(account_id);
+  if (err) {
+    toast(err, 'fail');
+    document.getElementById('new-acc-id').focus();
+    return;
+  }
+  // 2. 唯一性校验(与现有行 + UI 添加框比)
+  const tbody = document.getElementById('accounts-rows');
+  for (let i = 0; i < tbody.children.length; i++) {
+    const ci = tbody.children[i].querySelector('input[data-field="account_id"]');
+    if (ci && ci.value.trim() === account_id) {
+      toast(`account_id=${account_id} 已存在（编辑现有行）`, 'fail');
+      return;
+    }
+  }
+  // 3. app_id 必填
+  if (!app_id) {
+    toast('app_id 必填（cli_xxx）', 'fail');
+    document.getElementById('new-acc-appid').focus();
+    return;
+  }
+  // 4. secret/token: 必填至少一个 — 但允许"先填 app_id 后面再补 secret"的场景
+  // 这里采取严格策略: 新增行必须填 secret(否则 gateway 启动会失败)
+  if (!app_secret) {
+    toast('app_secret 必填（新增账户时必须提供,后续修改可保留原值）', 'fail');
+    document.getElementById('new-acc-secret').focus();
+    return;
+  }
+  if (!verification_token) {
+    toast('verification_token 必填（新增账户时必须提供,后续修改可保留原值）', 'fail');
+    document.getElementById('new-acc-token').focus();
+    return;
+  }
+
+  const idx = tbody.children.length;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" data-idx="${idx}" data-field="account_id" value="${escapeHtml(account_id)}"></td>
+    <td><input type="text" data-idx="${idx}" data-field="description" value="${escapeHtml(description)}" placeholder="说明（可选）"></td>
+    <td>
+      <select data-idx="${idx}" data-field="domain" style="width:100%;padding:6px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+        <option value="feishu" ${domain === 'feishu' ? 'selected' : ''}>feishu</option>
+        <option value="lark"   ${domain === 'lark'   ? 'selected' : ''}>lark</option>
+      </select>
+    </td>
+    <td><input type="text" data-idx="${idx}" data-field="app_id" value="${escapeHtml(app_id)}" placeholder="cli_xxx"></td>
+    <td><input type="password" data-idx="${idx}" data-field="app_secret" value="${escapeHtml(app_secret)}" placeholder="已填"></td>
+    <td><input type="password" data-idx="${idx}" data-field="verification_token" value="${escapeHtml(verification_token)}" placeholder="已填"></td>
+    <td><button class="btn btn-danger" onclick="deleteAccountRow(${idx})">删除</button></td>
+  `;
+  tbody.appendChild(tr);
+  // 清空添加框
+  document.getElementById('new-acc-id').value = '';
+  document.getElementById('new-acc-desc').value = '';
+  document.getElementById('new-acc-domain').value = 'feishu';
+  document.getElementById('new-acc-appid').value = '';
+  document.getElementById('new-acc-secret').value = '';
+  document.getElementById('new-acc-token').value = '';
+  // 状态行
+  const statusEl = document.getElementById('accounts-status');
+  statusEl.innerHTML = `<div class="status status-info">已添加 ${account_id}（共 ${tbody.children.length} 行）。点击底部「💾 保存到 .env」统一落盘。</div>`;
+}
+
+function deleteAccountRow(idx) {
+  const tbody = document.getElementById('accounts-rows');
+  const tr = tbody.children[idx];
+  if (!tr) return;
+  const accIdInput = tr.querySelector('input[data-field="account_id"]');
+  if (!accIdInput) return;
+  const account_id = accIdInput.value.trim();
+  if (!account_id) {
+    toast('该行 account_id 为空，无需删除', 'fail');
+    return;
+  }
+  deleteConfigItem('account', account_id);
+}
+
+function collectAccounts() {
+  const rows = document.querySelectorAll('#accounts-rows tr');
+  const out = [];
+  rows.forEach(tr => {
+    const accIdInput = tr.querySelector('input[data-field="account_id"]');
+    const descInput = tr.querySelector('input[data-field="description"]');
+    const domainSel = tr.querySelector('select[data-field="domain"]');
+    const appIdInput = tr.querySelector('input[data-field="app_id"]');
+    const secretInput = tr.querySelector('input[data-field="app_secret"]');
+    const tokenInput = tr.querySelector('input[data-field="verification_token"]');
+    const account_id = accIdInput ? accIdInput.value.trim() : '';
+    if (!account_id) return;  // 主键空 =跳过该行
+    out.push({
+      account_id,
+      description: descInput ? descInput.value.trim() : '',
+      domain: domainSel ? domainSel.value : 'feishu',
+      app_id: appIdInput ? appIdInput.value.trim() : '',
+      // 敏感字段:保留 '***' / '' / 新值 三种语义
+      app_secret: secretInput ? secretInput.value : '',
+      verification_token: tokenInput ? tokenInput.value : '',
+    });
+  });
+  return out;
+}
+
+// ===== 通用 delete API 调用（弹窗确认 + 立即写盘 .env）=====
+async function deleteConfigItem(type, key) {
+  const labelMap = {
+    user:    'USER_MAP',
+    group:   'GROUP_MAP',
+    account: 'FEISHU_ACCOUNTS',
+  };
+  const mapLabel = labelMap[type] || type.toUpperCase();
+  const backupHint = type === 'account'
+    ? '此操作会同时改三处:项目根 .env + gateway .env + config.feishu.local.json（每处写前自动备份）。'
+    : '此操作会立即修改 .env（写前自动备份 .env.bak）。';
+  if (!confirm(`确定删除 ${mapLabel} 主键 ${key} ？\n\n${backupHint}`)) return;
+  try {
+    const r = await fetch('/api/feishu/config/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ type, key }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    let msg;
+    if (j.deleted) {
+      msg = `已删除 ${mapLabel}[${key}]（剩余 ${j.remaining_size} 条）`;
+      if (type === 'account') {
+        if (j.gateway_backup) msg += `；gateway 备份: ${j.gateway_backup}`;
+        if (j.config_backup) msg += `；config 备份: ${j.config_backup}`;
+      }
+    } else {
+      msg = `${mapLabel}[${key}] 不存在；幂等跳过`;
+    }
+    toast(msg, 'ok');
+    // 重新拉取数据并重渲染（GROUP_MAP 删后,USER_MAP 行的"群聊名称"列也要同步刷新）
+    setTimeout(loadAll, 200);
+  } catch (e) {
+    toast('删除失败：' + e.message, 'fail');
+  }
+}
+
+function collectGroupMap() {
+  const rows = document.querySelectorAll('#group-map-rows tr');
+  const out = [];
+  rows.forEach(tr => {
+    const inputs = tr.querySelectorAll('input');
+    const chat_id = inputs[0].value.trim();
+    const name = inputs[1].value.trim();
+    const description = inputs[2].value.trim();
+    if (!chat_id) return;  // chat_id 必填；空行不收集
+    // name 必填；name 为空则跳过该行（与后端 api_save_config 行为一致）
+    if (!name) return;
+    out.push({ chat_id, name, description });
+  });
+  return out;
+}
+
+// GROUP_MAP 行 name 改变 → 同步 _view.group_map 缓存（USER_MAP 不再依赖群名）
+function onGroupMapNameChanged(chat_id) {
+  if (!_view) return;
+  const tbody = document.getElementById('group-map-rows');
+  let newName = '';
+  for (let i = 0; i < tbody.children.length; i++) {
+    const ci = tbody.children[i].querySelector('input[data-field="chat_id"]');
+    const ni = tbody.children[i].querySelector('input[data-field="name"]');
+    if (ci && ci.value.trim() === chat_id && ni) {
+      newName = ni.value.trim();
+      break;
+    }
+  }
+  // 更新 _view.group_map 缓存
+  if (_view.group_map) {
+    for (const g of _view.group_map) {
+      if (g.chat_id === chat_id) {
+        g.name = newName;
+        g.is_unnamed = !newName;
+      }
+    }
+  }
+}
+
+// 转义 HTML 属性值（用于 oninput='...${escapeAttr(...)}...'）
+function escapeAttr(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/'/g, '&#39;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function loadAll() {
+  try {
+    const r = await fetch('/api/feishu/config');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    _view = j.view;
+    renderManaged(_view);
+    renderAccountsRows(_view.accounts || []);
+    renderGroupMapRows(_view.group_map || []);
+    renderUserMapRows(_view.user_map || []);
+    toast(
+      `已加载：${(_view.accounts || []).length} 个飞书账户 / ` +
+      `${(_view.user_map || []).length} 个收件人 / ` +
+      `${(_view.group_map || []).length} 个群聊`,
+      'ok',
+    );
+  } catch (e) {
+    toast('加载失败：' + e.message, 'fail');
+  }
+}
+
+function collectManaged() {
+  return {
+    GATEWAY_HOST: document.getElementById('gateway-host').value.trim(),
+    CG_API_KEY: document.getElementById('cg-api-key').value,
+  };
+}
+
+async function saveAll() {
+  const managed = collectManaged();
+  const accounts = collectAccounts();
+  const user_map = collectUserMap();
+  const group_map = collectGroupMap();
+  const statusEl = document.getElementById('save-status');
+  statusEl.innerHTML = '<div class="status status-info">保存中…</div>';
+  try {
+    const r = await fetch('/api/feishu/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ managed, accounts, user_map, group_map }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    let msg = `已保存：updated=${(j.updated || []).join(', ') || '(无)'}`;
+    if (j.removed && j.removed.length) msg += `；removed=${j.removed.join(', ')}`;
+    if (typeof j.accounts_size === 'number') msg += `；FEISHU_ACCOUNTS 共 ${j.accounts_size} 个账户`;
+    if (typeof j.user_map_size === 'number') msg += `；USER_MAP 共 ${j.user_map_size} 条`;
+    if (typeof j.group_map_size === 'number') msg += `；GROUP_MAP 共 ${j.group_map_size} 条`;
+    if (j.backup) msg += `；备份：${j.backup}`;
+    if (j.gateway_backup) msg += `；gateway .env 备份：${j.gateway_backup}`;
+    if (j.config_backup) msg += `；config JSON 备份：${j.config_backup}`;
+    statusEl.innerHTML = `<div class="status status-ok">${msg}</div>`;
+    toast('保存成功', 'ok');
+    setTimeout(loadAll, 500);
+  } catch (e) {
+    statusEl.innerHTML = `<div class="status status-fail">保存失败：${e.message}</div>`;
+    toast('保存失败：' + e.message, 'fail');
+  }
+}
+
+async function testGateway() {
+  const host = document.getElementById('gateway-host').value.trim();
+  const apiKeyRaw = document.getElementById('cg-api-key').value;
+  // 测试时如果还是 "***"，则不传 key（避免误用占位符）
+  const apiKey = (apiKeyRaw === '***' || !apiKeyRaw) ? '' : apiKeyRaw;
+  const resultEl = document.getElementById('gateway-test-result');
+  resultEl.innerHTML = '<div class="status status-info">探测中…</div>';
+  try {
+    const r = await fetch('/api/feishu/test/gateway', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ host, api_key: apiKey }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    const data = j.data;
+    const cls = j.ok ? 'status-ok' : 'status-fail';
+    const pretty = data && typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+    resultEl.innerHTML = `
+      <div class="status ${cls}">
+        <strong>${j.ok ? '✓ 连接成功' : '✗ 连接失败'}</strong> · status=${j.status ?? 'n/a'} · url=${j.url}
+        <pre class="code-block">${escapeHtml(pretty)}</pre>
+      </div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="status status-fail">探测异常：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function testResolve() {
+  const role = document.getElementById('test-assignee-role').value.trim();
+  const userMapRows = collectUserMap();
+  // 序列化当前 UI 表为 JSON 字符串（与 .env 格式一致）
+  const userMapJson = JSON.stringify(
+    Object.fromEntries(
+      userMapRows
+        .filter(r => r.open_id && r.role)
+        .map(r => [r.open_id, {role: r.role, name: r.name}])
+    )
+  );
+  const resultEl = document.getElementById('resolve-result');
+  resultEl.innerHTML = '<div class="status status-info">解析中…</div>';
+  try {
+    const r = await fetch('/api/feishu/test/resolve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        assignee_role: role,
+        user_map_json: userMapJson,
+      }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    const sourceBadge = {
+      USER_MAP: 'USER_MAP（FEISHU_USER_MAP）',
+      DEV_FALLBACK: 'DEV_FALLBACK（兜底占位符）',
+    }[j.source] || j.source;
+    let html = `<div class="status ${j.source === 'DEV_FALLBACK' ? 'status-info' : 'status-ok'}">
+      <strong>${j.source === 'DEV_FALLBACK' ? '⚠ 命中兜底（建议补全配置）' : '✓ 命中'}</strong>
+      · 来源：${sourceBadge} · 共 ${j.count} 个收件人<br>
+      <ul style="margin:6px 0 0 0; padding-left:20px;">
+        ${(j.recipients || []).map(rc => `
+          <li>
+            <code>${escapeHtml(rc.open_id || rc._fallback_placeholder || '(空)')}</code>
+            <span style="color:var(--text-muted);font-size:11px;">
+              (${escapeHtml(rc.receive_id_type)} · ${escapeHtml(rc.name || '(无姓名)')} · open_id=${escapeHtml(rc.open_id || '(空)')})
+            </span>
+          </li>`).join('')}
+      </ul>
+    </div>`;
+    if (!j.map_valid_json) {
+      html += `<div class="status status-fail" style="margin-top:6px">⚠ FEISHU_USER_MAP JSON 解析失败：${escapeHtml(j.map_error)}</div>`;
+    }
+    const umStatus = document.getElementById('user-map-status');
+    if (umStatus) {
+      umStatus.innerHTML = !j.map_valid_json
+        ? `<div class="status status-fail">⚠ JSON 不合法：${escapeHtml(j.map_error)}</div>`
+        : '<div class="status status-ok">✓ JSON 合法</div>';
+    }
+    resultEl.innerHTML = html;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="status status-fail">解析异常：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// ============================================================
+// ⑤ 实时监听
+// ============================================================
+let _listenerId = null;
+let _selectedSequence = null;
+let _pollTimer = null;
+
+function setListenerBadge(text, kind) {
+  const el = document.getElementById('listener-status-badge');
+  el.textContent = text;
+  const colors = {
+    idle:    {bg: '#e0e3eb', fg: '#646a73'},
+    active:  {bg: '#dcfce7', fg: '#16a34a'},
+    error:   {bg: '#fee2e2', fg: '#dc2626'},
+    stopped: {bg: '#fef3c7', fg: '#92400e'},
+  };
+  const c = colors[kind] || colors.idle;
+  el.style.background = c.bg;
+  el.style.color = c.fg;
+}
+
+function startPolling() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(refreshListener, 1500);
+}
+
+function stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+async function startListener() {
+  const infoEl = document.getElementById('listener-info');
+  infoEl.style.display = 'block';
+  infoEl.className = 'status status-info';
+  infoEl.innerHTML = '启动中…';
+
+  try {
+    const r = await fetch('/api/feishu/listener/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({poll_interval_sec: 2.0, idle_timeout_sec: 600}),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+
+    _listenerId = j.listener_id;
+    setListenerBadge(`监听中 · ${_listenerId}`, 'active');
+    infoEl.className = 'status status-ok';
+    infoEl.innerHTML = `<strong>✓ ${j.instruction}</strong><br>listener_id: <code>${_listenerId}</code> · 轮询间隔 ${j.snapshot.poll_interval_sec}s`;
+    startPolling();
+  } catch (e) {
+    setListenerBadge('启动失败', 'error');
+    infoEl.className = 'status status-fail';
+    infoEl.innerHTML = `启动失败：${escapeHtml(e.message)}<br><span style="color:var(--text-muted);font-size:12px;">请确认 ① GATEWAY_HOST + CG_API_KEY 已配置并保存</span>`;
+  }
+}
+
+async function stopListener() {
+  try {
+    const r = await fetch('/api/feishu/listener/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({listener_id: _listenerId || ''}),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    setListenerBadge(`已停止 · ${j.stopped.length} 个`, 'stopped');
+    stopPolling();
+  } catch (e) {
+    toast('停止失败：' + e.message, 'fail');
+  }
+}
+
+async function refreshListener() {
+  try {
+    const r = await fetch('/api/feishu/listener/status');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'unknown');
+    renderListener(j);
+  } catch (e) {
+    // ignore
+  }
+}
+
+function renderListener(j) {
+  const snap = j.snapshot;
+  if (!snap) {
+    setListenerBadge('未启动', 'idle');
+    return;
+  }
+  _listenerId = snap.listener_id;
+  // status badge
+  if (snap.status === 'listening' || snap.status === 'starting') {
+    setListenerBadge(`监听中 · ${snap.listener_id}`, 'active');
+  } else if (snap.status === 'error') {
+    setListenerBadge('错误', 'error');
+  } else if (snap.status === 'stopped') {
+    setListenerBadge(`已停止（${snap.error || ''}）`, 'stopped');
+    stopPolling();
+  }
+
+  // info panel
+  const infoEl = document.getElementById('listener-info');
+  infoEl.style.display = 'block';
+  const statusBadge = snap.status === 'listening' ? 'status-ok'
+                    : snap.status === 'error' ? 'status-fail'
+                    : 'status-info';
+  infoEl.className = 'status ' + statusBadge;
+  const convTypes = {};
+  snap.events.forEach(e => {
+    const t = e.conversation_type || '?';
+    convTypes[t] = (convTypes[t] || 0) + 1;
+  });
+  const typeSummary = Object.entries(convTypes).map(([t,n]) => `${t}=${n}`).join(', ') || '(none)';
+  infoEl.innerHTML = `
+    <strong>状态：${snap.status}</strong> ·
+    累计轮询 ${snap.poll_count} 次 ·
+    新捕获 ${snap.new_count} 条 ·
+    last_seq=${snap.last_sequence}
+    ${snap.error ? `<br><span style="color:var(--danger);">⚠ ${escapeHtml(typeof snap.error === 'object' ? JSON.stringify(snap.error) : snap.error)}</span>` : ''}
+    <br><span style="color:var(--text-muted);font-size:12px;">会话类型分布：${typeSummary}</span>
+  `;
+
+  // events list
+  const eventsEl = document.getElementById('listener-events');
+  if (!snap.events.length) {
+    eventsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">暂无事件。点击「▶ 开始监听」后到飞书群/单聊里发条消息。</div>';
+    return;
+  }
+  // 倒序：最新在最上
+  const rows = [...snap.events].reverse().map(evt => {
+    const isSelected = _selectedSequence === evt.sequence;
+    const convIcon = evt.conversation_type === 'group' ? '👥'
+                    : evt.conversation_type === 'direct' ? '💬' : '❓';
+    const chatShort = (evt.chat_id || '').slice(0, 12) || '(empty)';
+    const openShort = (evt.open_id || '').slice(0, 12) || '(empty)';
+    const textShort = (evt.text || '').slice(0, 40) || '(no text)';
+    return `
+      <tr style="cursor:pointer; ${isSelected ? 'background:#eef4ff;' : ''}"
+          onclick="selectEvent(${evt.sequence})">
+        <td style="width:30px;">
+          <input type="radio" name="selected-event" ${isSelected ? 'checked' : ''}
+                 onclick="event.stopPropagation(); selectEvent(${evt.sequence})">
+        </td>
+        <td style="width:50px;">${convIcon}</td>
+        <td>
+          <div style="font-size:12px;"><strong>${escapeHtml(evt.sender_name || '匿名')}</strong> · seq=${evt.sequence}</div>
+          <div style="font-size:11px;color:var(--text-muted);">${escapeHtml(textShort)}</div>
+        </td>
+        <td style="font-family:monospace;font-size:11px;">
+          <div>chat_id: ${escapeHtml(chatShort)}${evt.chat_id && evt.chat_id.length > 12 ? '…' : ''}</div>
+          <div>open_id: ${escapeHtml(openShort)}${evt.open_id && evt.open_id.length > 12 ? '…' : ''}</div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  eventsEl.innerHTML = `
+    <table style="width:100%;">
+      <thead><tr><th></th><th></th><th>发送者 / 消息</th><th>捕获 ID</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function selectEvent(seq) {
+  _selectedSequence = seq;
+  // 显示提示区（取代原 save-captured-form）
+  document.getElementById('captured-hint').style.display = 'block';
+
+  // 从最近一次 snapshot 找事件详情
+  fetch('/api/feishu/listener/status').then(r => r.json()).then(j => {
+    if (!j.ok || !j.snapshot) return;
+    const evt = (j.snapshot.events || []).find(e => e.sequence === seq);
+    if (!evt) return;
+    document.getElementById('selected-event-summary').innerHTML =
+      `seq=${evt.sequence} · ${escapeHtml(evt.sender_name || '匿名')} · ` +
+      `text="${escapeHtml((evt.text || '').slice(0, 30))}"<br>` +
+      `chat_id: <code>${escapeHtml(evt.chat_id || '(empty)')}</code> · ` +
+      `open_id: <code>${escapeHtml(evt.open_id || '(empty)')}</code>`;
+
+    // 自动按 conversation_type 把主键写到 ③/4 的"+ 添加"输入框
+    // 群聊 → ③ 的 chat_id（主键）输入框
+    // 单聊 → ④ 的 open_id（主键）输入框
+    if (evt.conversation_type === 'group' && evt.chat_id) {
+      const input = document.getElementById('new-gm-chat-id');
+      input.value = evt.chat_id;
+      // 高亮闪烁 + scrollIntoView（视觉提示用户去 ③ 完成 name + 添加）
+      input.style.background = '#fffbe6';
+      setTimeout(() => { input.style.background = ''; }, 1500);
+      const sec = document.getElementById('group-map-table');
+      if (sec && sec.scrollIntoView) {
+        sec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } else if (evt.conversation_type === 'direct' && evt.open_id) {
+      const input = document.getElementById('new-um-open-id');
+      input.value = evt.open_id;
+      // 高亮闪烁 + scrollIntoView（视觉提示用户去 ④ 完成 role + name + 添加）
+      input.style.background = '#fffbe6';
+      setTimeout(() => { input.style.background = ''; }, 1500);
+      const sec = document.getElementById('user-map-table');
+      if (sec && sec.scrollIntoView) {
+        sec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } else {
+      // 未知类型（不常见）：清空两个预填
+      document.getElementById('new-gm-chat-id').value = '';
+      document.getElementById('new-um-open-id').value = '';
+    }
+    refreshListener();   // 刷新高亮
+  });
+}
+
+window.addEventListener('DOMContentLoaded', loadAll);
+window.addEventListener('DOMContentLoaded', refreshListener);   // 恢复上次 listener 状态
+</script>
+</body>
+</html>
