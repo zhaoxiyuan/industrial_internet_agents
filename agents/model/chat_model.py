@@ -90,7 +90,20 @@ def create_chat_model_with_logging(agent_name: str = "LLM", job_id: str = "*"):
 
     Args:
         agent_name: Agent 名称
-        job_id: 作业ID，用于 WebSocket 推送
+        job_id: 作业ID，用于 WebSocket 推送和 LangSmith 关联
     """
-    callback = LLMLoggingCallback(agent_name, job_id)
-    return create_chat_model(callbacks=[callback])
+    from agents.model.langsmith_config import LangSmithConfig
+
+    callbacks = []
+
+    # 添加现有日志回调
+    callbacks.append(LLMLoggingCallback(agent_name, job_id))
+
+    # 添加 LangSmith 回调（仅当配置了 API key 时）
+    langsmith_cb = LangSmithConfig.get_callback(
+        tags=[agent_name, f"job:{job_id}"],
+    )
+    if langsmith_cb:
+        callbacks.append(langsmith_cb)
+
+    return create_chat_model(callbacks=callbacks)

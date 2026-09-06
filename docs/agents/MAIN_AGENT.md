@@ -74,6 +74,46 @@ P1 → P2 → P3 → ... → P10
 - `get_job_history()` - 获取作业完整历史
 - `list_all_jobs()` - 列出所有作业
 
+## 异常处理机制
+
+工作流执行过程中，各阶段子 Agent 可能抛出异常。MainAgent 提供完整的异常捕获和上报机制：
+
+### 异常处理流程
+
+```
+阶段执行 → 正常完成 → pending_confirmation? → 等待确认 / 进入下一阶段
+         ↓
+      抛出异常 → 更新 error 状态 → 广播状态 → 记录日志 → 中断工作流
+```
+
+### 异常处理行为
+
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| 1 | `logger.exception()` | 打印完整堆栈日志 |
+| 2 | `update_workflow_status()` | 更新 `{stage}_status="error"`, `main_agent.status="error"` |
+| 3 | `_broadcast_state()` | 广播状态到前端 WebSocket |
+| 4 | `add_job_log()` | 记录 `action="stage_error"` 日志 |
+| 5 | `return {...status:"error"}` | 中断工作流，返回错误信息 |
+
+### 错误响应格式
+
+```python
+{
+    "job_id": "xxx",
+    "current_stage": "P3",           # 异常发生的阶段
+    "status": "error",
+    "error": "具体的异常信息",
+    "confirmed_stages": ["P1", "P2"]  # 异常前已完成的阶段
+}
+```
+
+### 涉及的函数
+
+- `run_workflow()` - 启动工作流时的异常处理
+- `confirm_and_continue()` - 确认后继续执行时的异常处理
+- `_confirm_and_continue_async()` - 异步模式下的异常处理（后台线程）
+
 ## 工作流状态
 
 ```python
@@ -81,12 +121,21 @@ MainAgentState = {
     "application": dict,           # 作业申请
     "task_id": str,               # 任务ID
     "permit_draft_id": str,       # 作业票草稿ID
-    "jsa_result": dict,          # JSA分析结果
+    "jsa_result": dict,           # JSA分析结果
     "current_stage": str,         # 当前阶段 P1-P10
     "confirmed_stages": dict,     # 已确认的阶段
     "pending_confirmations": list, # 待确认阶段列表
+    "status": str,                # running | waiting | completed | error
     # ... P2-P10 各阶段状态
 }
+```
+
+### 阶段状态流转
+
+```
+pending → running → waiting(需确认) → completed
+                     ↓
+                   error(异常中断)
 ```
 
 ## 文件位置

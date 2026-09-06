@@ -607,7 +607,7 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
 def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) -> dict:
     """处理 P1 执行结果，提取并保存作业票数据"""
     from datetime import datetime, timezone
-    from .workflow import get_job_dir, get_stage_result_path, write_json_file
+    from .workflow import get_job_dir, get_stage_result_path, read_json_file, write_json_file
 
     result = existing_result.copy() if existing_result else {}
     result["job_id"] = job_id
