@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/vite-env.d.ts","./src/composables/useapi.ts","./src/composables/usewebsocket.ts","./src/router/index.ts","./src/stores/workflow.ts","./src/app.vue","./src/views/agentmanage.vue","./src/views/edgeplatform.vue","./src/views/skillsquare.vue","./src/views/workflowcenter.vue"],"version":"5.9.3"}

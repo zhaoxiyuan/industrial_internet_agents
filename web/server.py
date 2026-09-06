@@ -11,9 +11,14 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 添加 feishu_gateway_cli 路径
+feishu_gateway_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "openclaw-channel-gateway-standalone")
+sys.path.insert(0, feishu_gateway_path)
+
 from web.api import config as config_api
 from web.api import workflow as workflow_api
 from web.api import snapshots as snapshots_api
+from web.api import skills as skills_api
 from feishu_gateway_cli import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
 from web.ws.servers import start_websocket_threads
@@ -27,6 +32,7 @@ logger = logging.getLogger("server")
 
 PORT = 8080
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+DIST_DIR = os.path.join(WEB_DIR, "dist")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -125,6 +131,15 @@ class Handler(SimpleHTTPRequestHandler):
             thread_id = parse_qs(parsed.query).get("thread_id", [None])[0]
             workflow_api.handle_workflow_state_get(self, thread_id)
 
+        elif path == "/api/system_prompt":
+            stage = parse_qs(parsed.query).get("stage", [None])[0]
+            from agents.utils.system_prompt import load_system_prompt
+            content = load_system_prompt(stage) if stage else ""
+            self.send_json({"stage": stage, "content": content})
+
+        elif path == "/api/skills":
+            skills_api.handle_skills_get(self)
+
         elif path == "/api/feishu/card-callbacks":
             feishu_card_api.handle_card_callback_list(self)
 
@@ -180,6 +195,33 @@ class Handler(SimpleHTTPRequestHandler):
                         },
                         status=500,
                     )
+
+        elif path == "/" or path.startswith("/agents") or path.startswith("/skills") or \
+             path.startswith("/workflow") or path.startswith("/edge-platform") or \
+             path.startswith("/model-management") or path.startswith("/mcp-management") or \
+             path.startswith("/assets"):
+            # Vue SPA 路由 和 静态资源 - 使用 dist 目录
+            if path.startswith("/assets"):
+                file_path = os.path.join(DIST_DIR, path[1:])  # 去掉开头的 /
+            else:
+                file_path = os.path.join(DIST_DIR, "index.html")
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                if path.endswith(".css"):
+                    content_type = "text/css"
+                elif path.endswith(".js"):
+                    content_type = "text/javascript"
+                else:
+                    content_type = "text/html; charset=utf-8"
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", len(content))
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                logger.warning(f"[GET] 文件不存在: {file_path}")
+                self.send_error(404)
 
         else:
             super().do_GET()

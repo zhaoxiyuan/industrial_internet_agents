@@ -1,0 +1,1 @@
+@data/prd/广东石化作业场景闭环管理智能体工具链项目实施任务计划书.docx   结合该文档，从文档中提取一些skill，数量要求20+，使用skill-creator这个skill生成skill，目录放到data/skills下。

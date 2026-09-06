@@ -656,7 +656,7 @@ async function startMonitor() {
   const jobId = document.getElementById("txtJobId").value.trim();
   const scenario = document.getElementById("selScenarioJob").value;
   if (!jobId) { alert("请输入 job_id（17 位时间戳，例: 20260819154312029）"); return; }
-  if (!/^\d{17}$/.test(jobId)) {
+  if (!/^\d{17}$/u.test(jobId)) {
     alert("job_id 格式错误，应为 17 位数字（YYYYMMDDHHMMSS + 3位随机）");
     return;
   }

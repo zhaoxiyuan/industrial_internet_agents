@@ -113,7 +113,6 @@ document.addEventListener('DOMContentLoaded', function() {
     initTabs();
     initMenu();
     loadModelConfig();
-    loadAllPrompts();
     renderWorkflowDiagram();
     fillMockData();
 });
@@ -144,8 +143,8 @@ function initMenu() {
             state.selectedMenu = panel;
         });
     });
-    // 初始化时默认激活 model-config
-    const defaultItem = document.querySelector('.menu-item[data-panel="model-config"]');
+    // 初始化时默认激活 execute
+    const defaultItem = document.querySelector('.menu-item[data-panel="execute"]');
     if (defaultItem) defaultItem.click();
 }
 
