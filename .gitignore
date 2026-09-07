@@ -55,4 +55,17 @@ A6/log_test/
 A5/logs/
 A6/logs/
 
+# Vue 前端
+web/frontend/node_modules/
+web/frontend/dist/
+web/frontend/package-lock.json
+web/frontend/tsconfig.tsbuildinfo
+web/frontend/tsconfig.node.tsbuildinfo
+
+# 根目录锁文件
+package-lock.json
+
+# MCP 配置
+.mcp/
+
 

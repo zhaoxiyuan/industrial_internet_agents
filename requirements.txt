@@ -33,6 +33,9 @@ websockets>=12.0
 structlog>=24.0.0
 rich>=15.0.0
 
+# LangSmith 观测平台
+langsmith>=0.1.0
+
 # Gradio Web 前端
 gradio>=4.0.0
 

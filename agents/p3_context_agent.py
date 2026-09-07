@@ -16,6 +16,18 @@ from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
 from .utils import get_stage_logger
 
+# 延迟导入避免循环依赖
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P3 子步骤定义
+P3_STEP_ITEMS = [
+    {"index": 1, "label": "构建作业上下文", "tool": "context_build"},
+]
+P3_STEP_TOTAL = len(P3_STEP_ITEMS)
+
 # 配置日志
 import logging
 logger = logging.getLogger("p3_context_agent")
@@ -256,7 +268,17 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P3] 调用 context_build: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P3", 1, P3_STEP_TOTAL,
+            "构建作业上下文", "context_build", "running",
+            [{"index": 1, "label": "构建作业上下文", "tool": "context_build", "status": "running"}],
+        )
         context_result = json.loads(context_build.invoke(task_id))
+        _broadcast_substep(
+            job_id, "P3", 1, P3_STEP_TOTAL,
+            "构建作业上下文", "context_build", "completed",
+            [{"index": 1, "label": "构建作业上下文", "tool": "context_build", "status": "completed"}],
+        )
         log.log_tool_call("context_build", {"task_id": task_id}, context_result)
 
         # 3. 提取结果

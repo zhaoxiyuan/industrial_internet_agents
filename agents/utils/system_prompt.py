@@ -1,14 +1,18 @@
 """
 System Prompt 加载器
-从 system_prompt/ 目录加载各 Agent 的提示词
+从场景目录下的 system_prompt/ 目录加载各 Agent 的提示词
 """
 import os
+from pathlib import Path
 
-# 获取 system_prompt 目录路径（在 agents/ 下）
-# __file__ 是 agents/utils/system_prompt.py，需要向上两级到达 agents/
+# 获取默认场景的 system_prompt 目录
+DEFAULT_SCENE = "广东石化作业场景"
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENTS_DIR = os.path.dirname(UTILS_DIR)
-SYSTEM_PROMPT_DIR = os.path.join(AGENTS_DIR, "system_prompt")
+PROJECT_ROOT = os.path.dirname(AGENTS_DIR)
+DEFAULT_SYSTEM_PROMPT_DIR = os.path.join(
+    PROJECT_ROOT, "data", "scenes", DEFAULT_SCENE, "system_prompt"
+)
 
 # 阶段到文件名映射
 STAGE_TO_FILE = {
@@ -26,27 +30,44 @@ STAGE_TO_FILE = {
 }
 
 
-def load_system_prompt(stage: str) -> str:
+def get_system_prompt_dir(scene_name: str = None) -> str:
+    """获取场景对应的 system_prompt 目录"""
+    if scene_name:
+        return os.path.join(PROJECT_ROOT, "data", "scenes", scene_name, "system_prompt")
+    return DEFAULT_SYSTEM_PROMPT_DIR
+
+
+def load_system_prompt(stage: str, scene_name: str = None) -> str:
     """加载指定阶段的系统提示词"""
+    prompt_dir = get_system_prompt_dir(scene_name)
     filename = STAGE_TO_FILE.get(stage, f"{stage}_SYSTEM_PROMPT.md")
-    filepath = os.path.join(SYSTEM_PROMPT_DIR, filename)
+    filepath = os.path.join(prompt_dir, filename)
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    # 兼容旧路径
+    old_filepath = os.path.join(AGENTS_DIR, "system_prompt", filename)
+    if os.path.exists(old_filepath):
+        with open(old_filepath, "r", encoding="utf-8") as f:
             return f.read()
     return ""
 
 
-def save_system_prompt(stage: str, content: str) -> bool:
+def save_system_prompt(stage: str, content: str, scene_name: str = None) -> bool:
     """保存指定阶段的系统提示词
 
     Args:
         stage: 阶段名称 (MAIN, P1-P10)
         content: 提示词内容
+        scene_name: 场景名称（可选）
     Returns:
         True 成功，False 失败
     """
+    prompt_dir = get_system_prompt_dir(scene_name)
+    # 确保目录存在
+    os.makedirs(prompt_dir, exist_ok=True)
     filename = STAGE_TO_FILE.get(stage, f"{stage}_SYSTEM_PROMPT.md")
-    filepath = os.path.join(SYSTEM_PROMPT_DIR, filename)
+    filepath = os.path.join(prompt_dir, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)

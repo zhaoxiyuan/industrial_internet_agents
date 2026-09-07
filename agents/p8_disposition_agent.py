@@ -847,6 +847,27 @@ def create_disposition_agent_with_hitl(user_ctx: Optional[Dict[str, str]] = None
 
 
 # ============================================================
+# 阶段执行入口（P8 处置 Agent 无批处理 execute_stage，仅保留桩函数）
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P8 阶段执行入口：人机协同处置（桩实现）
+
+    P8 与其他阶段不同，是实时交互式 Agent，不支持批处理模式。
+    此函数仅作为 STAGE_EXECUTORS 映射的桩实现，实际处置通过 run_workflow 调用。
+    """
+    from datetime import datetime, timezone
+
+    return {
+        "job_id": job_id,
+        "stage": "P8",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+        "note": "P8 是交互式处置 Agent，请通过 run_workflow 或 chat_reply 触发"
+    }
+
+
+# ============================================================
 # 运行入口（蓝图 § 7 工具 11）
 # ============================================================
 
