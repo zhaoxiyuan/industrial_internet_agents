@@ -68,3 +68,7 @@ package-lock.json
 .mcp/
 
 
+docs/.DS_Store
+venv/
+
+
