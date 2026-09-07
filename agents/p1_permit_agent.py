@@ -500,7 +500,16 @@ def permit_demo(message: str, history: list = None) -> str:
 def execute_stage(job_id: str, resume: bool = False) -> dict:
     """P1 阶段执行入口：作业预约、JSA分析与作业票
 
-    支持 HumanInTheLoop 中断恢复
+    按顺序执行 4 个工具（绕开 ReAct Agent 并行 tool_calls）：
+        1. permit_submit         → 提交作业申请
+        2. jsa_analyze           → JSA 安全分析
+        3. permit_generate_draft → 生成作业票草稿
+        4. permit_check          → 查询作业票状态
+
+    为什么不用 ReAct Agent：
+        LangChain 1.x 的 ToolNode 默认会并行执行 LLM 一次返回的多个 tool_calls，
+        导致前端看到 step 1 和 step 3 同时显示"执行中"。直接顺序 invoke 工具函数
+        可以保证前端日志按 1→2→3→4 串行展示。
     """
     import json
     from datetime import datetime, timezone
@@ -511,7 +520,7 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
     log = get_stage_logger("P1")
     log.log_enter(job_id, {"resume": resume})
     result_file = get_stage_result_path(job_id, "p1")
-    existing_result = read_json_file(result_file)
+    existing_result = read_json_file(result_file) or {}
 
     result = {
         "job_id": job_id,
@@ -520,32 +529,7 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
         "completed": False,
     }
 
-    # 检查是否需要恢复执行
-    if resume or is_agent_interrupted(job_id):
-        log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
-        hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
-        if not hitl_result:
-            logger.error(f"[execute_stage P1] hitl_result 为空: job_id={job_id}, resume={resume}")
-            return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
-        if hitl_result["interrupted"]:
-            next_tools = hitl_result.get("next", [])
-            result["pending_confirmation"] = {
-                "type": "hitl_recover",
-                "message": "P1 Agent 工具调用等待确认",
-                "next_tools": next_tools,
-            }
-            log.log_exit(job_id, result)
-            return result
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
-        result = _process_p1_result(job_id, result_data, existing_result)
-        log.log_exit(job_id, result)
-        return result
-
-    # 首次执行
+    # 加载作业申请
     app_file = get_job_dir(job_id) + "/application.json"
     application = read_json_file(app_file).get("application", {})
 
@@ -555,42 +539,116 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
         log.log_exit(job_id, result)
         return result
 
+    # 决定从哪个步骤开始（支持 HITL/断点恢复）
+    # 默认从步骤 1 开始；resume=True 时按 next_step 继续
+    next_step = existing_result.get("next_step", 1)
+    if resume:
+        next_step = existing_result.get("next_step", 1)
+    logger.info(f"[P1] 从步骤 {next_step} 开始执行: job_id={job_id}, resume={resume}")
+
+    push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程（顺序模式）")
+    add_job_log(job_id, {
+        "action": "execute_p1",
+        "mode": "sequential",
+        "next_step": next_step,
+        "resume": resume,
+    })
+
+    # 累积各步骤的输出，供 _process_p1_result 使用
+    submit_data = existing_result.get("submit_data", {})  # step 1
+    jsa_data = existing_result.get("jsa_data", {})        # step 2
+    draft_data = existing_result.get("draft_data", {})    # step 3
+    check_data = existing_result.get("check_data", {})    # step 4
+
     try:
         app_str = json.dumps(application, ensure_ascii=False)
-        message = f"""请处理以下作业申请：
 
-作业申请内容：{app_str}
-
-请依次执行：
-1. 调用 permit_submit 工具提交作业申请
-2. 调用 jsa_analyze 工具进行JSA分析
-3. 调用 permit_generate_draft 工具生成作业票草稿"""
-
-        logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
-        push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
-        hitl_result = run_permit_agent_with_hitl(message, job_id)
-
-        if hitl_result["interrupted"]:
-            next_tools = hitl_result.get("next", [])
-            log.log_hitl_interrupt(job_id, next_tools)
-            add_job_log(job_id, {
-                "action": "execute_p1_hitl_interrupt",
-                "next_tools": next_tools
+        # ---------- Step 1: permit_submit ----------
+        if next_step <= 1:
+            logger.info(f"[P1] Step 1/4 permit_submit: job_id={job_id}")
+            push_websocket_log(job_id, "INFO", "P1", "Step 1/4: 提交作业申请")
+            submit_raw = permit_submit.invoke(app_str)
+            submit_data = json.loads(submit_raw)
+            logger.info(
+                f"[P1] Step 1 完成: task_id={submit_data.get('result', {}).get('task_id')}, "
+                f"permit_draft_id={submit_data.get('result', {}).get('permit_draft_id')}"
+            )
+            # 持久化中间状态（断点恢复用）
+            existing_result.update({
+                "next_step": 2,
+                "submit_data": submit_data,
             })
-            result["pending_confirmation"] = {
-                "type": "hitl_tool_call",
-                "message": "P1 Agent 工具调用需要人工确认",
-                "next_tools": next_tools,
-            }
-            write_json_file(result_file, result)
-            log.log_exit(job_id, result)
-            return result
+            write_json_file(result_file, existing_result)
+            next_step = 2
 
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
+        # ---------- Step 2: jsa_analyze ----------
+        if next_step <= 2:
+            task_id = submit_data.get("result", {}).get("task_id", "")
+            if not task_id:
+                raise ValueError("Step 2 缺少 task_id（来自 Step 1 permit_submit）")
+            logger.info(f"[P1] Step 2/4 jsa_analyze: task_id={task_id}")
+            push_websocket_log(job_id, "INFO", "P1", "Step 2/4: JSA 安全分析")
+            jsa_raw = jsa_analyze.invoke(task_id)
+            jsa_data = json.loads(jsa_raw)
+            logger.info(
+                f"[P1] Step 2 完成: hazards_count={len(jsa_data.get('result', {}).get('hazards', []))}"
+            )
+            existing_result.update({
+                "next_step": 3,
+                "jsa_data": jsa_data,
+            })
+            write_json_file(result_file, existing_result)
+            next_step = 3
+
+        # ---------- Step 3: permit_generate_draft ----------
+        if next_step <= 3:
+            task_id = submit_data.get("result", {}).get("task_id", "")
+            if not task_id:
+                raise ValueError("Step 3 缺少 task_id（来自 Step 1 permit_submit）")
+            logger.info(f"[P1] Step 3/4 permit_generate_draft: task_id={task_id}")
+            push_websocket_log(job_id, "INFO", "P1", "Step 3/4: 生成作业票草稿")
+            draft_raw = permit_generate_draft.invoke(task_id)
+            draft_data = json.loads(draft_raw)
+            logger.info(
+                f"[P1] Step 3 完成: permit_draft_id={draft_data.get('result', {}).get('permit_draft_id')}"
+            )
+            existing_result.update({
+                "next_step": 4,
+                "draft_data": draft_data,
+            })
+            write_json_file(result_file, existing_result)
+            next_step = 4
+
+        # ---------- Step 4: permit_check ----------
+        if next_step <= 4:
+            permit_draft_id = draft_data.get("result", {}).get("permit_draft_id", "")
+            if not permit_draft_id:
+                raise ValueError("Step 4 缺少 permit_draft_id（来自 Step 3 permit_generate_draft）")
+            logger.info(f"[P1] Step 4/4 permit_check: permit_draft_id={permit_draft_id}")
+            push_websocket_log(job_id, "INFO", "P1", "Step 4/4: 查询作业票状态")
+            check_raw = permit_check.invoke(permit_draft_id)
+            check_data = json.loads(check_raw)
+            logger.info(
+                f"[P1] Step 4 完成: status={check_data.get('result', {}).get('status')}"
+            )
+            existing_result.update({
+                "next_step": 5,  # 5 表示完成
+                "check_data": check_data,
+            })
+            write_json_file(result_file, existing_result)
+            next_step = 5
+
+        # ---------- 汇总到 _process_p1_result ----------
+        # 构造 result_data（兼容 _process_p1_result 旧接口：嵌套 result 字段）
+        # _process_p1_result 期望 result_data["result"] 里有 task_id / permit_draft_id 等字段
+        result_payload = {
+            "task_id": submit_data.get("result", {}).get("task_id", ""),
+            "permit_draft_id": draft_data.get("result", {}).get("permit_draft_id", ""),
+            "jsa_result": jsa_data.get("result", {}),
+            "permit_content": draft_data.get("result", {}).get("content", {}),
+            "missing_fields": draft_data.get("result", {}).get("missing_fields", []),
+        }
+        result_data = {"result": result_payload}
 
         result = _process_p1_result(job_id, result_data, result)
         log.log_exit(job_id, result)
@@ -599,6 +657,14 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
     except Exception as e:
         log.log_error(job_id, e)
         result["error"] = str(e)
+        # 保留中间状态以便 resume 继续
+        result.update({
+            "next_step": next_step,
+            "submit_data": submit_data,
+            "jsa_data": jsa_data,
+            "draft_data": draft_data,
+            "check_data": check_data,
+        })
         write_json_file(result_file, result)
         log.log_exit(job_id, result)
         return result

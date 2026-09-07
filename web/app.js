@@ -888,6 +888,18 @@ function updateControlPanel() {
 }
 
 // ========== 日志 ==========
+// 自动滚动到日志底部（使用 rAF 确保 DOM 完成布局后再滚动）
+function scrollLogToBottom() {
+    const container = document.getElementById('log-container');
+    if (!container) return;
+    // 判断用户是否在底部附近（允许 30px 误差），避免打断用户向上回看
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 30;
+    if (!isNearBottom) return;
+    requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+    });
+}
+
 function addLog(message, type = '') {
     const container = document.getElementById('log-container');
     const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -896,7 +908,7 @@ function addLog(message, type = '') {
     entry.className = 'log-entry';
     entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${message}</span>`;
     container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    scrollLogToBottom();
 }
 
 // 显示结构化工作流日志
@@ -968,7 +980,7 @@ function displayWorkflowLog(msg) {
     }
 
     container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    scrollLogToBottom();
 
     // 限制日志数量，防止内存溢出（增大到2000）
     while (container.children.length > 2000) {
