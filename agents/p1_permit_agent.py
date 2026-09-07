@@ -4,7 +4,7 @@ Permit Agent - 处理作业申请、JSA分析和作业票生成
 支持 HumanInTheLoop - Agent 层级中断
 """
 import logging
-from typing import Any, TypedDict, Dict
+from typing import Any, TypedDict, Dict, Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
@@ -18,6 +18,60 @@ from .utils.logging_handler import AgentLoggingCallback, get_logging_callback, p
 from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.system_prompt import load_system_prompt
 from .utils import add_job_log
+
+# 延迟导入避免循环依赖：main_agent 会导入 p1 模块
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    """延迟导入 + 调用 _broadcast_substep（避免循环依赖）"""
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P1 完整 4 项步骤定义（供工具入口/出口广播使用）
+P1_STEP_ITEMS = [
+    {"index": 1, "label": "提交作业申请", "tool": "permit_submit"},
+    {"index": 2, "label": "JSA 安全分析", "tool": "jsa_analyze"},
+    {"index": 3, "label": "生成作业票", "tool": "permit_generate_draft"},
+    {"index": 4, "label": "作业票查询", "tool": "permit_check"},
+]
+P1_STEP_TOTAL = len(P1_STEP_ITEMS)
+
+
+def _p1_items_with_status(tool_name: str, status: str):
+    """返回 P1 4 项列表，其中当前工具 status=给定值，已完成工具 status=completed，其余 pending"""
+    completed = _p1_completed_tools.get(_p1_active_job_id, set()) if _p1_active_job_id else set()
+    items = []
+    for it in P1_STEP_ITEMS:
+        if it["tool"] == tool_name:
+            items.append({**it, "status": status})
+        elif it["tool"] in completed:
+            items.append({**it, "status": "completed"})
+        else:
+            items.append({**it, "status": "pending"})
+    return items
+
+
+# P1 工具调用跟踪：按 job_id 记录已完成的工具（用于生成正确的 items 状态）
+_p1_active_job_id: Optional[str] = None
+_p1_completed_tools: Dict[str, set] = {}
+
+
+def _p1_set_active_job(job_id: str):
+    """由 execute_p1 调用，设置当前正在执行的 job_id 并重置其完成集合"""
+    global _p1_active_job_id
+    _p1_active_job_id = job_id
+    _p1_completed_tools[job_id] = set()
+
+
+def _p1_mark_completed(tool_name: str):
+    """标记当前 job 的指定工具已完成"""
+    if _p1_active_job_id:
+        _p1_completed_tools.setdefault(_p1_active_job_id, set()).add(tool_name)
+
+
+def _p1_clear_active_job():
+    """清除当前激活的 job_id（异常路径使用）"""
+    global _p1_active_job_id
+    _p1_active_job_id = None
 
 # 配置日志
 logger = logging.getLogger("p1_permit_agent")
@@ -59,6 +113,11 @@ def permit_submit(application: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 1, P1_STEP_TOTAL,
+        "提交作业申请", "permit_submit", "running",
+        _p1_items_with_status("permit_submit", "running"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f">>> permit_submit 工具入口", {"application": application[:200] + "..." if len(application) > 200 else application})
     logger.info(f"[permit_submit] >>> 工具入口: application={application[:200]}...")
     try:
@@ -111,6 +170,12 @@ def permit_submit(application: str) -> str:
     }
 
     logger.info(f"[permit_submit] <<< 工具出口: task_id={task_id}, permit_draft_id={permit_draft_id}, missing_fields_count={len(missing_fields)}")
+    _p1_mark_completed("permit_submit")
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 1, P1_STEP_TOTAL,
+        "提交作业申请", "permit_submit", "completed",
+        _p1_items_with_status("permit_submit", "completed"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f"<<< permit_submit 工具出口", {"task_id": task_id, "permit_draft_id": permit_draft_id, "missing_fields_count": len(missing_fields)})
     return json.dumps(make_response("permit submit", result), ensure_ascii=False)
 
@@ -128,11 +193,17 @@ def jsa_analyze(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 2, P1_STEP_TOTAL,
+        "JSA 安全分析", "jsa_analyze", "running",
+        _p1_items_with_status("jsa_analyze", "running"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f">>> jsa_analyze 工具入口", {"task_id": task_id})
     logger.info(f"[jsa_analyze] >>> 工具入口: task_id={task_id}")
     if not task_id:
         logger.warning(f"[jsa_analyze] !!! task_id 为空")
         push_websocket_log("*", "ERROR", "TOOL", "!!! jsa_analyze task_id为空")
+        push_websocket_log("*", "INFO", "TOOL", f"<<< jsa_analyze 工具出口", {"error": "task_id_empty"})
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
             message="task_id 不能为空",
@@ -191,6 +262,18 @@ def jsa_analyze(task_id: str) -> str:
         "completeness_score": completeness_score,
         "missing_items": missing_items
     }
+    push_websocket_log("*", "INFO", "TOOL", f"<<< jsa_analyze 工具出口", {
+        "task_id": task_id,
+        "hazards_count": len(hazards),
+        "completeness_score": completeness_score
+    })
+    _p1_mark_completed("jsa_analyze")
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 2, P1_STEP_TOTAL,
+        "JSA 安全分析", "jsa_analyze", "completed",
+        _p1_items_with_status("jsa_analyze", "completed"),
+    )
+    logger.info(f"[jsa_analyze] <<< 工具出口: task_id={task_id}, hazards_count={len(hazards)}")
     return json.dumps(make_response("permit analyze-jsa", result), ensure_ascii=False)
 
 
@@ -207,6 +290,11 @@ def permit_generate_draft(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 3, P1_STEP_TOTAL,
+        "生成作业票", "permit_generate_draft", "running",
+        _p1_items_with_status("permit_generate_draft", "running"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f">>> permit_generate_draft 工具入口", {"task_id": task_id})
     logger.info(f"[permit_generate_draft] >>> 工具入口: task_id={task_id}")
     if not task_id:
@@ -235,6 +323,12 @@ def permit_generate_draft(task_id: str) -> str:
     }
 
     logger.info(f"[permit_generate_draft] <<< 工具出口: permit_draft_id={result['permit_draft_id']}, missing_fields_count={len(result['missing_fields'])}")
+    _p1_mark_completed("permit_generate_draft")
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 3, P1_STEP_TOTAL,
+        "生成作业票", "permit_generate_draft", "completed",
+        _p1_items_with_status("permit_generate_draft", "completed"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f"<<< permit_generate_draft 工具出口", {"permit_draft_id": result['permit_draft_id'], "missing_fields_count": len(result['missing_fields'])})
     return json.dumps(make_response("permit generate-draft", result), ensure_ascii=False)
 
@@ -252,6 +346,11 @@ def permit_check(permit_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 4, P1_STEP_TOTAL,
+        "作业票查询", "permit_check", "running",
+        _p1_items_with_status("permit_check", "running"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f">>> permit_check 工具入口", {"permit_id": permit_id})
     logger.info(f"[permit_check] >>> 工具入口: permit_id={permit_id}")
     if not permit_id:
@@ -273,6 +372,12 @@ def permit_check(permit_id: str) -> str:
     }
 
     logger.info(f"[permit_check] <<< 工具出口: permit_id={permit_id}, status={result['status']}")
+    _p1_mark_completed("permit_check")
+    _broadcast_substep(
+        _p1_active_job_id or "*", "P1", 4, P1_STEP_TOTAL,
+        "作业票查询", "permit_check", "completed",
+        _p1_items_with_status("permit_check", "completed"),
+    )
     push_websocket_log("*", "INFO", "TOOL", f"<<< permit_check 工具出口", {"permit_id": permit_id, "status": result['status']})
     return json.dumps(make_response("permit check", result), ensure_ascii=False)
 

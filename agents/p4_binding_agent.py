@@ -16,6 +16,18 @@ from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
 from .utils import get_stage_logger
 
+# 延迟导入避免循环依赖
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P4 子步骤定义
+P4_STEP_ITEMS = [
+    {"index": 1, "label": "匹配监测资源", "tool": "binding_match"},
+]
+P4_STEP_TOTAL = len(P4_STEP_ITEMS)
+
 # 配置日志
 import logging
 logger = logging.getLogger("p4_binding_agent")
@@ -277,7 +289,17 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P4] 调用 binding_match: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P4", 1, P4_STEP_TOTAL,
+            "匹配监测资源", "binding_match", "running",
+            [{"index": 1, "label": "匹配监测资源", "tool": "binding_match", "status": "running"}],
+        )
         binding_result = json.loads(binding_match.invoke(task_id))
+        _broadcast_substep(
+            job_id, "P4", 1, P4_STEP_TOTAL,
+            "匹配监测资源", "binding_match", "completed",
+            [{"index": 1, "label": "匹配监测资源", "tool": "binding_match", "status": "completed"}],
+        )
         log.log_tool_call("binding_match", {"task_id": task_id}, binding_result)
 
         # 3. 提取结果

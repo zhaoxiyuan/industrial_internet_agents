@@ -56,6 +56,26 @@ def broadcast_workflow_state(job_id):
         logger.warning(f"[WS-STATUS] 广播状态失败: job_id={job_id}, error={e}")
 
 
+def broadcast_substep(job_id, stage, sub_steps_data):
+    """从后台线程推送子步骤进度（跨线程调用）
+
+    子步骤进度作为状态的一部分持久化到 workflow_status.json，
+    并通过现有 state_update 通道广播，无需新队列。
+    """
+    import logging
+    logger = logging.getLogger("server")
+    try:
+        from agents.workflow.workflow_state import update_workflow_status
+        # 1. 写入持久化状态
+        update_workflow_status(job_id, {
+            "agents": {stage: {"sub_steps": sub_steps_data}}
+        })
+        # 2. 触发状态广播（复用现有通道）
+        broadcast_workflow_state(job_id)
+    except Exception as e:
+        logger.warning(f"[WS-SUBSTEP] 广播子步骤失败: job_id={job_id}, stage={stage}, error={e}")
+
+
 def broadcast_workflow_log(job_id: str, level: str, source: str, message: str, data: dict = None):
     """从后台线程推送工作流日志（跨线程调用）"""
     import logging

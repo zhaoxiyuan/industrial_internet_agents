@@ -53,10 +53,15 @@
             color: #FF9800;
         }
 
-        /* 主容器 */
+        /* 主容器 - 自适应父容器（iframe）高度 */
+        html, body {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
         .main-container {
             display: flex;
-            height: calc(100vh - 90px);
+            height: 100%;
             width: 100%;
             box-sizing: border-box;
         }
@@ -179,22 +184,22 @@
             border-bottom: 1px solid #ddd;
         }
 
-        /* 表单 */
+        /* 表单 - 紧凑布局 */
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 8px;
         }
         .form-label {
             display: block;
-            font-size: 13px;
+            font-size: 12px;
             color: #666;
-            margin-bottom: 5px;
+            margin-bottom: 3px;
         }
         .form-input {
             width: 100%;
-            padding: 10px 12px;
+            padding: 6px 10px;
             border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
+            border-radius: 4px;
+            font-size: 13px;
             transition: border-color 0.2s;
         }
         .form-input:focus {
@@ -204,24 +209,24 @@
         textarea.form-input {
             width: 100%;
             resize: vertical;
-            min-height: 400px;
-            height: calc(100vh - 350px);
+            min-height: 50px;
         }
         .form-row {
             display: flex;
-            gap: 15px;
+            gap: 8px;
         }
         .form-row .form-group {
             flex: 1;
+            margin-bottom: 0;
         }
 
         /* 按钮 */
         .btn {
-            padding: 10px 20px;
+            padding: 6px 14px;
             border: none;
-            border-radius: 6px;
+            border-radius: 5px;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
             transition: all 0.2s;
         }
         .btn-primary {
@@ -240,8 +245,8 @@
         }
         .btn-group {
             display: flex;
-            gap: 10px;
-            margin-top: 20px;
+            gap: 8px;
+            margin-top: 10px;
         }
 
         /* 工作流图 */
@@ -679,31 +684,37 @@
             overflow: hidden;
             min-height: 0;
         }
-        /* 上部：横向工作流图 */
+        /* 上部：横向工作流图 - 自适应内容，不强制最大高度（避免挤压下方区域） */
         .execute-top {
             flex: 0 0 auto;
-            max-height: 280px;
+            max-height: 260px;
+            min-height: 0;
             overflow-y: auto;
+            overflow-x: hidden;
         }
-        /* 下部：左右分栏 */
+        /* 下部：左右分栏 - 占满剩余空间 */
         .execute-bottom {
             display: flex;
             gap: 10px;
-            flex: 1;
+            flex: 1 1 0;
             min-height: 0;
             overflow: hidden;
+            height: 100%;
         }
-        /* 左侧：作业申请（内容自适应） */
+        /* 左侧：作业申请 - 高度自适应窗口 */
         .execute-left {
             width: 30%;
             min-width: 280px;
             flex: 0 0 auto;
             overflow-y: auto;
             height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
         }
-        /* 右侧：日志、审批、结果 */
+        /* 右侧：日志、审批、结果 - 高度自适应窗口 */
         .execute-right {
-            flex: 1;
+            flex: 1 1 0;
             display: flex;
             flex-direction: column;
             gap: 10px;
@@ -713,7 +724,7 @@
             height: 100%;
         }
         .execute-right-middle {
-            flex: 1;
+            flex: 1 1 0;
             display: flex;
             flex-direction: column;
             gap: 10px;
@@ -726,19 +737,24 @@
             overflow-y: auto;
         }
 
-        /* 作业申请表单 */
+        /* 作业申请表单 - 自适应父容器高度 */
         .application-form {
             background: white;
             border-radius: 8px;
-            padding: 20px;
-            margin-top: 20px;
+            padding: 12px 15px;
+            margin-top: 0;
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
         }
         .section-title {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: bold;
             color: #333;
-            margin: 15px 0 10px;
-            padding-bottom: 5px;
+            margin: 8px 0 6px;
+            padding-bottom: 4px;
             border-bottom: 1px solid #eee;
         }
 
@@ -868,6 +884,18 @@
             overflow: hidden;
             box-shadow: 0 10px 40px rgba(0,0,0,0.3);
         }
+        /* 作业票审批弹窗加宽 */
+        #hitl-modal .modal {
+            max-width: 900px;
+        }
+        /* step-modal 加宽以容纳合并的作业票审批内容 */
+        #step-modal .modal {
+            max-width: 900px;
+        }
+        /* step-modal 内部 body 高度适当放宽 */
+        #step-modal .modal-body {
+            max-height: 60vh;
+        }
         .modal-header {
             background: linear-gradient(135deg, #FF9800, #FF5722);
             color: white;
@@ -956,6 +984,95 @@
             border-radius: 12px;
             font-size: 12px;
             font-weight: bold;
+        }
+
+        /* 作业票审批 - Tab 切换 */
+        .permit-tabs {
+            display: flex;
+            border-bottom: 2px solid #f0f0f0;
+            margin-bottom: 12px;
+        }
+        .permit-tab {
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            color: #666;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .permit-tab:hover {
+            color: #FF9800;
+        }
+        .permit-tab.active {
+            color: #FF9800;
+            border-bottom-color: #FF9800;
+        }
+        .permit-tab-content {
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        /* 作业票/JSA 详情卡片 */
+        .permit-detail-card {
+            background: #fafafa;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            border-left: 3px solid #FF9800;
+        }
+        .permit-detail-title {
+            font-size: 13px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .permit-detail-row {
+            display: flex;
+            font-size: 12px;
+            margin: 4px 0;
+            line-height: 1.5;
+        }
+        .permit-detail-label {
+            color: #888;
+            min-width: 80px;
+            flex-shrink: 0;
+        }
+        .permit-detail-value {
+            color: #333;
+            flex: 1;
+            word-break: break-word;
+        }
+        .permit-detail-list {
+            margin: 4px 0 0 0;
+            padding-left: 18px;
+            font-size: 12px;
+            color: #333;
+        }
+        .permit-detail-list li {
+            margin: 3px 0;
+        }
+        /* JSA 风险等级 */
+        .risk-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .risk-high { background: #ffebee; color: #c62828; }
+        .risk-medium { background: #fff8e1; color: #ef6c00; }
+        .risk-low { background: #e8f5e9; color: #2e7d32; }
+        /* 措施列表 */
+        .measure-tag {
+            display: inline-block;
+            background: #e3f2fd;
+            color: #1565c0;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 2px;
         }
         .status-completed {
             background: #4CAF50;
@@ -1078,8 +1195,8 @@
             overflow-y: auto;
         }
 
-        /* P1 步骤弹窗样式 */
-        .p1-steps-container {
+        /* 通用阶段步骤弹窗样式 */
+        .step-items-container {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1087,7 +1204,7 @@
             padding: 20px 0;
             flex-wrap: wrap;
         }
-        .p1-step {
+        .step-item {
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -1098,20 +1215,20 @@
             min-width: 100px;
             transition: all 0.3s ease;
         }
-        .p1-step.pending {
+        .step-item.pending {
             background: #fff3e0;
             border: 2px solid #ffcc80;
         }
-        .p1-step.running {
+        .step-item.running {
             background: #fff8e1;
             border: 2px solid #ffc107;
             box-shadow: 0 0 20px rgba(255, 193, 7, 0.4);
         }
-        .p1-step.completed {
+        .step-item.completed {
             background: #e8f5e9;
             border: 2px solid #4caf50;
         }
-        .p1-step-icon {
+        .step-item-icon {
             position: relative;
             width: 48px;
             height: 48px;
@@ -1135,7 +1252,7 @@
             opacity: 0;
             transition: opacity 0.3s;
         }
-        .p1-step.running .step-spinner {
+        .step-item.running .step-spinner {
             opacity: 1;
             animation: step-spin 1s linear infinite;
         }
@@ -1143,30 +1260,30 @@
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
-        .p1-step-info {
+        .step-item-info {
             text-align: center;
         }
-        .p1-step-name {
+        .step-item-name {
             font-size: 13px;
             font-weight: bold;
             color: #333;
         }
-        .p1-step-status {
+        .step-item-status {
             font-size: 11px;
             color: #888;
             margin-top: 2px;
         }
-        .p1-step.running .p1-step-status {
+        .step-item.running .step-item-status {
             color: #ff9800;
         }
-        .p1-step.completed .p1-step-status {
+        .step-item.completed .step-item-status {
             color: #4caf50;
         }
-        .p1-step-arrow {
+        .step-arrow {
             font-size: 20px;
             color: #bbb;
         }
-        .p1-steps-progress {
+        .step-progress {
             margin-top: 15px;
             padding: 0 20px;
         }
@@ -1189,18 +1306,18 @@
             color: #666;
             margin-top: 8px;
         }
-        .p1-current-log {
+        .step-current-log {
             margin-top: 15px;
             padding: 12px 15px;
             background: #1e1e1e;
             border-radius: 8px;
         }
-        .p1-current-log .log-title {
+        .step-current-log .log-title {
             font-size: 12px;
             color: #888;
             margin-bottom: 6px;
         }
-        .p1-current-log .log-content {
+        .step-current-log .log-content {
             font-size: 12px;
             color: #4caf50;
             font-family: "Consolas", monospace;
@@ -1227,14 +1344,14 @@
                         <div class="execute-bottom">
                             <!-- 左侧：作业申请 -->
                             <div class="execute-left">
-                                <div class="application-form" style="margin-top: 0; padding: 15px;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <div class="application-form" style="margin-top: 0; padding: 12px 15px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                         <div class="section-title" style="margin: 0; padding: 0; border: none;">📋 作业申请</div>
-                                        <button class="btn btn-secondary" onclick="fillMockData()" style="padding: 6px 12px; font-size: 12px;">🔄 生成mock数据</button>
+                                        <button class="btn btn-secondary" onclick="fillMockData()" style="padding: 4px 10px; font-size: 12px;">🔄 mock</button>
                                     </div>
                                     <div class="form-group">
                                         <label class="form-label">作业内容</label>
-                                        <textarea class="form-input" id="app-job-content" rows="3" placeholder="请输入作业内容" style="height: 60px !important; min-height: 60px !important;"></textarea>
+                                        <textarea class="form-input" id="app-job-content" rows="2" placeholder="请输入作业内容" style="height: 44px !important; min-height: 44px !important;"></textarea>
                                     </div>
                                     <div class="form-group">
                                         <label class="form-label">作业区域</label>
@@ -1296,94 +1413,61 @@
         </div>
     </div>
 
-    <!-- P1 执行步骤弹窗 -->
-    <div class="modal-overlay" id="p1-steps-modal">
+    <!-- 通用阶段步骤弹窗（合并：步骤执行 + 完成提示），由 state_update 驱动 -->
+    <div class="modal-overlay" id="step-modal">
         <div class="modal">
-            <div class="modal-header" style="background: linear-gradient(135deg, #4CAF50, #2E7D32);">
-                <button class="modal-close" onclick="hideP1StepsModal()" title="关闭">×</button>
-                <span class="modal-icon">📋</span>
+            <div class="modal-header" id="step-modal-header" style="background: linear-gradient(135deg, #4CAF50, #2E7D32);">
+                <button class="modal-close" onclick="hideStepModal()" title="关闭">×</button>
+                <span class="modal-icon" id="step-modal-icon">📋</span>
                 <div>
-                    <div class="modal-title">P1 作业许可执行中</div>
-                    <div class="modal-subtitle">正在执行 JSA 分析与作业票生成</div>
+                    <div class="modal-title" id="step-modal-title">阶段执行中</div>
+                    <div class="modal-subtitle" id="step-modal-subtitle"></div>
                 </div>
             </div>
             <div class="modal-body">
-                <div class="p1-steps-container">
-                    <div class="p1-step" id="p1-step-1">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">📝</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">提交作业申请</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
+                <!-- 视图 1：步骤执行视图（步骤容器由 JS 动态生成） -->
+                <div id="step-view">
+                    <div class="step-items-container" id="step-items-container">
+                        <!-- JS 动态生成 -->
                     </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-2">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">🔍</span>
-                            <span class="step-spinner"></span>
+                    <div class="step-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="step-progress-fill"></div>
                         </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">JSA 安全分析</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
+                        <div class="progress-text" id="step-progress-text">0 / 0 步骤完成</div>
                     </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-3">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">📄</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">生成作业票</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
-                    </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-4">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">✔️</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">作业票查询</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
+                    <div class="step-current-log">
+                        <div class="log-title">📋 当前日志</div>
+                        <div class="log-content" id="step-log-content">等待执行...</div>
                     </div>
                 </div>
-                <div class="p1-steps-progress">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="p1-progress-fill"></div>
-                    </div>
-                    <div class="progress-text" id="p1-progress-text">0 / 4 步骤完成</div>
+                <!-- 视图 2：完成提示视图（默认隐藏） -->
+                <div id="step-complete-view" style="display: none; text-align: center;">
+                    <div style="font-size: 48px; margin: 20px 0;">🎉</div>
+                    <div style="font-size: 18px; color: #333; margin-bottom: 10px;" id="step-complete-title">阶段执行完成</div>
+                    <div style="font-size: 14px; color: #666; margin-bottom: 20px;" id="step-complete-subtitle">即将自动进入下一阶段</div>
+                    <div style="font-size: 36px; font-weight: bold; color: #4CAF50; margin: 20px 0;" id="step-complete-countdown">3</div>
+                    <div style="font-size: 14px; color: #888;">秒后自动进入下一阶段</div>
                 </div>
-                <div class="p1-current-log" id="p1-current-log">
-                    <div class="log-title">📋 当前日志</div>
-                    <div class="log-content" id="p1-log-content">等待执行...</div>
+                <!-- 视图 3：P1 阶段作业票审批视图（默认隐藏，仅 P1 使用） -->
+                <div id="step-approval-view" style="display: none;">
+                    <div class="permit-tabs">
+                        <div class="permit-tab active" data-tab="permit" onclick="switchStepPermitTab('permit')">📋 作业票详情</div>
+                        <div class="permit-tab" data-tab="jsa" onclick="switchStepPermitTab('jsa')">⚠️ JSA 分析</div>
+                    </div>
+                    <div class="permit-tab-content" id="step-permit-tab-permit">
+                        <div id="step-permit-detail-content"></div>
+                    </div>
+                    <div class="permit-tab-content" id="step-permit-tab-jsa" style="display: none;">
+                        <div id="step-jsa-detail-content"></div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- P1 完成提示弹窗 -->
-    <div class="modal-overlay" id="p1-complete-modal">
-        <div class="modal">
-            <div class="modal-header" style="background: linear-gradient(135deg, #4CAF50, #2E7D32);">
-                <button class="modal-close" onclick="hideP1CompleteModal()" title="关闭">×</button>
-                <span class="modal-icon">✅</span>
-                <div>
-                    <div class="modal-title">P1 阶段执行完成</div>
-                    <div class="modal-subtitle">作业许可、JSA分析与作业票生成</div>
-                </div>
-            </div>
-            <div class="modal-body" style="text-align: center;">
-                <div style="font-size: 48px; margin: 20px 0;">🎉</div>
-                <div style="font-size: 18px; color: #333; margin-bottom: 10px;">P1 作业许可阶段已执行完成</div>
-                <div style="font-size: 14px; color: #666; margin-bottom: 20px;">即将自动进入 P2 作业任务获取阶段</div>
-                <div style="font-size: 36px; font-weight: bold; color: #4CAF50; margin: 20px 0;" id="p1-complete-countdown">3</div>
-                <div style="font-size: 14px; color: #888;">秒后自动进入 P2</div>
+            <!-- footer（默认隐藏，仅 P1 阶段审批视图显示） -->
+            <div class="modal-footer" id="step-modal-footer" style="display: none;">
+                <button class="btn btn-secondary" onclick="hideStepModal()">❌ 取消</button>
+                <button class="btn btn-reject" onclick="confirmDecision('reject')">❌ 否决</button>
+                <button class="btn btn-approve" onclick="confirmDecision('approve')">✅ 批准</button>
             </div>
         </div>
     </div>
@@ -1411,6 +1495,21 @@
                 <div class="modal-info" id="modal-suggestion-section" style="display: none;">
                     <div class="modal-info-title">💡 建议</div>
                     <div id="modal-suggestion"></div>
+                </div>
+
+                <!-- 作业票审批：作业票详情 + JSA 分析（P1 阶段使用） -->
+                <div id="permit-approval-section" style="display: none;">
+                    <!-- Tab 切换 -->
+                    <div class="permit-tabs">
+                        <div class="permit-tab active" data-tab="permit">📋 作业票详情</div>
+                        <div class="permit-tab" data-tab="jsa">⚠️ JSA 分析</div>
+                    </div>
+                    <div class="permit-tab-content" id="permit-tab-permit">
+                        <div id="permit-detail-content"></div>
+                    </div>
+                    <div class="permit-tab-content" id="permit-tab-jsa" style="display: none;">
+                        <div id="jsa-detail-content"></div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">

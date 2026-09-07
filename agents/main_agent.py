@@ -84,60 +84,65 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
     result_file = get_stage_result_path(job_id, "p1")
     existing_result = read_json_file(result_file)
 
-    # 当 resume=True 时，强制从 checkpoint 恢复执行，不依赖 is_agent_interrupted 的检查
-    if resume or is_agent_interrupted(job_id):
-        log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
-        # 从中断点恢复执行
-        hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
-        if not hitl_result:
-            logger.error(f"[execute_p1] hitl_result 为空: job_id={job_id}, resume={resume}")
-            return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
-        if hitl_result["interrupted"]:
-            # 仍然中断，等待下次确认
-            next_tools = hitl_result.get("next", [])
-            result = {
-                "job_id": job_id,
-                "stage": "P1",
-                "completed": False,
-                "pending_confirmation": {
-                    "type": "hitl_recover",
-                    "message": "P1 Agent 工具调用等待确认",
-                    "next_tools": next_tools,
-                }
-            }
-            log.log_exit(job_id, result)
-            return result
-        # 恢复后执行完成，解析结果
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
-        result = _process_p1_result(job_id, result_data, existing_result)
-        log.log_exit(job_id, result)
-        return result
-
-    # 首次执行或正常流程
-    app_file = get_job_dir(job_id) + "/application.json"
-    application = read_json_file(app_file).get("application", {})
-
-    if not application:
-        logger.warning(f"[P1] !!! 作业申请为空: job_id={job_id}")
-        result = {"error": "No application found", "completed": False}
-        log.log_exit(job_id, result)
-        return result
-
-    result = {
-        "job_id": job_id,
-        "stage": "P1",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "completed": False,
-    }
+    # 注册当前 job_id 到 P1 模块，供工具函数内 _broadcast_substep 使用
+    from .p1_permit_agent import _p1_set_active_job, _p1_clear_active_job
+    _p1_set_active_job(job_id)
 
     try:
-        # 构建发送给 Agent 的消息
-        app_str = json.dumps(application, ensure_ascii=False)
-        message = f"""请处理以下作业申请：
+        # 当 resume=True 时，强制从 checkpoint 恢复执行，不依赖 is_agent_interrupted 的检查
+        if resume or is_agent_interrupted(job_id):
+            log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
+            # 从中断点恢复执行
+            hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
+            if not hitl_result:
+                logger.error(f"[execute_p1] hitl_result 为空: job_id={job_id}, resume={resume}")
+                return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
+            if hitl_result["interrupted"]:
+                # 仍然中断，等待下次确认
+                next_tools = hitl_result.get("next", [])
+                result = {
+                    "job_id": job_id,
+                    "stage": "P1",
+                    "completed": False,
+                    "pending_confirmation": {
+                        "type": "hitl_recover",
+                        "message": "P1 Agent 工具调用等待确认",
+                        "next_tools": next_tools,
+                    }
+                }
+                log.log_exit(job_id, result)
+                return result
+            # 恢复后执行完成，解析结果
+            result_text = hitl_result.get("result", "{}")
+            try:
+                result_data = json.loads(result_text)
+            except:
+                result_data = {"result": result_text}
+            result = _process_p1_result(job_id, result_data, existing_result)
+            log.log_exit(job_id, result)
+            return result
+
+        # 首次执行或正常流程
+        app_file = get_job_dir(job_id) + "/application.json"
+        application = read_json_file(app_file).get("application", {})
+
+        if not application:
+            logger.warning(f"[P1] !!! 作业申请为空: job_id={job_id}")
+            result = {"error": "No application found", "completed": False}
+            log.log_exit(job_id, result)
+            return result
+
+        result = {
+            "job_id": job_id,
+            "stage": "P1",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "completed": False,
+        }
+
+        try:
+            # 构建发送给 Agent 的消息
+            app_str = json.dumps(application, ensure_ascii=False)
+            message = f"""请处理以下作业申请：
 
 作业申请内容：{app_str}
 
@@ -146,45 +151,47 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
 2. 调用 jsa_analyze 工具进行JSA分析
 3. 调用 permit_generate_draft 工具生成作业票草稿"""
 
-        # 使用 HITL Agent 执行
-        logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
-        push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
-        hitl_result = run_permit_agent_with_hitl(message, job_id)
+            # 使用 HITL Agent 执行
+            logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
+            push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
+            hitl_result = run_permit_agent_with_hitl(message, job_id)
 
-        if hitl_result["interrupted"]:
-            # 被 HITL 中断，等待人工确认
-            next_tools = hitl_result.get("next", [])
-            log.log_hitl_interrupt(job_id, next_tools)
-            add_job_log(job_id, {
-                "action": "execute_p1_hitl_interrupt",
-                "next_tools": next_tools
-            })
-            result["pending_confirmation"] = {
-                "type": "hitl_tool_call",
-                "message": "P1 Agent 工具调用需要人工确认",
-                "next_tools": next_tools,
-            }
-            write_json_file(result_file, result)
+            if hitl_result["interrupted"]:
+                # 被 HITL 中断，等待人工确认
+                next_tools = hitl_result.get("next", [])
+                log.log_hitl_interrupt(job_id, next_tools)
+                add_job_log(job_id, {
+                    "action": "execute_p1_hitl_interrupt",
+                    "next_tools": next_tools
+                })
+                result["pending_confirmation"] = {
+                    "type": "hitl_tool_call",
+                    "message": "P1 Agent 工具调用需要人工确认",
+                    "next_tools": next_tools,
+                }
+                write_json_file(result_file, result)
+                log.log_exit(job_id, result)
+                return result
+
+            # 执行完成，解析结果
+            result_text = hitl_result.get("result", "{}")
+            try:
+                result_data = json.loads(result_text)
+            except:
+                result_data = {"result": result_text}
+
+            result = _process_p1_result(job_id, result_data, result)
             log.log_exit(job_id, result)
             return result
 
-        # 执行完成，解析结果
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
-
-        result = _process_p1_result(job_id, result_data, result)
-        log.log_exit(job_id, result)
-        return result
-
-    except Exception as e:
-        log.log_error(job_id, e)
-        result["error"] = str(e)
-        write_json_file(result_file, result)
-        log.log_exit(job_id, result)
-        return result
+        except Exception as e:
+            log.log_error(job_id, e)
+            result["error"] = str(e)
+            write_json_file(result_file, result)
+            log.log_exit(job_id, result)
+            return result
+    finally:
+        _p1_clear_active_job()
 
 
 def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) -> dict:
@@ -1410,26 +1417,59 @@ def get_workflow_state(thread_id: str) -> dict:
 
 
 def list_pending_confirmations(thread_id: str) -> list:
-    """列出待确认的阶段"""
+    """列出待确认的阶段
+
+    P1 阶段的待确认项会附上 permit.json 中的完整数据（作业申请、作业票内容、JSA 分析），
+    便于前端"作业票审批"弹窗直接渲染，无需再额外请求接口。
+    """
     status = get_workflow_status(thread_id)
     if status:
         pending = []
         for stage in ALL_STAGES:
             if status.get("agents", {}).get(stage, {}).get("status") == "waiting":
-                pending.append({"stage": stage, "pending": {}})
+                item = {"stage": stage, "pending": {}}
+                # P1 阶段：附加 permit.json 完整数据
+                if stage == "P1":
+                    item["permit_data"] = _load_permit_data(thread_id)
+                pending.append(item)
         return pending
     job_status = get_job_status(thread_id)
-    return job_status.get("pending_confirmations", [])
+    confirmations = job_status.get("pending_confirmations", [])
+    # P1 待确认项：附加 permit.json 数据
+    for item in confirmations:
+        if item.get("stage", "").upper() == "P1":
+            item["permit_data"] = _load_permit_data(thread_id)
+    return confirmations
+
+
+def _load_permit_data(thread_id: str) -> dict:
+    """从 permit.json 加载作业票完整数据，供作业票审批弹窗使用"""
+    try:
+        from agents.workflow.job_persistence import get_job_dir, read_json_file
+        permit_file = os.path.join(get_job_dir(thread_id), "permit.json")
+        if os.path.exists(permit_file):
+            return read_json_file(permit_file)
+    except Exception as e:
+        logger.warning(f"[_load_permit_data] 加载 permit.json 失败: {e}")
+    return {}
 
 
 # 全局广播回调（由 server.py 设置）
 _broadcast_callback = None
+# 全局子步骤广播回调（由 server.py 设置）
+_substep_broadcast_callback = None
 
 
 def set_broadcast_callback(callback):
     """设置状态广播回调函数（供 server.py 调用）"""
     global _broadcast_callback
     _broadcast_callback = callback
+
+
+def set_substep_broadcast_callback(callback):
+    """设置子步骤广播回调（供 server.py 调用）"""
+    global _substep_broadcast_callback
+    _substep_broadcast_callback = callback
 
 
 def _broadcast_state(job_id: str):
@@ -1439,3 +1479,40 @@ def _broadcast_state(job_id: str):
             _broadcast_callback(job_id)
         except Exception as e:
             logger.warning(f"广播状态失败: job_id={job_id}, error={e}")
+
+
+def _broadcast_substep(
+    job_id: str,
+    stage: str,
+    idx: int,
+    total: int,
+    label: str,
+    tool_name: str,
+    status: str = "running",
+    items: list = None,
+):
+    """广播子步骤进度（推送到状态 WebSocket）
+
+    Args:
+        job_id: 作业ID（"*" 表示不限定）
+        stage: 阶段标识（P1..P10）
+        idx: 1-based 当前步骤序号
+        total: 总步骤数
+        label: 中文步骤名
+        tool_name: 触发的工具名
+        status: running | completed | error
+        items: 可选：完整 items 列表（首次进入阶段时传入）
+    """
+    if _substep_broadcast_callback:
+        try:
+            _substep_broadcast_callback(job_id, stage, {
+                "status": status,
+                "total": total,
+                "current": idx,
+                "current_label": label,
+                "current_tool": tool_name,
+                "items": items or [],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f"广播子步骤失败: job_id={job_id}, stage={stage}, error={e}")

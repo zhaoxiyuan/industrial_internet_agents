@@ -1825,6 +1825,22 @@ def execute_stage(job_id: str) -> dict:
     from .workflow import get_stage_result_path, read_json_file, write_json_file
     from .utils import get_stage_logger, add_job_log
 
+    # 延迟导入避免循环依赖
+    from agents.main_agent import _broadcast_substep as _broadcast_substep_impl
+    def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+        return _broadcast_substep_impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+    # P6 子步骤定义
+    P6_STEP_TOTAL = 2
+    P6_ITEMS_RUNNING = [
+        {"index": 1, "label": "启动监测", "tool": "monitor_start", "status": "running"},
+        {"index": 2, "label": "采集监测事件", "tool": "monitor_events", "status": "pending"},
+    ]
+    P6_ITEMS_COMPLETED = [
+        {"index": 1, "label": "启动监测", "tool": "monitor_start", "status": "completed"},
+        {"index": 2, "label": "采集监测事件", "tool": "monitor_events", "status": "completed"},
+    ]
+
     logger = logging.getLogger("p6_monitor_agent")
     log = get_stage_logger("P6")
     log.log_enter(job_id)
@@ -1844,12 +1860,25 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P6] 调用 monitor_start: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P6", 1, P6_STEP_TOTAL,
+            "启动监测", "monitor_start", "running",
+            P6_ITEMS_RUNNING,
+        )
         monitor_result = json.loads(monitor_start.invoke(task_id))
         log.log_tool_call("monitor_start", {"task_id": task_id}, monitor_result)
         if "result" in monitor_result:
             result["session_id"] = monitor_result["result"].get("session_id", "")
 
         logger.info(f"[P6] 调用 monitor_events: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P6", 2, P6_STEP_TOTAL,
+            "采集监测事件", "monitor_events", "running",
+            [
+                {"index": 1, "label": "启动监测", "tool": "monitor_start", "status": "completed"},
+                {"index": 2, "label": "采集监测事件", "tool": "monitor_events", "status": "running"},
+            ],
+        )
         events_str = monitor_events.invoke(task_id)
         events = []
         for line in events_str.strip().split("\n"):
@@ -1861,6 +1890,11 @@ def execute_stage(job_id: str) -> dict:
         log.log_tool_call("monitor_events", {"task_id": task_id}, {"events_count": len(events)})
 
         result["candidate_events"] = events
+        _broadcast_substep(
+            job_id, "P6", 2, P6_STEP_TOTAL,
+            "采集监测事件", "monitor_events", "completed",
+            P6_ITEMS_COMPLETED,
+        )
         result["completed"] = True
         result["completed_at"] = datetime.now(timezone.utc).isoformat()
 

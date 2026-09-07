@@ -16,6 +16,27 @@ from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
 from .utils import get_stage_logger
 
+# 延迟导入避免循环依赖
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P5 子步骤定义
+P5_STEP_ITEMS = [
+    {"index": 1, "label": "执行验证清单", "tool": "verify_execute"},
+    {"index": 2, "label": "生成验证建议", "tool": "verify_recommendation"},
+]
+P5_STEP_TOTAL = len(P5_STEP_ITEMS)
+P5_ITEMS_RUNNING = [
+    {"index": 1, "label": "执行验证清单", "tool": "verify_execute", "status": "running"},
+    {"index": 2, "label": "生成验证建议", "tool": "verify_recommendation", "status": "pending"},
+]
+P5_ITEMS_COMPLETED = [
+    {"index": 1, "label": "执行验证清单", "tool": "verify_execute", "status": "completed"},
+    {"index": 2, "label": "生成验证建议", "tool": "verify_recommendation", "status": "completed"},
+]
+
 # 配置日志
 import logging
 logger = logging.getLogger("p5_verify_agent")
@@ -265,13 +286,31 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P5] 调用 verify_execute: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P5", 1, P5_STEP_TOTAL,
+            "执行验证清单", "verify_execute", "running",
+            P5_ITEMS_RUNNING,
+        )
         verify_result = json.loads(verify_execute.invoke(task_id))
         log.log_tool_call("verify_execute", {"task_id": task_id}, verify_result)
         if "result" in verify_result:
             result["verification_result"] = verify_result["result"]
 
         logger.info(f"[P5] 调用 verify_recommendation: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P5", 2, P5_STEP_TOTAL,
+            "生成验证建议", "verify_recommendation", "running",
+            [
+                {"index": 1, "label": "执行验证清单", "tool": "verify_execute", "status": "completed"},
+                {"index": 2, "label": "生成验证建议", "tool": "verify_recommendation", "status": "running"},
+            ],
+        )
         rec_result = json.loads(verify_recommendation.invoke(task_id))
+        _broadcast_substep(
+            job_id, "P5", 2, P5_STEP_TOTAL,
+            "生成验证建议", "verify_recommendation", "completed",
+            P5_ITEMS_COMPLETED,
+        )
         log.log_tool_call("verify_recommendation", {"task_id": task_id}, rec_result)
         if "result" in rec_result:
             result["recommendation"] = rec_result["result"]

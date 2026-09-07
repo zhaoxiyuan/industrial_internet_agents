@@ -112,6 +112,7 @@ const ALL_STAGES = ['MAIN', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9'
 document.addEventListener('DOMContentLoaded', function() {
     initTabs();
     initMenu();
+    initPermitTabs();
     loadModelConfig();
     renderWorkflowDiagram();
     fillMockData();
@@ -144,8 +145,19 @@ function initMenu() {
         });
     });
     // 初始化时默认激活 execute
-    const defaultItem = document.querySelector('.menu-item[data-panel="execute"]');
-    if (defaultItem) defaultItem.click();
+    (function() {
+        const executeItem = document.querySelector('.menu-item[data-panel="execute"]');
+        if (executeItem) executeItem.classList.add('active');
+    })();
+}
+
+// ========== 作业票审批 Tab 切换 ==========
+function initPermitTabs() {
+    document.querySelectorAll('.permit-tab').forEach(tab => {
+        tab.addEventListener('click', function() {
+            switchPermitTab(this.dataset.tab);
+        });
+    });
 }
 
 // ========== 配置相关 ==========
@@ -698,11 +710,13 @@ function connectWebSocket(jobId) {
                     state.workflowState = data;
                     renderWorkflowDiagram();
                     updateControlPanel();
+                    // 由 state_update 驱动子步骤弹窗（替代旧日志字符串匹配）
+                    applyStageStepsFromState();
 
-                    // 检测 P1 完成，切换到 P2 时显示完成提示
+                    // 检测 P1 完成，切换到 P2 时在同一弹窗内切换到完成视图
+                    // （保留作为兼容：applyStageStepsFromState 已基于 sub_steps.status 自动处理）
                     if (prevStage === 'P1' && data.current_stage === 'P2') {
-                        hideP1StepsModal();
-                        showP1CompleteModal();
+                        // 阶段切换时 applyStageStepsFromState 会重置弹窗
                     }
 
                     // 更新日志
@@ -711,9 +725,12 @@ function connectWebSocket(jobId) {
 
                     if (pending.length > 0) {
                         // 有待确认项，弹窗
-                        if (!document.getElementById('hitl-modal').classList.contains('active')) {
-                            addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
-                            showHitlModal(pending[0], data.pending_data[pending[0]]);
+                        addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
+                        // P1 阶段：审批内容已在 step-modal 内渲染（合并窗口），不再触发独立 hitl-modal
+                        if (currentStage !== 'P1') {
+                            if (!document.getElementById('hitl-modal').classList.contains('active')) {
+                                showHitlModal(pending[0], data.pending_data[pending[0]]);
+                            }
                         }
                     } else if (data.status === 'completed') {
                         // 工作流完成
@@ -888,15 +905,20 @@ function updateControlPanel() {
 }
 
 // ========== 日志 ==========
-// 自动滚动到日志底部（使用 rAF 确保 DOM 完成布局后再滚动）
+// 自动滚动到日志底部（使用平滑动画，确保最新日志始终在可视区域内）
 function scrollLogToBottom() {
     const container = document.getElementById('log-container');
     if (!container) return;
-    // 判断用户是否在底部附近（允许 30px 误差），避免打断用户向上回看
-    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 30;
-    if (!isNearBottom) return;
     requestAnimationFrame(() => {
-        container.scrollTop = container.scrollHeight;
+        const targetTop = container.scrollHeight - container.clientHeight;
+        if (container.scrollTop === targetTop) return;
+        // 使用平滑滚动，让新日志以"上滑"的方式进入可视区域
+        try {
+            container.scrollTo({ top: targetTop, behavior: 'smooth' });
+        } catch (e) {
+            // 旧浏览器降级：直接定位
+            container.scrollTop = targetTop;
+        }
     });
 }
 
@@ -987,8 +1009,8 @@ function displayWorkflowLog(msg) {
         container.removeChild(container.firstChild);
     }
 
-    // P1 步骤检测与更新
-    detectAndUpdateP1Steps(msg);
+    // 子步骤检测已迁移到 state_update 处理器（applyStageStepsFromState）
+    // 日志不再驱动弹窗，避免字符串匹配的脆弱性
 }
 
 // 格式化 JSON 视图（带语法高亮和折叠）
@@ -1072,120 +1094,353 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// P1 步骤状态管理
-const P1_STEPS = {
-    permit_submit: { index: 1, name: '提交作业申请' },
-    jsa_analyze: { index: 2, name: 'JSA 安全分析' },
-    permit_generate_draft: { index: 3, name: '生成作业票' },
-    permit_check: { index: 4, name: '作业票查询' }
+// 通用阶段子步骤定义（由 state_update 驱动，不依赖日志字符串匹配）
+const STAGE_STEPS = {
+    P1: {
+        items: [
+            { index: 1, label: '提交作业申请', tool: 'permit_submit' },
+            { index: 2, label: 'JSA 安全分析', tool: 'jsa_analyze' },
+            { index: 3, label: '生成作业票', tool: 'permit_generate_draft' },
+            { index: 4, label: '作业票查询', tool: 'permit_check' }
+        ]
+    },
+    P2: { items: [{ index: 1, label: '创建任务实例', tool: 'task_instance_create' }] },
+    P3: { items: [{ index: 1, label: '构建作业上下文', tool: 'context_build' }] },
+    P4: { items: [{ index: 1, label: '匹配监测资源', tool: 'binding_match' }] },
+    P5: {
+        items: [
+            { index: 1, label: '执行验证清单', tool: 'verify_execute' },
+            { index: 2, label: '生成验证建议', tool: 'verify_recommendation' }
+        ]
+    },
+    P6: {
+        items: [
+            { index: 1, label: '启动监测', tool: 'monitor_start' },
+            { index: 2, label: '采集监测事件', tool: 'monitor_events' }
+        ]
+    },
+    P7: { dynamic: true, items: [] },  // 动态步骤数
+    P9: {
+        items: [
+            { index: 1, label: '查询关闭状态', tool: 'closure_status' },
+            { index: 2, label: '验证关闭条件', tool: 'closure_verify' },
+            { index: 3, label: '生成关闭报告', tool: 'closure_report' }
+        ]
+    },
+    P10: {
+        items: [
+            { index: 1, label: '归档任务', tool: 'archive_task' },
+            { index: 2, label: '归档事件案例', tool: 'archive_cases' },
+            { index: 3, label: '归档绩效', tool: 'archive_performance' },
+            { index: 4, label: '发布改进建议', tool: 'archive_suggestions' }
+        ]
+    }
 };
-let p1StepsCompleted = 0;
-let p1ModalShown = false;
 
-function detectAndUpdateP1Steps(msg) {
-    const source = msg.source || '';
-    const message = msg.message || '';
+// 阶段顺序（用于完成后跳转下一阶段）
+const STAGE_ORDER = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
 
-    // 只处理 P1 和 TOOL 源的日志
-    if (source !== 'P1' && source !== 'TOOL' && source !== 'AGENT') return;
+// 子步骤弹窗状态
+let stepModalShown = false;
+let stepModalCurrentStage = null;
+let stepModalCompleted = false;  // 当前阶段是否已显示完成视图
+let stepCountdownInterval = null;
 
-    // 检测工具入口和出口
-    for (const [toolName, stepInfo] of Object.entries(P1_STEPS)) {
-        if (message.includes(`>>> ${toolName} 工具入口`)) {
-            // 工具开始执行
-            if (!p1ModalShown) {
-                showP1StepsModal();
-                p1ModalShown = true;
+// 应用 state_update 中的 sub_steps 字段到弹窗
+function applyStageStepsFromState() {
+    const ws = state.workflowState || {};
+    const currentStage = ws.current_stage;
+    const agents = ws.agents || {};
+
+    if (!currentStage || currentStage === 'completed') return;
+    if (!STAGE_STEPS[currentStage]) return;  // P8 等无子步骤定义
+
+    // 阶段切换时重置弹窗状态
+    if (currentStage !== stepModalCurrentStage) {
+        hideStepModal();
+        stepModalCurrentStage = currentStage;
+        stepModalShown = false;
+        stepModalCompleted = false;
+    }
+
+    const agentData = agents[currentStage];
+    const subSteps = agentData && agentData.sub_steps;
+    if (!subSteps) return;
+
+    if (subSteps.status === 'running') {
+        if (!stepModalShown) {
+            // 延迟 1 秒弹出（与原 P1 行为一致，让工作流图节点先亮起）
+            stepModalShown = true;
+            setTimeout(() => {
+                if (!stepModalShown) return;
+                showStepModal(currentStage);
+                updateStepModal(currentStage, subSteps);
+            }, 1000);
+        } else {
+            updateStepModal(currentStage, subSteps);
+        }
+        stepModalCompleted = false;
+    } else if (subSteps.status === 'completed' && stepModalShown && !stepModalCompleted) {
+        // 阶段所有子步骤完成，切换到完成视图
+        showStepCompleteModal(currentStage);
+        stepModalCompleted = true;
+    }
+}
+
+// 打开弹窗并渲染阶段步骤列表
+function showStepModal(stage) {
+    const stageInfo = STAGE_INFO[stage] || {};
+    const stageSteps = STAGE_STEPS[stage];
+    const items = stageSteps.items || [];
+
+    // 设置头部
+    document.getElementById('step-modal-icon').textContent = stageInfo.icon || '📋';
+    document.getElementById('step-modal-title').textContent = `${stage} 阶段执行中`;
+    document.getElementById('step-modal-subtitle').textContent = stageInfo.activity || '';
+    document.getElementById('step-modal-header').style.background =
+        `linear-gradient(135deg, ${stageInfo.color || '#4CAF50'}, ${darkenColor(stageInfo.color || '#4CAF50')})`;
+
+    // 切换到步骤视图
+    document.getElementById('step-view').style.display = 'block';
+    document.getElementById('step-complete-view').style.display = 'none';
+
+    // 动态渲染步骤
+    const container = document.getElementById('step-items-container');
+    if (stageSteps.dynamic) {
+        // P7 动态模式：初始为空，由 updateStepModal 追加
+        container.innerHTML = '';
+    } else {
+        container.innerHTML = items.map((item, i) => `
+            ${i > 0 ? '<div class="step-arrow">→</div>' : ''}
+            <div class="step-item pending" id="step-item-${stage}-${item.index}" data-tool="${item.tool}">
+                <div class="step-item-icon">
+                    <span class="step-icon-inner">${getStageStepIcon(item.tool)}</span>
+                    <span class="step-spinner"></span>
+                </div>
+                <div class="step-item-info">
+                    <div class="step-item-name">${escapeHtml(item.label)}</div>
+                    <div class="step-item-status">待执行</div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    document.getElementById('step-modal').classList.add('active');
+
+    // 重置审批视图和 footer（防止跨阶段残留 P1 审批内容）
+    document.getElementById('step-approval-view').style.display = 'none';
+    document.getElementById('step-modal-footer').style.display = 'none';
+    document.getElementById('step-permit-detail-content').innerHTML = '';
+    document.getElementById('step-jsa-detail-content').innerHTML = '';
+}
+
+// 根据 state 更新步骤状态
+function updateStepModal(stage, subSteps) {
+    const stageSteps = STAGE_STEPS[stage];
+    const completedIndices = computeCompletedIndices(subSteps);
+    const total = subSteps.total || 0;
+    const current = subSteps.current || 0;
+
+    // 动态模式（P7）：按需追加新步骤
+    if (stageSteps.dynamic) {
+        const container = document.getElementById('step-items-container');
+        // 当前事件追加
+        if (current > 0 && container.children.length < current) {
+            const arrow = document.createElement('div');
+            arrow.className = 'step-arrow';
+            arrow.textContent = '→';
+            if (container.children.length > 0) container.appendChild(arrow);
+            const div = document.createElement('div');
+            div.className = 'step-item running';
+            div.id = `step-item-${stage}-${current}`;
+            div.innerHTML = `
+                <div class="step-item-icon">
+                    <span class="step-icon-inner">🔍</span>
+                    <span class="step-spinner"></span>
+                </div>
+                <div class="step-item-info">
+                    <div class="step-item-name">${escapeHtml(subSteps.current_label || ('风险事件 ' + current))}</div>
+                    <div class="step-item-status">执行中</div>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+    } else {
+        // 静态模式：根据 items[].status 更新 DOM
+        const items = subSteps.items || stageSteps.items;
+        for (const item of items) {
+            const el = document.getElementById(`step-item-${stage}-${item.index}`);
+            if (!el) continue;
+            const newClass = `step-item ${item.status}`;
+            if (el.className !== newClass) {
+                el.className = newClass;
+                const statusEl = el.querySelector('.step-item-status');
+                if (statusEl) {
+                    statusEl.textContent = item.status === 'running' ? '执行中'
+                        : item.status === 'completed' ? '完成'
+                        : '待执行';
+                }
             }
-            updateP1Step(stepInfo.index, 'running', `执行中: ${stepInfo.name}`);
-        } else if (message.includes(`<<< ${toolName} 工具出口`)) {
-            // 工具执行完成
-            updateP1Step(stepInfo.index, 'completed', `${stepInfo.name} 完成`);
-            p1StepsCompleted++;
-            updateP1Progress();
+        }
+        // 同时根据 items 决定当前步骤（即使 items 中没有 current 项）
+        if (subSteps.current && items.length > 0) {
+            // 已完成集合来自 items
+        }
+    }
 
-            // 如果所有步骤完成，显示 P1 完成提示弹窗，3秒后进入P2
-            if (p1StepsCompleted >= 4) {
-                setTimeout(() => {
-                    hideP1StepsModal();
-                    showP1CompleteModal();
-                    p1StepsCompleted = 0;
-                    p1ModalShown = false;
-                }, 1500);
-            }
+    // 进度条 + 文案
+    const fillEl = document.getElementById('step-progress-fill');
+    const textEl = document.getElementById('step-progress-text');
+    if (stageSteps.dynamic) {
+        // N/N 递增
+        textEl.textContent = `已分析 ${current} 个事件`;
+        fillEl.style.width = '100%';
+    } else {
+        const pct = (completedIndices.length / total) * 100;
+        fillEl.style.width = `${pct}%`;
+        textEl.textContent = `${completedIndices.length} / ${total} 步骤完成`;
+    }
+
+    // 当前日志
+    const logEl = document.getElementById('step-log-content');
+    if (logEl && subSteps.current_label) {
+        if (subSteps.status === 'running') {
+            logEl.textContent = `执行中: ${subSteps.current_label}`;
+        } else if (subSteps.status === 'completed') {
+            logEl.textContent = `${subSteps.current_label || ''} 完成`;
         }
     }
 }
 
-// P1 完成提示弹窗，3秒倒计时后自动进入P2
-let p1CountdownInterval = null;
+// 从 items[] 提取已完成的步骤索引
+function computeCompletedIndices(subSteps) {
+    if (!subSteps) return [];
+    if (Array.isArray(subSteps.items) && subSteps.items.length > 0) {
+        return subSteps.items.filter(it => it.status === 'completed').map(it => it.index);
+    }
+    // 退化路径：根据 current 推断
+    const cur = subSteps.current || 0;
+    const total = subSteps.total || 0;
+    const idx = [];
+    for (let i = 1; i < cur; i++) idx.push(i);
+    return idx;
+}
 
-function showP1CompleteModal() {
-    const countdownEl = document.getElementById('p1-complete-countdown');
-    let countdown = 3;
-    countdownEl.textContent = countdown;
+// 切换到完成视图并启动倒计时
+function showStepCompleteModal(stage) {
+    // P1 阶段：跳过"完成视图 + 3 秒倒计时"，直接切换到作业票审批视图
+    if (stage === 'P1') {
+        document.getElementById('step-view').style.display = 'none';
+        document.getElementById('step-complete-view').style.display = 'none';
+        document.getElementById('step-approval-view').style.display = 'block';
+        document.getElementById('step-modal-icon').textContent = '✅';
+        document.getElementById('step-modal-title').textContent = 'P1 - 作业票审批';
 
-    document.getElementById('p1-complete-modal').classList.add('active');
-
-    // 清除之前的定时器
-    if (p1CountdownInterval) {
-        clearInterval(p1CountdownInterval);
+        // 渲染审批内容（从 state.workflowState.pending_data.P1 读取）
+        const pendingData = state.workflowState.pending_data && state.workflowState.pending_data.P1;
+        if (pendingData) {
+            renderStepPermitApproval('P1', pendingData);
+        } else {
+            // permit_data 尚未到达：先显示 footer，按钮仍可操作
+            document.getElementById('step-modal-footer').style.display = 'flex';
+            document.getElementById('step-permit-detail-content').innerHTML =
+                '<div class="permit-detail-card"><div class="permit-detail-value">作业票数据加载中...</div></div>';
+            document.getElementById('step-jsa-detail-content').innerHTML =
+                '<div class="permit-detail-card"><div class="permit-detail-value">JSA 数据加载中...</div></div>';
+        }
+        return;
     }
 
-    // 开始倒计时
-    p1CountdownInterval = setInterval(() => {
+    // 其他阶段：保持原"完成视图 + 3 秒倒计时"逻辑
+    document.getElementById('step-view').style.display = 'none';
+    document.getElementById('step-complete-view').style.display = 'block';
+    document.getElementById('step-modal-icon').textContent = '✅';
+    document.getElementById('step-modal-title').textContent = `${stage} 阶段执行完成`;
+
+    const next = getNextStage(stage);
+    document.getElementById('step-complete-subtitle').textContent =
+        next ? `即将自动进入 ${next} 阶段` : '工作流即将完成';
+
+    // 倒计时
+    const countdownEl = document.getElementById('step-complete-countdown');
+    let countdown = 3;
+    countdownEl.textContent = countdown;
+    if (stepCountdownInterval) clearInterval(stepCountdownInterval);
+    stepCountdownInterval = setInterval(() => {
         countdown--;
         if (countdown <= 0) {
-            clearInterval(p1CountdownInterval);
-            p1CountdownInterval = null;
-            hideP1CompleteModal();
-            // 自动进入P2 - 由于是异步执行，前端不需要额外操作
-            addLog('⏳ P1 完成，进入 P2 作业任务获取阶段...', 'success');
+            clearInterval(stepCountdownInterval);
+            stepCountdownInterval = null;
+            hideStepModal();
         } else {
             countdownEl.textContent = countdown;
         }
     }, 1000);
 }
 
-function hideP1CompleteModal() {
-    document.getElementById('p1-complete-modal').classList.remove('active');
-    if (p1CountdownInterval) {
-        clearInterval(p1CountdownInterval);
-        p1CountdownInterval = null;
+// 关闭弹窗并清理倒计时
+function hideStepModal() {
+    const modal = document.getElementById('step-modal');
+    if (modal) modal.classList.remove('active');
+    if (stepCountdownInterval) {
+        clearInterval(stepCountdownInterval);
+        stepCountdownInterval = null;
     }
+    // 重置所有视图（避免残留污染下一阶段）
+    const stepView = document.getElementById('step-view');
+    if (stepView) stepView.style.display = 'block';
+    const completeView = document.getElementById('step-complete-view');
+    if (completeView) completeView.style.display = 'none';
+    const approvalView = document.getElementById('step-approval-view');
+    if (approvalView) approvalView.style.display = 'none';
+    const footer = document.getElementById('step-modal-footer');
+    if (footer) footer.style.display = 'none';
+    stepModalShown = false;
+    stepModalCompleted = false;
+    stepModalCurrentStage = null;
 }
 
-function showP1StepsModal() {
-    // 重置所有步骤状态
-    for (let i = 1; i <= 4; i++) {
-        const stepEl = document.getElementById(`p1-step-${i}`);
-        stepEl.className = 'p1-step pending';
-        stepEl.querySelector('.p1-step-status').textContent = '待执行';
-    }
-    document.getElementById('p1-progress-fill').style.width = '0%';
-    document.getElementById('p1-progress-text').textContent = '0 / 4 步骤完成';
-    document.getElementById('p1-log-content').textContent = '等待执行...';
-
-    document.getElementById('p1-steps-modal').classList.add('active');
+function getNextStage(current) {
+    const idx = STAGE_ORDER.indexOf(current);
+    return idx >= 0 && idx < STAGE_ORDER.length - 1 ? STAGE_ORDER[idx + 1] : null;
 }
 
-function hideP1StepsModal() {
-    document.getElementById('p1-steps-modal').classList.remove('active');
+// 工具名 → emoji 图标映射
+function getStageStepIcon(tool) {
+    const map = {
+        permit_submit: '📝',
+        jsa_analyze: '🔍',
+        permit_generate_draft: '📄',
+        permit_check: '✔️',
+        task_instance_create: '📌',
+        context_build: '🧠',
+        binding_match: '📹',
+        verify_execute: '✅',
+        verify_recommendation: '💡',
+        monitor_start: '📡',
+        monitor_events: '📊',
+        closure_status: '🔍',
+        closure_verify: '✔️',
+        closure_report: '📋',
+        archive_task: '📦',
+        archive_cases: '📁',
+        archive_performance: '📈',
+        archive_suggestions: '💡',
+        risk_analyze: '⚠️'
+    };
+    return map[tool] || '⚙️';
 }
 
-function updateP1Step(stepIndex, status, logMessage) {
-    const stepEl = document.getElementById(`p1-step-${stepIndex}`);
-    stepEl.className = `p1-step ${status}`;
-    stepEl.querySelector('.p1-step-status').textContent = status === 'running' ? '执行中' : '完成';
-
-    // 更新当前日志
-    document.getElementById('p1-log-content').textContent = logMessage;
-}
-
-function updateP1Progress() {
-    const percent = (p1StepsCompleted / 4) * 100;
-    document.getElementById('p1-progress-fill').style.width = `${percent}%`;
-    document.getElementById('p1-progress-text').textContent = `${p1StepsCompleted} / 4 步骤完成`;
+// 颜色变暗工具函数（用于头部渐变）
+function darkenColor(hex, amount = 0.3) {
+    if (!hex || !hex.startsWith('#')) return hex;
+    let h = hex.slice(1);
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const f = (c) => Math.max(0, Math.floor(c * (1 - amount))).toString(16).padStart(2, '0');
+    return `#${f(r)}${f(g)}${f(b)}`;
 }
 
 // 格式化数据显示摘要
@@ -1252,7 +1507,219 @@ function showHitlModal(stage, data) {
         suggestionSection.style.display = 'none';
     }
 
+    // P1 阶段：渲染作业票详情 + JSA 分析
+    renderPermitApproval(baseStage, data);
+
     document.getElementById('hitl-modal').classList.add('active');
+}
+
+// ========== 作业票审批（P1 阶段） ==========
+function renderPermitApproval(baseStage, data) {
+    const section = document.getElementById('permit-approval-section');
+    if (!section) return;
+
+    // 仅 P1 阶段显示作业票审批 section
+    if (baseStage !== 'P1') {
+        section.style.display = 'none';
+        return;
+    }
+
+    // 优先从 data.permit_data 读取（新接口返回的数据）
+    let permitData = data && data.permit_data;
+    // 兼容旧结构：data.pending 内部可能携带 permit_data
+    if (!permitData && data && data.pending && data.pending.permit_data) {
+        permitData = data.pending.permit_data;
+    }
+
+    if (!permitData || (!permitData.application && !permitData.permit_content)) {
+        section.style.display = 'none';
+        return;
+    }
+
+    section.style.display = 'block';
+    document.getElementById('permit-detail-content').innerHTML = buildPermitDetailHtml(permitData);
+    document.getElementById('jsa-detail-content').innerHTML = buildJsaDetailHtml(permitData);
+
+    // 默认显示作业票 Tab
+    switchPermitTab('permit');
+}
+
+function switchPermitTab(tabName) {
+    document.querySelectorAll('.permit-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+    });
+    document.getElementById('permit-tab-permit').style.display = tabName === 'permit' ? 'block' : 'none';
+    document.getElementById('permit-tab-jsa').style.display = tabName === 'jsa' ? 'block' : 'none';
+}
+
+// ========== step-modal 内嵌的 P1 作业票审批 Tab 切换 ==========
+function switchStepPermitTab(tabName) {
+    const view = document.getElementById('step-approval-view');
+    if (!view) return;
+    view.querySelectorAll('.permit-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+    });
+    document.getElementById('step-permit-tab-permit').style.display = tabName === 'permit' ? 'block' : 'none';
+    document.getElementById('step-permit-tab-jsa').style.display = tabName === 'jsa' ? 'block' : 'none';
+}
+
+// ========== step-modal 内嵌的 P1 作业票审批渲染 ==========
+function renderStepPermitApproval(baseStage, data) {
+    if (baseStage !== 'P1') return;
+
+    // 复用 buildPermitDetailHtml / buildJsaDetailHtml（纯函数）
+    let permitData = data && data.permit_data;
+    if (!permitData && data && data.pending && data.pending.permit_data) {
+        permitData = data.pending.permit_data;
+    }
+
+    if (!permitData || (!permitData.application && !permitData.permit_content)) {
+        // permit.json 缺失或无关键字段，仅显示 footer（按钮仍可操作）
+        document.getElementById('step-approval-view').style.display = 'block';
+        document.getElementById('step-permit-detail-content').innerHTML =
+            '<div class="permit-detail-card"><div class="permit-detail-value">暂无作业票数据</div></div>';
+        document.getElementById('step-jsa-detail-content').innerHTML =
+            '<div class="permit-detail-card"><div class="permit-detail-value">暂无 JSA 分析数据</div></div>';
+        document.getElementById('step-modal-footer').style.display = 'flex';
+        switchStepPermitTab('permit');
+        return;
+    }
+
+    document.getElementById('step-permit-detail-content').innerHTML = buildPermitDetailHtml(permitData);
+    document.getElementById('step-jsa-detail-content').innerHTML = buildJsaDetailHtml(permitData);
+    document.getElementById('step-approval-view').style.display = 'block';
+    document.getElementById('step-modal-footer').style.display = 'flex';
+    switchStepPermitTab('permit');
+}
+
+function buildPermitDetailHtml(permitData) {
+    const app = permitData.application || {};
+    const permit = permitData.permit_content || {};
+    const parts = [];
+
+    // 作业申请
+    parts.push('<div class="permit-detail-card">');
+    parts.push('<div class="permit-detail-title">📝 作业申请</div>');
+    if (app.job_content) parts.push(rowHtml('作业内容', escapeHtml(app.job_content)));
+    if (app.region) parts.push(rowHtml('作业区域', escapeHtml(app.region)));
+    if (app.planned_start) parts.push(rowHtml('开始时间', formatDateTime(app.planned_start)));
+    if (app.planned_end) parts.push(rowHtml('结束时间', formatDateTime(app.planned_end)));
+    if (Array.isArray(app.personnel) && app.personnel.length) {
+        const names = app.personnel.map(p => `${escapeHtml(p.name || '')} (${escapeHtml(p.badge_id || '')})`).join('、');
+        parts.push(rowHtml('作业人员', names));
+    }
+    parts.push('</div>');
+
+    // 作业票字段
+    parts.push('<div class="permit-detail-card">');
+    parts.push('<div class="permit-detail-title">📄 作业票</div>');
+    if (permitData.task_id) parts.push(rowHtml('任务ID', escapeHtml(permitData.task_id)));
+    if (permitData.permit_draft_id) parts.push(rowHtml('作业票ID', escapeHtml(permitData.permit_draft_id)));
+
+    // permit_content 可能是 dict 也可能是 list
+    if (permit && typeof permit === 'object') {
+        const entries = Array.isArray(permit) ? permit : Object.entries(permit);
+        if (Array.isArray(permit)) {
+            // list 形式：每项是一个字段
+            entries.forEach(field => {
+                if (!field) return;
+                const label = field.name || field.field || field.key || '字段';
+                const value = field.value || field.content || '';
+                const required = field.required ? ' <span style="color:#c62828;">*</span>' : '';
+                if (value) parts.push(rowHtml(label + required, escapeHtml(String(value))));
+            });
+        } else {
+            // dict 形式：每个 key 是字段
+            Object.entries(permit).forEach(([k, v]) => {
+                if (v === null || v === undefined || v === '') return;
+                parts.push(rowHtml(k, escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))));
+            });
+        }
+    }
+    if (Array.isArray(permitData.missing_fields) && permitData.missing_fields.length) {
+        parts.push(rowHtml(
+            '缺失字段',
+            permitData.missing_fields.map(f => `<span class="risk-badge risk-high">${escapeHtml(f)}</span>`).join(' ')
+        ));
+    }
+    parts.push('</div>');
+
+    return parts.join('');
+}
+
+function buildJsaDetailHtml(permitData) {
+    const jsa = permitData.jsa_result;
+    if (!jsa || typeof jsa !== 'object') {
+        return '<div class="permit-detail-card"><div class="permit-detail-value">暂无 JSA 分析数据</div></div>';
+    }
+    const parts = [];
+
+    // JSA 顶层信息
+    parts.push('<div class="permit-detail-card">');
+    parts.push('<div class="permit-detail-title">⚠️ JSA 分析概览</div>');
+    if (jsa.job_type) parts.push(rowHtml('作业类型', escapeHtml(jsa.job_type)));
+    if (jsa.risk_level) parts.push(rowHtml('整体风险',
+        `<span class="risk-badge risk-${escapeHtml(String(jsa.risk_level).toLowerCase())}">${escapeHtml(String(jsa.risk_level).toUpperCase())}</span>`));
+    if (jsa.summary) parts.push(rowHtml('分析摘要', escapeHtml(jsa.summary)));
+    parts.push('</div>');
+
+    // 危害清单
+    const hazards = jsa.hazards || jsa.risks || jsa.danger_list;
+    if (Array.isArray(hazards) && hazards.length) {
+        parts.push('<div class="permit-detail-card">');
+        parts.push('<div class="permit-detail-title">🚨 危害清单</div>');
+        hazards.forEach((h, idx) => {
+            const name = h.name || h.hazard || h.description || `危害${idx + 1}`;
+            const level = h.level || h.risk_level || h.severity;
+            const levelHtml = level ? `<span class="risk-badge risk-${escapeHtml(String(level).toLowerCase())}">${escapeHtml(String(level))}</span>` : '';
+            parts.push(`<div style="margin: 6px 0; padding-left: 8px; border-left: 2px solid #FFC107;">`);
+            parts.push(`<div style="font-size: 12px; font-weight: bold; color: #333;">${idx + 1}. ${escapeHtml(name)} ${levelHtml}</div>`);
+            if (h.consequence) parts.push(`<div style="font-size: 11px; color: #666; margin-top: 2px;">后果：${escapeHtml(h.consequence)}</div>`);
+            // 措施
+            const measures = h.controls || h.measures || h.mitigation || h.countermeasures;
+            if (Array.isArray(measures) && measures.length) {
+                parts.push('<div style="margin-top: 4px;">');
+                measures.forEach(m => parts.push(`<span class="measure-tag">✓ ${escapeHtml(typeof m === 'object' ? (m.name || m.action || JSON.stringify(m)) : String(m))}</span>`));
+                parts.push('</div>');
+            }
+            parts.push('</div>');
+        });
+        parts.push('</div>');
+    }
+
+    // 整体控制措施
+    const overallControls = jsa.controls || jsa.measures || jsa.safety_measures;
+    if (Array.isArray(overallControls) && overallControls.length) {
+        parts.push('<div class="permit-detail-card">');
+        parts.push('<div class="permit-detail-title">🛡️ 整体安全措施</div>');
+        parts.push('<ul class="permit-detail-list">');
+        overallControls.forEach(m => parts.push(`<li>${escapeHtml(typeof m === 'object' ? (m.name || m.action || JSON.stringify(m)) : String(m))}</li>`));
+        parts.push('</ul>');
+        parts.push('</div>');
+    }
+
+    return parts.join('') || '<div class="permit-detail-card"><div class="permit-detail-value">暂无 JSA 详细内容</div></div>';
+}
+
+function rowHtml(label, value) {
+    return `<div class="permit-detail-row"><div class="permit-detail-label">${escapeHtml(label)}</div><div class="permit-detail-value">${value}</div></div>`;
+}
+
+function formatDateTime(iso) {
+    try {
+        return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+    } catch {
+        return iso;
+    }
+}
+
+function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
 function closeModal() {
@@ -1294,7 +1761,12 @@ function confirmDecision(decision) {
         return r.json();
     }).then(data => {
         addLog(`📋 响应数据: ${JSON.stringify(data)}`);
-        closeModal();
+        // 关闭弹窗：P1 阶段关闭 step-modal（合并窗口），其他阶段关闭 hitl-modal
+        if (stage && stage.toUpperCase().startsWith('P1')) {
+            hideStepModal();
+        } else {
+            closeModal();
+        }
 
         if (data.status === 'executing') {
             // 异步执行中，等待 WebSocket 状态更新
