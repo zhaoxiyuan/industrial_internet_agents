@@ -16,6 +16,21 @@ from .utils.response_utils import make_response, make_error, SCHEMA_VERSION
 from .utils.logging_handler import get_agent_config
 from .utils import get_stage_logger
 
+# 延迟导入避免循环依赖
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P10 子步骤定义
+P10_STEP_TOTAL = 4
+P10_ITEMS_RUNNING = [
+    {"index": 1, "label": "归档任务", "tool": "archive_task", "status": "running"},
+    {"index": 2, "label": "归档事件案例", "tool": "archive_cases", "status": "pending"},
+    {"index": 3, "label": "归档绩效", "tool": "archive_performance", "status": "pending"},
+    {"index": 4, "label": "发布改进建议", "tool": "archive_suggestions", "status": "pending"},
+]
+
 # 配置日志
 import logging
 logger = logging.getLogger("p10_archive_agent")
@@ -288,25 +303,70 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P10] 调用 archive_task: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P10", 1, P10_STEP_TOTAL,
+            "归档任务", "archive_task", "running",
+            P10_ITEMS_RUNNING,
+        )
         archive_result = json.loads(archive_task.invoke(task_id))
         log.log_tool_call("archive_task", {"task_id": task_id}, archive_result)
         if "result" in archive_result:
             result["archive_result"] = archive_result["result"]
 
         logger.info(f"[P10] 调用 archive_cases: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P10", 2, P10_STEP_TOTAL,
+            "归档事件案例", "archive_cases", "running",
+            [
+                {"index": 1, "label": "归档任务", "tool": "archive_task", "status": "completed"},
+                {"index": 2, "label": "归档事件案例", "tool": "archive_cases", "status": "running"},
+                {"index": 3, "label": "归档绩效", "tool": "archive_performance", "status": "pending"},
+                {"index": 4, "label": "发布改进建议", "tool": "archive_suggestions", "status": "pending"},
+            ],
+        )
         cases_result = json.loads(archive_cases.invoke(task_id))
         log.log_tool_call("archive_cases", {"task_id": task_id}, cases_result)
         if "result" in cases_result:
             result["mined_cases"] = cases_result["result"]
 
         logger.info(f"[P10] 调用 archive_performance: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P10", 3, P10_STEP_TOTAL,
+            "归档绩效", "archive_performance", "running",
+            [
+                {"index": 1, "label": "归档任务", "tool": "archive_task", "status": "completed"},
+                {"index": 2, "label": "归档事件案例", "tool": "archive_cases", "status": "completed"},
+                {"index": 3, "label": "归档绩效", "tool": "archive_performance", "status": "running"},
+                {"index": 4, "label": "发布改进建议", "tool": "archive_suggestions", "status": "pending"},
+            ],
+        )
         perf_result = json.loads(archive_performance.invoke(task_id))
         log.log_tool_call("archive_performance", {"task_id": task_id}, perf_result)
         if "result" in perf_result:
             result["performance"] = perf_result["result"]
 
         logger.info(f"[P10] 调用 archive_suggestions: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P10", 4, P10_STEP_TOTAL,
+            "发布改进建议", "archive_suggestions", "running",
+            [
+                {"index": 1, "label": "归档任务", "tool": "archive_task", "status": "completed"},
+                {"index": 2, "label": "归档事件案例", "tool": "archive_cases", "status": "completed"},
+                {"index": 3, "label": "归档绩效", "tool": "archive_performance", "status": "completed"},
+                {"index": 4, "label": "发布改进建议", "tool": "archive_suggestions", "status": "running"},
+            ],
+        )
         suggestions_result = json.loads(archive_suggestions.invoke(task_id))
+        _broadcast_substep(
+            job_id, "P10", 4, P10_STEP_TOTAL,
+            "发布改进建议", "archive_suggestions", "completed",
+            [
+                {"index": 1, "label": "归档任务", "tool": "archive_task", "status": "completed"},
+                {"index": 2, "label": "归档事件案例", "tool": "archive_cases", "status": "completed"},
+                {"index": 3, "label": "归档绩效", "tool": "archive_performance", "status": "completed"},
+                {"index": 4, "label": "发布改进建议", "tool": "archive_suggestions", "status": "completed"},
+            ],
+        )
         log.log_tool_call("archive_suggestions", {"task_id": task_id}, suggestions_result)
         if "result" in suggestions_result:
             result["suggestions"] = suggestions_result["result"]

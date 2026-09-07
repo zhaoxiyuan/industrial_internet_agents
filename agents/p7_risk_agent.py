@@ -324,6 +324,11 @@ def execute_stage(job_id: str) -> dict:
     from .workflow import get_stage_result_path, read_json_file, write_json_file
     from .utils import get_stage_logger, add_job_log
 
+    # 延迟导入避免循环依赖
+    from agents.main_agent import _broadcast_substep as _broadcast_substep_impl
+    def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+        return _broadcast_substep_impl(job_id, stage, idx, total, label, tool_name, status, items)
+
     log = get_stage_logger("P7")
     log.log_enter(job_id)
 
@@ -342,11 +347,17 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 遍历候选事件进行风险研判
         risk_events = []
-        for event in candidate_events:
+        for i, event in enumerate(candidate_events, start=1):
             event_id = event.get("event_id", "")
             if not event_id:
                 continue
             logger.info(f"[P7] 调用 risk_analyze: event_id={event_id}")
+            # P7 动态计数：每事件 N/N 递增
+            _broadcast_substep(
+                job_id, "P7", i, i,
+                f"风险事件 {i}", "risk_analyze", "running",
+                [],
+            )
             try:
                 analyze_result = json.loads(risk_analyze.invoke(event_id))
                 log.log_tool_call("risk_analyze", {"event_id": event_id}, analyze_result)

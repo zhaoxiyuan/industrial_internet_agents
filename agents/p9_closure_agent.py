@@ -16,6 +16,20 @@ from .utils import get_stage_logger
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
+# 延迟导入避免循环依赖
+def _broadcast_substep(job_id, stage, idx, total, label, tool_name, status, items):
+    from agents.main_agent import _broadcast_substep as _impl
+    return _impl(job_id, stage, idx, total, label, tool_name, status, items)
+
+
+# P9 子步骤定义
+P9_STEP_TOTAL = 3
+P9_ITEMS_RUNNING = [
+    {"index": 1, "label": "查询关闭状态", "tool": "closure_status", "status": "running"},
+    {"index": 2, "label": "验证关闭条件", "tool": "closure_verify", "status": "pending"},
+    {"index": 3, "label": "生成关闭报告", "tool": "closure_report", "status": "pending"},
+]
+
 # 配置日志
 import logging
 logger = logging.getLogger("p9_closure_agent")
@@ -291,19 +305,51 @@ def execute_stage(job_id: str) -> dict:
 
         # 2. 调用本模块工具
         logger.info(f"[P9] 调用 closure_status: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P9", 1, P9_STEP_TOTAL,
+            "查询关闭状态", "closure_status", "running",
+            P9_ITEMS_RUNNING,
+        )
         status_result = json.loads(closure_status.invoke(task_id))
         log.log_tool_call("closure_status", {"task_id": task_id}, status_result)
         if "result" in status_result:
             result["closure_status"] = status_result["result"]
 
         logger.info(f"[P9] 调用 closure_verify: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P9", 2, P9_STEP_TOTAL,
+            "验证关闭条件", "closure_verify", "running",
+            [
+                {"index": 1, "label": "查询关闭状态", "tool": "closure_status", "status": "completed"},
+                {"index": 2, "label": "验证关闭条件", "tool": "closure_verify", "status": "running"},
+                {"index": 3, "label": "生成关闭报告", "tool": "closure_report", "status": "pending"},
+            ],
+        )
         verify_result = json.loads(closure_verify.invoke(task_id))
         log.log_tool_call("closure_verify", {"task_id": task_id}, verify_result)
         if "result" in verify_result:
             result["verify_result"] = verify_result["result"]
 
         logger.info(f"[P9] 调用 closure_report: task_id={task_id}")
+        _broadcast_substep(
+            job_id, "P9", 3, P9_STEP_TOTAL,
+            "生成关闭报告", "closure_report", "running",
+            [
+                {"index": 1, "label": "查询关闭状态", "tool": "closure_status", "status": "completed"},
+                {"index": 2, "label": "验证关闭条件", "tool": "closure_verify", "status": "completed"},
+                {"index": 3, "label": "生成关闭报告", "tool": "closure_report", "status": "running"},
+            ],
+        )
         report_result = json.loads(closure_report.invoke(task_id))
+        _broadcast_substep(
+            job_id, "P9", 3, P9_STEP_TOTAL,
+            "生成关闭报告", "closure_report", "completed",
+            [
+                {"index": 1, "label": "查询关闭状态", "tool": "closure_status", "status": "completed"},
+                {"index": 2, "label": "验证关闭条件", "tool": "closure_verify", "status": "completed"},
+                {"index": 3, "label": "生成关闭报告", "tool": "closure_report", "status": "completed"},
+            ],
+        )
         log.log_tool_call("closure_report", {"task_id": task_id}, report_result)
         if "result" in report_result:
             result["report"] = report_result["result"]

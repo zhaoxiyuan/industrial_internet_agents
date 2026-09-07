@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = ""
-    MODEL_PROVIDER: str = ""
+    # 默认使用 openai 兼容 provider，因为项目使用 OpenAI 兼容 API（如 MiniMax）
+    MODEL_PROVIDER: str = "openai"
     TEMPERATURE: float = Field(default=0.7, validation_alias="OPENAI_TEMPERATURE")
     MAX_TOKENS: int = Field(default=8192, validation_alias="OPENAI_MAX_TOKENS")
 
