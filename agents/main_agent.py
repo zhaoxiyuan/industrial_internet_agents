@@ -51,7 +51,7 @@ from .p4_binding_agent import execute_stage as p4_execute_stage
 from .p5_verify_agent import execute_stage as p5_execute_stage
 from .p6_monitor_agent import execute_stage as p6_execute_stage
 from .p7_risk_agent import execute_stage as p7_execute_stage
-from .p8_disposition_agent import execute_stage as p8_execute_stage
+from .p8_disposition_agent import run_disposition_agent  # 仅供 p8 stage executor 使用
 from .p9_closure_agent import execute_stage as p9_execute_stage
 from .p10_archive_agent import execute_stage as p10_execute_stage
     
@@ -739,6 +739,11 @@ def execute_p10(job_id: str) -> dict:
 
 # P1 特殊处理：保留 HITL 逻辑
 execute_p1 = p1_execute_stage
+
+# p8_disposition_agent 不直接暴露 execute_stage，复用本地 execute_p8 实现统一签名
+def p8_execute_stage(job_id: str) -> dict:
+    """P8 阶段入口：转调本地 execute_p8，签名与其它阶段一致 (job_id,) -> dict。"""
+    return execute_p8(job_id)
 
 # 阶段执行映射（从子Agent导入）
 STAGE_EXECUTORS = {
