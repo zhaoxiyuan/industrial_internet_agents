@@ -19,6 +19,7 @@ from web.api import config as config_api
 from web.api import workflow as workflow_api
 from web.api import snapshots as snapshots_api
 from web.api import skills as skills_api
+from web.api import agents as agents_api
 from feishu_gateway_cli import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
 from web.ws.servers import start_websocket_threads
@@ -73,6 +74,10 @@ class Handler(SimpleHTTPRequestHandler):
             data = self._read_json()
             workflow_api.handle_workflow_confirm(self, data)
 
+        elif path == "/api/agents":
+            data = self._read_json()
+            agents_api.handle_agents_post(self, data)
+
         elif path == "/api/feishu/card-callback":
             # 2026-08-18：飞书客户端"显示出错"+ 卡不换的根因之一——
             # do_POST 在 _read_json 或 handle_card_callback 抛异常时，
@@ -106,6 +111,9 @@ class Handler(SimpleHTTPRequestHandler):
 
         elif path == "/api/config":
             config_api.handle_config_get(self)
+
+        elif path == "/api/agents":
+            agents_api.handle_agents_get(self)
 
         elif path.startswith("/api/prompt/"):
             stage = path.split("/")[-1]

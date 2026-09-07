@@ -75,7 +75,7 @@ import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const sceneMenuOpen = ref(true)
+const sceneMenuOpen = ref(false)
 const subAgents = [
   { id: 'MAIN', name: '主调度 Agent', icon: '🎛️' },
   { id: 'P1', name: 'P1 作业票 Agent', icon: '📋' },
