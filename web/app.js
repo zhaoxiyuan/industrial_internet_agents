@@ -10,6 +10,12 @@ const state = {
         threadId: null
     },
     selectedWorkflowNode: null,
+    historyJobs: [],
+    historyViewJobId: null,
+    liveWorkflowState: null,
+    mockApplication: null,
+    realApplication: null,
+    inputSource: 'mock',
     ws: null,           // 状态 WebSocket 连接
     logsWs: null        // 日志 WebSocket 连接
 };
@@ -107,6 +113,82 @@ const STAGE_INFO = {
 };
 
 const ALL_STAGES = ['MAIN', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
+const ACTIVE_WORKFLOW_STORAGE_KEY = 'industrialInternetActiveWorkflow';
+
+function rememberActiveWorkflow(workflowState) {
+    const jobId = workflowState && (workflowState.thread_id || workflowState.jobId || workflowState.threadId);
+    try {
+        if (jobId && workflowState.status !== 'completed' && workflowState.status !== 'idle') {
+            localStorage.setItem(ACTIVE_WORKFLOW_STORAGE_KEY, JSON.stringify({
+                jobId: jobId,
+                status: workflowState.status,
+                currentStage: workflowState.current_stage || workflowState.currentStage || ''
+            }));
+        } else if (workflowState && (workflowState.status === 'completed' || workflowState.status === 'idle')) {
+            localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+        }
+    } catch (e) {
+        console.warn('保存当前作业失败:', e);
+    }
+}
+
+function restoreActiveWorkflow() {
+    let saved;
+    try {
+        saved = JSON.parse(localStorage.getItem(ACTIVE_WORKFLOW_STORAGE_KEY) || 'null');
+    } catch (e) {
+        localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+        return;
+    }
+    if (!saved || !/^\d{17}$/.test(saved.jobId || '')) {
+        // 兼容更新前未写入浏览器缓存、或后端重启后的情况。
+        fetch('/api/workflow/latest-incomplete')
+            .then(r => r.json())
+            .then(data => {
+                if (!data || !data.job_id || data.status === 'none') return;
+                state.workflowState = data;
+                rememberActiveWorkflow(data);
+                renderWorkflowDiagram();
+                updateControlPanel();
+                addLog('🔄 已找回最近未完成作业: ' + data.job_id);
+                connectWebSocket(data.job_id);
+                showPendingConfirmation(data, '已找回的作业');
+                startResumeStatePolling(data.job_id);
+            })
+            .catch(err => console.warn('查找未完成作业失败:', err));
+        return;
+    }
+
+    // 先同步恢复最小状态，避免页面刚打开、状态接口尚未返回时点击“启动”误建新作业。
+    state.workflowState = {
+        status: saved.status || 'unknown',
+        current_stage: saved.currentStage || '',
+        threadId: saved.jobId,
+        jobId: saved.jobId,
+        pending: [],
+        confirmed: []
+    };
+
+    fetch('/api/workflow/state?thread_id=' + encodeURIComponent(saved.jobId))
+        .then(r => r.json())
+        .then(data => {
+            if (!data || data.status === 'idle' || data.status === 'unknown') {
+                localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+                return;
+            }
+            state.workflowState = data;
+            rememberActiveWorkflow(data);
+            renderWorkflowDiagram();
+            updateControlPanel();
+            if (data.status !== 'completed') {
+                addLog('🔄 已恢复未完成作业: ' + saved.jobId);
+                connectWebSocket(saved.jobId);
+                showPendingConfirmation(data, '已恢复的作业');
+                startResumeStatePolling(saved.jobId);
+            }
+        })
+        .catch(err => console.warn('恢复当前作业失败:', err));
+}
 
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', function() {
@@ -115,7 +197,9 @@ document.addEventListener('DOMContentLoaded', function() {
     loadModelConfig();
     loadAllPrompts();
     renderWorkflowDiagram();
-    fillMockData();
+    selectInputSource('mock');
+    loadHistoryJobs();
+    restoreActiveWorkflow();
 });
 
 // ========== 标签页切换 ==========
@@ -638,10 +722,311 @@ function renderWorkflowNodeDetail(stage) {
     `;
 }
 
+// ========== 历史作业 ==========
+
+function switchWorkEntry(mode) {
+    const isHistory = mode === 'history';
+    if (!isHistory && state.historyViewJobId) exitHistoryView();
+    document.getElementById('work-entry-new-tab').classList.toggle('active', !isHistory);
+    document.getElementById('work-entry-history-tab').classList.toggle('active', isHistory);
+    document.getElementById('work-entry-new-panel').classList.toggle('active', !isHistory);
+    document.getElementById('work-entry-history-panel').classList.toggle('active', isHistory);
+    if (isHistory) loadHistoryJobs();
+}
+
+function historyStatusText(job) {
+    if (job.status === 'completed') return '已完成';
+    if (job.status === 'waiting') return '等待 ' + (job.current_stage || '') + ' 确认';
+    if (job.status === 'error' || job.status === 'failed') return (job.current_stage || '工作流') + ' 执行失败';
+    if (job.status === 'running' || job.status === 'executing' || job.status === 'starting') return (job.current_stage || '工作流') + ' 执行中';
+    return job.status || '未知';
+}
+
+function loadHistoryJobs() {
+    const container = document.getElementById('history-job-list');
+    if (!container) return;
+    container.innerHTML = '<div class="history-empty">正在加载...</div>';
+    fetch('/api/workflow/history?limit=50')
+        .then(r => r.json())
+        .then(data => {
+            state.historyJobs = data.jobs || [];
+            renderHistoryJobs();
+        })
+        .catch(err => {
+            container.innerHTML = '<div class="history-empty">加载失败：' + escapeHtml(err.message) + '</div>';
+        });
+}
+
+function renderHistoryJobs() {
+    const container = document.getElementById('history-job-list');
+    if (!container) return;
+    if (state.historyJobs.length === 0) {
+        container.innerHTML = '<div class="history-empty">暂无历史作业</div>';
+        return;
+    }
+    container.innerHTML = state.historyJobs.map(job => {
+        const selected = state.historyViewJobId === job.job_id ? ' selected' : '';
+        const content = job.job_content || job.job_type || '未填写作业内容';
+        const meta = [job.region, job.applicant].filter(Boolean).join(' · ');
+        return `<div class="history-job-card${selected}" data-job-id="${job.job_id}">
+            <div class="history-job-head">
+                <span class="history-job-id">${job.job_id}</span>
+                <span class="history-job-status">${escapeHtml(historyStatusText(job))}</span>
+            </div>
+            <div class="history-job-content">${escapeHtml(content)}</div>
+            <div class="history-job-meta">${escapeHtml(meta || '无区域信息')}</div>
+            <div class="history-job-actions">
+                <button class="btn btn-secondary" onclick="viewHistoryJob('${job.job_id}')">查看流程</button>
+                <button class="btn btn-secondary" onclick="viewHistoryPermit('${job.job_id}')">查看作业单</button>
+                ${job.can_continue ? `<button class="btn btn-primary" onclick="continueHistoryJob('${job.job_id}')">继续</button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function workflowStateFromDetail(detail) {
+    return {
+        status: detail.status || 'unknown',
+        pending: detail.pending || [],
+        pending_data: detail.pending_data || {},
+        confirmed: detail.confirmed || [],
+        current_stage: detail.current_stage || '',
+        thread_id: detail.job_id,
+        jobId: detail.job_id,
+        threadId: detail.job_id,
+        agents: detail.agents || {}
+    };
+}
+
+function renderHistoryLogs(detail) {
+    const container = document.getElementById('log-container');
+    const logs = detail.logs || [];
+    if (logs.length === 0) {
+        container.innerHTML = '<div class="log-entry"><span class="log-time">[--:--:--]</span> 该作业暂无日志</div>';
+        return;
+    }
+    container.innerHTML = '';
+    logs.forEach(item => {
+        const time = item.timestamp ? new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--';
+        const message = item.message || item.action || JSON.stringify(item);
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        entry.innerHTML = `<span class="log-time">[${escapeHtml(time)}]</span> ${escapeHtml(message)}`;
+        container.appendChild(entry);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+function viewHistoryJob(jobId) {
+    fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
+        .then(r => r.json())
+        .then(detail => {
+            if (detail.error) throw new Error(detail.error || '读取作业失败');
+            if (!state.historyViewJobId) state.liveWorkflowState = state.workflowState;
+            state.historyViewJobId = jobId;
+            state.workflowState = workflowStateFromDetail(detail);
+            document.getElementById('history-view-text').textContent = '正在查看历史作业：' + jobId + '（只读）';
+            document.getElementById('history-view-banner').classList.add('active');
+            renderHistoryJobs();
+            renderWorkflowDiagram();
+            updateControlPanel();
+            renderHistoryLogs(detail);
+        })
+        .catch(err => addLog('❌ 历史作业读取失败: ' + err.message, 'error'));
+}
+
+function viewHistoryPermit(jobId) {
+    const modal = document.getElementById('history-permit-modal');
+    const content = document.getElementById('history-permit-content');
+    document.getElementById('history-permit-title').textContent = '历史作业单：' + jobId;
+    content.textContent = '正在加载作业单内容...';
+    modal.classList.add('active');
+    fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
+        .then(r => r.json())
+        .then(detail => {
+            if (detail.error) throw new Error(detail.error || '读取作业单失败');
+            if (!modal.classList.contains('active')) return;
+            content.innerHTML = renderP1Approval(detail, false);
+        })
+        .catch(err => {
+            content.innerHTML = '<div class="permit-missing">作业单读取失败：' + escapeHtml(err.message) + '</div>';
+        });
+}
+
+function closeHistoryPermit() {
+    document.getElementById('history-permit-modal').classList.remove('active');
+}
+
+function exitHistoryView() {
+    if (!state.historyViewJobId) return;
+    state.historyViewJobId = null;
+    if (state.liveWorkflowState) state.workflowState = state.liveWorkflowState;
+    state.liveWorkflowState = null;
+    document.getElementById('history-view-banner').classList.remove('active');
+    renderHistoryJobs();
+    renderWorkflowDiagram();
+    updateControlPanel();
+    document.getElementById('log-container').innerHTML = '<div class="log-entry"><span class="log-time">[--:--:--]</span> 已返回当前作业</div>';
+}
+
+function continueHistoryJob(jobId) {
+    fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
+        .then(r => r.json())
+        .then(detail => {
+            if (detail.error) throw new Error(detail.error || '读取作业失败');
+            state.historyViewJobId = null;
+            state.liveWorkflowState = null;
+            state.workflowState = workflowStateFromDetail(detail);
+            document.getElementById('history-view-banner').classList.remove('active');
+            rememberActiveWorkflow(state.workflowState);
+            renderWorkflowDiagram();
+            updateControlPanel();
+            if (detail.status === 'error' || detail.status === 'failed') {
+                resumeWorkflow(jobId);
+            } else {
+                connectWebSocket(jobId);
+                showPendingConfirmation(state.workflowState, '历史作业');
+                startResumeStatePolling(jobId);
+            }
+            switchWorkEntry('new');
+        })
+        .catch(err => addLog('❌ 继续历史作业失败: ' + err.message, 'error'));
+}
+
 // ========== 工作流执行 ==========
 
+function applyApplicationToForm(application) {
+    application = application || {};
+    const firstPerson = (application.personnel || [])[0] || {};
+    document.getElementById('app-job-content').value = application.job_content || '';
+    document.getElementById('app-region').value = application.region || application.work_location || '';
+    document.getElementById('app-person-name').value = firstPerson.name || application.person_name || '';
+    document.getElementById('app-person-badge').value = firstPerson.badge_id || application.person_badge || '';
+    document.getElementById('app-start').value = application.planned_start || application.start || '';
+    document.getElementById('app-end').value = application.planned_end || application.end || '';
+}
+
+function selectInputSource(source) {
+    state.inputSource = source === 'docx' ? 'docx' : 'mock';
+    document.getElementById('source-mock-option').classList.toggle('active', state.inputSource === 'mock');
+    document.getElementById('source-docx-option').classList.toggle('active', state.inputSource === 'docx');
+    document.getElementById('source-mock-panel').classList.toggle('active', state.inputSource === 'mock');
+    document.getElementById('source-docx-panel').classList.toggle('active', state.inputSource === 'docx');
+    if (state.inputSource === 'mock') {
+        if (state.mockApplication) applyApplicationToForm(state.mockApplication);
+        else fillMockData();
+    } else if (state.realApplication) {
+        applyApplicationToForm(state.realApplication);
+    } else {
+        applyApplicationToForm({});
+    }
+}
+
+function setDocxStatus(message, type = '') {
+    const status = document.getElementById('permit-docx-status');
+    status.className = 'docx-status' + (type ? ' ' + type : '');
+    status.textContent = message;
+}
+
+function handlePermitDocx(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+        setDocxStatus('仅支持 .docx 作业许可文件。', 'error');
+        return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+        setDocxStatus('文件超过 10MB，无法上传。', 'error');
+        return;
+    }
+    setDocxStatus('正在解析 ' + file.name + '...');
+    const reader = new FileReader();
+    reader.onload = () => {
+        const contentBase64 = String(reader.result || '').split(',')[1] || '';
+        fetch('/api/workflow/parse-docx', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: file.name, content_base64: contentBase64 })
+        }).then(r => r.json()).then(data => {
+            if (data.status === 'error') throw new Error(data.error || '解析失败');
+            state.realApplication = data.application || {};
+            applyApplicationToForm(state.realApplication);
+            const missing = data.missing_fields || [];
+            if (data.is_blank) {
+                setDocxStatus('已识别为“' + (data.document.permit_title || '作业许可') + '”空白模板。请补充：' + (missing.join('、') || '关键作业信息') + '。', 'warning');
+            } else if (missing.length) {
+                setDocxStatus('解析完成，但启动前还需补充：' + missing.join('、') + '。', 'warning');
+            } else {
+                setDocxStatus('解析完成：' + (data.document.permit_title || file.name) + '。请核对下方识别结果。', 'success');
+            }
+        }).catch(err => {
+            state.realApplication = null;
+            applyApplicationToForm({});
+            setDocxStatus('解析失败：' + err.message, 'error');
+        });
+    };
+    reader.onerror = () => setDocxStatus('读取文件失败，请重新选择。', 'error');
+    reader.readAsDataURL(file);
+}
+
+function validateNewApplication(application) {
+    if (state.inputSource !== 'docx') return [];
+    if (!state.realApplication) return ['请先上传并解析真实 DOCX 作业许可'];
+    const missing = [];
+    if (!application.job_content) missing.push('作业内容');
+    if (!application.region) missing.push('作业区域/地点');
+    if (!(application.personnel || []).some(person => person && person.name)) missing.push('作业人员');
+    if (!application.planned_start) missing.push('开始时间');
+    if (!application.planned_end) missing.push('结束时间');
+    return missing;
+}
+
 function startWorkflow() {
+    // 检查是否有未完成的作业
+    const existingJobId = state.workflowState.thread_id ||
+                          state.workflowState.jobId ||
+                          state.workflowState.threadId;
+    if (existingJobId &&
+        state.workflowState.status &&
+        state.workflowState.status !== 'completed' &&
+        state.workflowState.status !== 'idle') {
+
+        // 有未完成的作业，询问用户
+        const jobId = existingJobId;
+        const currentStage = state.workflowState.current_stage ||
+                             state.workflowState.currentStage || '未知';
+        const status = state.workflowState.status || '未知';
+
+        const message = `检测到未完成的作业：\n\n` +
+                        `作业单号: ${jobId}\n` +
+                        `当前阶段: ${currentStage}\n` +
+                        `状态: ${status}\n\n` +
+                        `请选择操作：\n` +
+                        `• 点击"确定"继续执行当前作业\n` +
+                        `• 点击"取消"创建新作业`;
+
+        if (confirm(message)) {
+            // 失败状态才触发断点恢复；running/waiting 只重新连接现有作业。
+            if (status === 'error' || status === 'failed') {
+                resumeWorkflow(jobId);
+            } else {
+                addLog('🔄 重新连接作业: ' + jobId);
+                connectWebSocket(jobId);
+                startResumeStatePolling(jobId);
+            }
+            return;
+        }
+    }
+
+    // 创建新作业
+    resumeStatePollGeneration++;
     const app = buildApplicationJson();
+    const missing = validateNewApplication(app);
+    if (missing.length) {
+        const message = missing.length === 1 && missing[0].startsWith('请先') ? missing[0] : '真实作业许可缺少：' + missing.join('、') + '。请在识别结果中补充后再启动。';
+        addLog('⚠️ ' + message, 'warning');
+        alert(message);
+        return;
+    }
     addLog('🚀 启动工作流...');
 
     fetch('/api/workflow/start', {
@@ -654,6 +1039,7 @@ function startWorkflow() {
               state.workflowState.threadId = data.job_id;
               state.workflowState.jobId = data.job_id;
               state.workflowState.status = 'starting';
+              rememberActiveWorkflow(state.workflowState);
               addLog('📋 作业单号: ' + data.job_id, 'success');
               addLog('⏳ 工作流启动中，建立 WebSocket 连接...');
 
@@ -665,6 +1051,100 @@ function startWorkflow() {
           addLog('❌ 错误: ' + err.message, 'error');
       });
 }
+
+function resumeWorkflow(jobId) {
+    addLog('🔄 继续执行作业: ' + jobId);
+
+    fetch('/api/workflow/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            job_id: jobId,
+            force: false
+        })
+    }).then(r => r.json())
+      .then(data => {
+          if (data.status === 'resuming') {
+              addLog('✅ 作业恢复执行中...', 'success');
+              addLog('📋 作业单号: ' + data.job_id);
+              addLog('📍 从阶段: ' + data.stage);
+
+              // 建立 WebSocket 连接
+              connectWebSocket(data.job_id);
+              startResumeStatePolling(data.job_id);
+          } else if (data.status === 'error') {
+              addLog('❌ 恢复失败: ' + data.error, 'error');
+              addLog('当前作业已保留。请处理失败原因后再次恢复；如需新作业，请明确点击“重置”。', 'warning');
+          }
+      })
+      .catch(err => {
+          addLog('❌ 错误: ' + err.message, 'error');
+      });
+}
+
+let resumeStatePollGeneration = 0;
+
+function showPendingConfirmation(workflowState, sourceLabel) {
+    const pending = workflowState.pending || [];
+    if (pending.length === 0) return false;
+
+    const stage = pending[0];
+    const hitlModal = document.getElementById('hitl-modal');
+    if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== stage) {
+        const pendingData = workflowState.pending_data || {};
+        showHitlModal(stage, pendingData[stage]);
+        addLog('⏸️ ' + sourceLabel + '已到达人工确认: ' + stage, 'warning');
+    }
+    return true;
+}
+
+function startResumeStatePolling(jobId) {
+    const generation = ++resumeStatePollGeneration;
+    let attempts = 0;
+    let observedRunning = false;
+
+    function poll() {
+        if (generation !== resumeStatePollGeneration) return;
+        attempts++;
+        fetch('/api/workflow/state?thread_id=' + encodeURIComponent(jobId))
+            .then(r => r.json())
+            .then(data => {
+                if (generation !== resumeStatePollGeneration || !data) return;
+
+                if (state.historyViewJobId) {
+                    state.liveWorkflowState = data;
+                    rememberActiveWorkflow(data);
+                    if (data.status !== 'completed' && attempts < 1200) setTimeout(poll, 500);
+                    return;
+                }
+                state.workflowState = data;
+                rememberActiveWorkflow(data);
+                renderWorkflowDiagram();
+                updateControlPanel();
+
+                if (showPendingConfirmation(data, '恢复执行')) return;
+
+                if (data.status === 'running' || data.status === 'executing' || data.status === 'starting') {
+                    observedRunning = true;
+                }
+                if (data.status === 'completed') return;
+                // 恢复线程启动前可能短暂读到旧 error，先等待它切换为 running。
+                if ((data.status === 'error' || data.status === 'failed') &&
+                    (observedRunning || attempts >= 20)) return;
+                if (attempts < 1200) {
+                    setTimeout(poll, 500);
+                }
+            })
+            .catch(() => {
+                if (generation === resumeStatePollGeneration && attempts < 1200) {
+                    setTimeout(poll, 500);
+                }
+            });
+    }
+
+    poll();
+}
+
 
 const WS_STATUS_PORT = 8081;  // 状态 WebSocket 端口
 const WS_LOGS_PORT = 8082;     // 日志 WebSocket 端口
@@ -694,27 +1174,28 @@ function connectWebSocket(jobId) {
 
                 if (msg.type === 'state_update') {
                     const data = msg.data;
-                    const prevStage = state.workflowState.current_stage || '';
 
+                    if (state.historyViewJobId) {
+                        state.liveWorkflowState = data;
+                        rememberActiveWorkflow(data);
+                        return;
+                    }
                     state.workflowState = data;
+                    rememberActiveWorkflow(data);
                     renderWorkflowDiagram();
                     updateControlPanel();
-
-                    // 检测 P1 完成，切换到 P2 时显示完成提示
-                    if (prevStage === 'P1' && data.current_stage === 'P2') {
-                        hideP1StepsModal();
-                        showP1CompleteModal();
-                    }
 
                     // 更新日志
                     const currentStage = data.current_stage || '';
                     const pending = data.pending || [];
 
                     if (pending.length > 0) {
-                        // 有待确认项，弹窗
-                        if (!document.getElementById('hitl-modal').classList.contains('active')) {
+                        // 有待确认项时按阶段展示。即使旧窗口仍打开，下一阶段也要替换它。
+                        const hitlModal = document.getElementById('hitl-modal');
+                        if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== pending[0]) {
                             addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
-                            showHitlModal(pending[0], data.pending_data[pending[0]]);
+                            const pendingData = data.pending_data || {};
+                            showHitlModal(pending[0], pendingData[pending[0]]);
                         }
                     } else if (data.status === 'completed') {
                         // 工作流完成
@@ -778,9 +1259,9 @@ function connectLogsWebSocket(jobId) {
 
                 if (msg.type === 'workflow_log') {
                     // 显示结构化日志
-                    displayWorkflowLog(msg);
+                    if (!state.historyViewJobId) displayWorkflowLog(msg);
                 } else if (msg.type === 'connected') {
-                    addLog('📋 ' + msg.message, 'success');
+                    if (!state.historyViewJobId) addLog('📋 ' + msg.message, 'success');
                 }
             } catch (e) {
                 // 非 JSON 格式，直接显示原始文本
@@ -822,30 +1303,35 @@ function fillMockData() {
         .then(data => {
             const randomIndex = Math.floor(Math.random() * data.length);
             const item = data[randomIndex];
-            document.getElementById('app-job-content').value = item.job_content || '';
-            document.getElementById('app-region').value = item.region || '';
-            document.getElementById('app-person-name').value = item.person_name || '';
-            document.getElementById('app-person-badge').value = item.person_badge || '';
-            document.getElementById('app-start').value = item.start || '';
-            document.getElementById('app-end').value = item.end || '';
+            state.mockApplication = JSON.parse(JSON.stringify(item));
+            if (state.inputSource === 'mock') applyApplicationToForm(item);
         })
         .catch(() => {});
 }
 
 function buildApplicationJson() {
-    return {
+    const sourceApplication = state.inputSource === 'docx' ? state.realApplication : state.mockApplication;
+    const application = sourceApplication ? JSON.parse(JSON.stringify(sourceApplication)) : {};
+    delete application.person_name;
+    delete application.person_badge;
+    delete application.start;
+    delete application.end;
+    return Object.assign(application, {
+        input_source: state.inputSource,
         job_content: document.getElementById('app-job-content').value,
         region: document.getElementById('app-region').value,
         personnel: [{
+            ...(application.personnel && application.personnel[0] ? application.personnel[0] : {}),
             name: document.getElementById('app-person-name').value,
             badge_id: document.getElementById('app-person-badge').value
-        }],
+        }, ...((application.personnel || []).slice(1))],
         planned_start: document.getElementById('app-start').value,
         planned_end: document.getElementById('app-end').value
-    };
+    });
 }
 
 function resetWorkflow() {
+    resumeStatePollGeneration++;
     disconnectWebSocket();
     disconnectLogsWebSocket();
     state.workflowState = {
@@ -857,6 +1343,12 @@ function resetWorkflow() {
         jobId: null
     };
     state.selectedWorkflowNode = null;
+    state.historyViewJobId = null;
+    state.liveWorkflowState = null;
+    state.mockApplication = null;
+    state.realApplication = null;
+    document.getElementById('history-view-banner').classList.remove('active');
+    rememberActiveWorkflow(state.workflowState);
     renderWorkflowDiagram();
     updateControlPanel();
     document.getElementById('log-container').innerHTML = '<div class="log-entry"><span class="log-time">[--:--:--]</span> 已重置</div>';
@@ -866,6 +1358,10 @@ function resetWorkflow() {
     document.getElementById('app-person-badge').value = '';
     document.getElementById('app-start').value = '';
     document.getElementById('app-end').value = '';
+    const fileInput = document.getElementById('permit-docx-file');
+    if (fileInput) fileInput.value = '';
+    setDocxStatus('请选择真实的 .docx 作业许可文件。解析后请核对并补充下方字段。');
+    selectInputSource('mock');
 }
 
 function updateControlPanel() {
@@ -879,6 +1375,10 @@ function updateControlPanel() {
     let html = '';
     if (status === 'idle') {
         html = '<span style="color: #999;">就绪</span>';
+    } else if (status === 'completed') {
+        html = '<span style="color: #4CAF50;">✅ 工作流已完成</span>';
+    } else if (status === 'error' || status === 'failed') {
+        html = `<span style="color: #f44336;">❌ ${currentStage || '工作流'} 执行失败</span>`;
     } else if (pending.length > 0) {
         html = `<span style="color: #FFC107;">⏸️ 等待人工确认: ${pending.join(', ')}</span>`;
     } else if (currentStage) {
@@ -976,8 +1476,6 @@ function displayWorkflowLog(msg) {
         container.removeChild(container.firstChild);
     }
 
-    // P1 步骤检测与更新
-    detectAndUpdateP1Steps(msg);
 }
 
 // 格式化 JSON 视图（带语法高亮和折叠）
@@ -1061,122 +1559,6 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// P1 步骤状态管理
-const P1_STEPS = {
-    permit_submit: { index: 1, name: '提交作业申请' },
-    jsa_analyze: { index: 2, name: 'JSA 安全分析' },
-    permit_generate_draft: { index: 3, name: '生成作业票' },
-    permit_check: { index: 4, name: '作业票查询' }
-};
-let p1StepsCompleted = 0;
-let p1ModalShown = false;
-
-function detectAndUpdateP1Steps(msg) {
-    const source = msg.source || '';
-    const message = msg.message || '';
-
-    // 只处理 P1 和 TOOL 源的日志
-    if (source !== 'P1' && source !== 'TOOL' && source !== 'AGENT') return;
-
-    // 检测工具入口和出口
-    for (const [toolName, stepInfo] of Object.entries(P1_STEPS)) {
-        if (message.includes(`>>> ${toolName} 工具入口`)) {
-            // 工具开始执行
-            if (!p1ModalShown) {
-                showP1StepsModal();
-                p1ModalShown = true;
-            }
-            updateP1Step(stepInfo.index, 'running', `执行中: ${stepInfo.name}`);
-        } else if (message.includes(`<<< ${toolName} 工具出口`)) {
-            // 工具执行完成
-            updateP1Step(stepInfo.index, 'completed', `${stepInfo.name} 完成`);
-            p1StepsCompleted++;
-            updateP1Progress();
-
-            // 如果所有步骤完成，显示 P1 完成提示弹窗，3秒后进入P2
-            if (p1StepsCompleted >= 4) {
-                setTimeout(() => {
-                    hideP1StepsModal();
-                    showP1CompleteModal();
-                    p1StepsCompleted = 0;
-                    p1ModalShown = false;
-                }, 1500);
-            }
-        }
-    }
-}
-
-// P1 完成提示弹窗，3秒倒计时后自动进入P2
-let p1CountdownInterval = null;
-
-function showP1CompleteModal() {
-    const countdownEl = document.getElementById('p1-complete-countdown');
-    let countdown = 3;
-    countdownEl.textContent = countdown;
-
-    document.getElementById('p1-complete-modal').classList.add('active');
-
-    // 清除之前的定时器
-    if (p1CountdownInterval) {
-        clearInterval(p1CountdownInterval);
-    }
-
-    // 开始倒计时
-    p1CountdownInterval = setInterval(() => {
-        countdown--;
-        if (countdown <= 0) {
-            clearInterval(p1CountdownInterval);
-            p1CountdownInterval = null;
-            hideP1CompleteModal();
-            // 自动进入P2 - 由于是异步执行，前端不需要额外操作
-            addLog('⏳ P1 完成，进入 P2 作业任务获取阶段...', 'success');
-        } else {
-            countdownEl.textContent = countdown;
-        }
-    }, 1000);
-}
-
-function hideP1CompleteModal() {
-    document.getElementById('p1-complete-modal').classList.remove('active');
-    if (p1CountdownInterval) {
-        clearInterval(p1CountdownInterval);
-        p1CountdownInterval = null;
-    }
-}
-
-function showP1StepsModal() {
-    // 重置所有步骤状态
-    for (let i = 1; i <= 4; i++) {
-        const stepEl = document.getElementById(`p1-step-${i}`);
-        stepEl.className = 'p1-step pending';
-        stepEl.querySelector('.p1-step-status').textContent = '待执行';
-    }
-    document.getElementById('p1-progress-fill').style.width = '0%';
-    document.getElementById('p1-progress-text').textContent = '0 / 4 步骤完成';
-    document.getElementById('p1-log-content').textContent = '等待执行...';
-
-    document.getElementById('p1-steps-modal').classList.add('active');
-}
-
-function hideP1StepsModal() {
-    document.getElementById('p1-steps-modal').classList.remove('active');
-}
-
-function updateP1Step(stepIndex, status, logMessage) {
-    const stepEl = document.getElementById(`p1-step-${stepIndex}`);
-    stepEl.className = `p1-step ${status}`;
-    stepEl.querySelector('.p1-step-status').textContent = status === 'running' ? '执行中' : '完成';
-
-    // 更新当前日志
-    document.getElementById('p1-log-content').textContent = logMessage;
-}
-
-function updateP1Progress() {
-    const percent = (p1StepsCompleted / 4) * 100;
-    document.getElementById('p1-progress-fill').style.width = `${percent}%`;
-    document.getElementById('p1-progress-text').textContent = `${p1StepsCompleted} / 4 步骤完成`;
-}
-
 // 格式化数据显示摘要
 function formatDataSummary(data) {
     if (!data || typeof data !== 'object') return '';
@@ -1211,6 +1593,132 @@ function formatDataSummary(data) {
     return parts.join('\n');
 }
 
+function firstValue(...values) {
+    return values.find(value => value !== undefined && value !== null && value !== '') || '';
+}
+
+function displayValue(value, fallback = '待补充') {
+    if (Array.isArray(value)) return value.length ? value.map(item => typeof item === 'object' ? firstValue(item.name, item.description, JSON.stringify(item)) : item).join('、') : fallback;
+    if (value && typeof value === 'object') return JSON.stringify(value, null, 2);
+    return value === undefined || value === null || value === '' ? fallback : String(value);
+}
+
+function permitField(label, value, cls = '') {
+    return `<div class="permit-field ${cls}"><div class="permit-label">${escapeHtml(label)}</div><div class="permit-value">${escapeHtml(displayValue(value))}</div></div>`;
+}
+
+function normalizeHazards(jsa, permitContent) {
+    const raw = firstValue(jsa && jsa.hazards, permitContent && permitContent.hazards, []);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((hazard, index) => {
+        if (typeof hazard === 'string') return { description: hazard, severity: '', measures: [] };
+        return {
+            description: firstValue(hazard.description, hazard.name, hazard.hazard, '风险 ' + (index + 1)),
+            severity: firstValue(hazard.severity, hazard.level, ''),
+            measures: firstValue(hazard.measures, hazard.controls, [])
+        };
+    });
+}
+
+function displayMissingField(value) {
+    if (value && typeof value === 'object') {
+        value = firstValue(value.message, value.field, value.code, '未知校验问题');
+    }
+    const text = String(value || '').trim();
+    const personnelMatch = text.match(/^personnel_(.+)_qualifications$/);
+    if (personnelMatch) return `作业人员“${personnelMatch[1]}”的资质证明`;
+    const labels = {
+        job_content: '作业内容',
+        region: '作业区域',
+        planned_start: '计划开始时间',
+        planned_end: '计划结束时间',
+        personnel: '作业人员',
+        equipment: '作业设备',
+        job_level: '作业等级',
+        job_type: '作业类型',
+        work_unit: '作业单位',
+        applicant_unit: '申请单位',
+        territorial_unit: '属地单位',
+        work_location: '作业地点',
+        medium: '作业介质',
+        related_permits: '关联许可证',
+        attachments: '相关附件',
+        gas_detection: '气体检测记录'
+    };
+    if (labels[text]) return labels[text];
+    if (/^[A-Za-z0-9_.-]+$/.test(text)) return '其他必填信息';
+    return text.replaceAll('_', ' ');
+}
+
+function renderP1Approval(detail, manageApprovalButton = true) {
+    const application = detail.application || {};
+    const permit = detail.permit || {};
+    const p1 = detail.p1_result || {};
+    const content = permit.permit_content || p1.permit_content || {};
+    const jsa = permit.jsa_result || p1.jsa_result || {};
+    const personnel = firstValue(content.personnel, application.personnel, []);
+    const personnelText = Array.isArray(personnel) ? personnel.map(person => {
+        if (typeof person === 'string') return person;
+        const role = firstValue(person.role, person.position, '');
+        const qualification = displayValue(person.qualifications || person.qualification, '');
+        return [person.name, role, person.badge_id, qualification].filter(Boolean).join(' / ');
+    }).join('\n') : displayValue(personnel);
+    const jobContent = firstValue(content.job_content, application.job_content);
+    const jobType = firstValue(content.job_type, content.permit_type, application.job_type, application.permit_type,
+        jobContent && jobContent.includes('：') ? jobContent.split('：')[0] : '');
+    const hazards = normalizeHazards(jsa, content);
+    const standaloneMeasures = firstValue(content.measures, jsa.measures, []);
+    const hazardRows = hazards.map(hazard => `<tr><td>${escapeHtml(displayValue(hazard.description))}</td><td>${escapeHtml(displayValue(hazard.severity, '未分级'))}</td><td>${escapeHtml(displayValue(hazard.measures, '待补充'))}</td></tr>`).join('');
+    const gasRecords = firstValue(content.gas_detection, application.gas_detection, permit.gas_detection, []);
+    const gasRows = Array.isArray(gasRecords) ? gasRecords.map(record => `<tr><td>${escapeHtml(displayValue(record.time || record.detected_at))}</td><td>${escapeHtml(displayValue(record.location))}</td><td>${escapeHtml(displayValue(firstValue(record.oxygen, record.oxygen_percent)))}</td><td>${escapeHtml(displayValue(firstValue(record.lel, record.lel_percent)))}</td><td>${escapeHtml(displayValue(firstValue(record.toxic_gas, record.toxic)))}</td><td>${escapeHtml(displayValue(firstValue(record.result, record.qualified)))}</td></tr>`).join('') : '';
+    const missing = [...new Set([...(p1.missing_fields || []), ...(content.missing_fields || []), ...(permit.missing_fields || [])])];
+    const validationIssues = firstValue(content.validation_issues, permit.validation_issues, p1.validation_issues, []);
+    const issueList = Array.isArray(validationIssues) ? validationIssues : [];
+    const critical = [...new Set([...(p1.critical_missing_fields || []), ...(content.critical_missing_fields || []), ...issueList.filter(item => item && (item.severity === 'critical' || item.level === '严重')).map(item => item.field || item.message)])].filter(Boolean);
+    const relatedPermits = firstValue(content.related_permits, application.related_permits, application.related_work_permits, []);
+    const attachments = firstValue(content.attachments, application.attachments, []);
+
+    let html = '<div class="permit-approval-grid">';
+    html += permitField('作业编号', firstValue(permit.permit_draft_id, p1.permit_draft_id, detail.job_id));
+    html += permitField('作业类型', jobType);
+    html += permitField('作业等级', firstValue(content.job_level, application.job_level));
+    html += permitField('作业区域', firstValue(content.region, application.region));
+    html += permitField('作业单位', firstValue(content.work_unit, application.work_unit, application.applicant_unit), 'wide');
+    html += permitField('属地单位', firstValue(content.territorial_unit, application.territorial_unit), 'wide');
+    html += permitField('作业地点/部位', firstValue(content.work_location, content.location, application.work_location, application.region), 'wide');
+    html += permitField('设备/介质', [displayValue(firstValue(content.equipment, application.equipment), ''), displayValue(firstValue(content.medium, application.medium), '')].filter(Boolean).join(' / '), 'wide');
+    html += permitField('作业内容', jobContent, 'full');
+    html += permitField('作业人员/职责/资质', personnelText, 'full');
+    html += permitField('计划时间', displayValue(firstValue(content.planned_start, application.planned_start)) + ' 至 ' + displayValue(firstValue(content.planned_end, application.planned_end)), 'wide');
+    html += permitField('关联许可证', relatedPermits, 'wide');
+    html += permitField('附件', attachments, 'full');
+    html += '</div>';
+
+    html += '<div class="permit-section"><div class="permit-section-title">风险与削减措施</div>';
+    if (hazardRows) html += `<table class="permit-table"><thead><tr><th>风险</th><th>等级</th><th>对应措施</th></tr></thead><tbody>${hazardRows}</tbody></table>`;
+    else html += `<div class="permit-value">${escapeHtml(displayValue(standaloneMeasures, '尚未生成 JSA 风险—措施对应关系'))}</div>`;
+    html += '</div>';
+
+    html += '<div class="permit-section"><div class="permit-section-title">气体检测</div>';
+    html += gasRows ? `<table class="permit-table"><thead><tr><th>时间</th><th>位置</th><th>O₂</th><th>LEL</th><th>有毒气体</th><th>结果</th></tr></thead><tbody>${gasRows}</tbody></table>` : '<div class="permit-value">未提供气体检测记录；如本作业要求检测，需在开工前补充并复核时效。</div>';
+    html += '</div>';
+
+    if (missing.length || issueList.length) {
+        const issues = issueList.map(item => displayMissingField(item)).filter(Boolean);
+        const visibleMissing = [...new Set([...missing.map(displayMissingField), ...issues])];
+        html += `<div class="permit-missing"><strong>待补充/校验问题：</strong>${escapeHtml(visibleMissing.join('、'))}</div>`;
+    } else {
+        html += '<div class="permit-ok">当前未发现已记录的缺失字段。现场条件仍需由审批人核对。</div>';
+    }
+
+    if (manageApprovalButton) {
+        const approveButton = document.getElementById('hitl-approve-button');
+        approveButton.disabled = critical.length > 0;
+        approveButton.title = critical.length ? '存在关键缺失项：' + critical.map(displayMissingField).join('、') : '';
+    }
+    return html;
+}
+
 // ========== HITL 弹窗 ==========
 function showHitlModal(stage, data) {
     // 提取基础阶段名称（如从"P1_permit_submit"提取"P1"）
@@ -1222,7 +1730,13 @@ function showHitlModal(stage, data) {
 
     data = data || {};
     const pendingInfo = data.pending || data;
-    document.getElementById('modal-info-content').innerHTML = pendingInfo.message || info.humanConfirm || '请确认';
+    const infoContent = document.getElementById('modal-info-content');
+    infoContent.textContent = pendingInfo.message || info.humanConfirm || '请确认';
+    const modalCard = document.getElementById('hitl-modal-card');
+    const approveButton = document.getElementById('hitl-approve-button');
+    modalCard.classList.toggle('p1-approval-modal', baseStage === 'P1');
+    approveButton.disabled = false;
+    approveButton.title = '';
 
     const evidenceSection = document.getElementById('modal-evidence-section');
     const suggestionSection = document.getElementById('modal-suggestion-section');
@@ -1241,11 +1755,31 @@ function showHitlModal(stage, data) {
         suggestionSection.style.display = 'none';
     }
 
-    document.getElementById('hitl-modal').classList.add('active');
+    const hitlModal = document.getElementById('hitl-modal');
+    hitlModal.dataset.stage = stage;
+    hitlModal.classList.add('active');
+
+    if (baseStage === 'P1') {
+        const jobId = state.workflowState.thread_id || state.workflowState.jobId || state.workflowState.threadId;
+        infoContent.textContent = '正在加载作业票内容...';
+        fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
+            .then(r => r.json())
+            .then(detail => {
+                if (hitlModal.dataset.stage !== stage || !hitlModal.classList.contains('active')) return;
+                if (detail.error) throw new Error(detail.error || '读取作业票失败');
+                infoContent.innerHTML = renderP1Approval(detail);
+            })
+            .catch(err => {
+                infoContent.innerHTML = '<div class="permit-missing">作业票内容加载失败：' + escapeHtml(err.message) + '</div>';
+                approveButton.disabled = true;
+            });
+    }
 }
 
 function closeModal() {
-    document.getElementById('hitl-modal').classList.remove('active');
+    const hitlModal = document.getElementById('hitl-modal');
+    hitlModal.classList.remove('active');
+    delete hitlModal.dataset.stage;
 }
 
 function confirmDecision(decision) {
@@ -1266,8 +1800,12 @@ function confirmDecision(decision) {
         return;
     }
 
-    addLog(`✅ ${stage} 确认: ${decision}`);
+    addLog(`${decision === 'approve' ? '✅ 批准' : '⛔ 否决'} ${stage}`);
     addLog(`📤 发送确认请求: thread_id=${jobId}, stage=${stage}, decision=${decision}`);
+
+    // 请求发出前先关闭当前阶段窗口。后端可能在 HTTP 响应返回前就通过
+    // WebSocket 推送下一阶段 waiting，不能让旧窗口挡住或随后关闭新窗口。
+    closeModal();
 
     fetch('/api/workflow/confirm', {
         method: 'POST',
@@ -1283,9 +1821,10 @@ function confirmDecision(decision) {
         return r.json();
     }).then(data => {
         addLog(`📋 响应数据: ${JSON.stringify(data)}`);
-        closeModal();
 
-        if (data.status === 'executing') {
+        if (data.rejected) {
+            addLog(`⛔ ${stage} 已否决，工作流停止；点击“启动”可从 ${stage} 重新执行`, 'warning');
+        } else if (data.status === 'executing') {
             // 异步执行中，等待 WebSocket 状态更新
             addLog(`⏳ ${stage} 已确认，异步执行中...`, 'info');
         } else if (data.pending && data.pending.length > 0) {
@@ -1301,6 +1840,12 @@ function confirmDecision(decision) {
         }
       }).catch(err => {
         addLog(`❌ 请求失败: ${err.message}`, 'error');
+        // 请求未成功时重新显示服务端最后推送的待确认阶段，避免按钮丢失。
+        const currentPending = state.workflowState.pending || [];
+        if (currentPending.length > 0) {
+            const pendingData = state.workflowState.pending_data || {};
+            showHitlModal(currentPending[0], pendingData[currentPending[0]]);
+        }
       });
 }
 

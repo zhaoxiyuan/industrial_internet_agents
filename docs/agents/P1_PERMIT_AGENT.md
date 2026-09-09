@@ -16,7 +16,7 @@
 | 函数 | 说明 |
 |------|------|
 | `run_permit_agent(message)` | 运行 P1 Agent |
-| `run_permit_agent_with_hitl(message, thread_id)` | 运行 P1 Agent（支持 HITL中断恢复） |
+| `run_permit_agent_with_hitl(message, thread_id, resume, decision, notes)` | 运行 P1 Agent（支持 HITL 中断恢复） |
 | `is_agent_interrupted(thread_id)` | 检查 Agent 是否处于中断状态 |
 | `get_agent_next_tools(thread_id)` | 获取 Agent 下一个待执行工具 |
 | `clear_agent_registry(thread_id)` | 清除 Agent 注册表 |
@@ -33,7 +33,7 @@
 
 ## HITL 支持
 
-### Agent 注册表机制
+### Agent 注册表机制（兼容旧中断作业）
 
 P1 Agent 使用全局 `_agent_registry` 注册表缓存 Agent 实例，支持同一 `thread_id` 的中断恢复：
 
@@ -47,40 +47,32 @@ def create_permit_agent_with_hitl(thread_id: str = "default"):
     # ... 创建新 Agent 并注册
 ```
 
-### 中断恢复流程
+### 单次审批流程
 
 ```
 execute_p1(job_id)
     ↓
 run_permit_agent_with_hitl(message, job_id)
     ↓
-工具调用前被 HITL Middleware 中断
+自动完成申请整理、JSA 分析和作业票草稿生成
     ↓
-返回 pending_confirmation (含 next_tools)
+返回一次 pending_confirmation（作业票最终审批）
     ↓
 用户确认 → confirm_and_continue(P1)
     ↓
-is_agent_interrupted(job_id) == True?
-    ↓
-execute_p1(job_id, resume=True)
-    ↓
-run_permit_agent_with_hitl(None, job_id)  # message=None 表示恢复执行
-    ↓
-agent.invoke(None, config)  # 从 checkpoint 恢复
+批准则进入 P2；否决则停止在 P1
 ```
 
-### Middleware 配置
+每次 P1 执行只弹出一次审批窗口。旧版本已停在工具级 checkpoint 的作业仍保留恢复兼容逻辑。
+
+### 审批配置
 
 ```python
-# 创建 HITL Middleware
-hitl_middleware = HumanInTheLoopMiddleware(
-    interrupt_on={
-        "permit_submit": True,            # 作业申请需要确认
-        "jsa_analyze": True,             # JSA分析需要确认
-        "permit_generate_draft": True,   # 生成作业票需要确认
-        "permit_check": True,             # 查询状态需要确认
-    }
-)
+# P1 全部处理完成后统一生成一次确认项
+result["pending_confirmation"] = {
+    "type": "permit_final_approval",
+    "message": "P1 作业申请、JSA 与作业票草稿已生成，请进行最终审批",
+}
 ```
 
 ## 执行链路

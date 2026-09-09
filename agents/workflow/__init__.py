@@ -25,6 +25,20 @@ from .job_persistence import (
     get_job_status,
 )
 
+from .execution_status import (
+    STAGE_CONFIG,
+    classify_error,
+    init_execution_status,
+    get_execution_status,
+    update_stage_status,
+    can_retry_stage,
+    get_retry_delay,
+    get_failed_stage,
+    get_stage_execution_info,
+    finalize_execution_status,
+    is_stage_critical,
+)
+
 __all__ = [
     # file_utils
     "get_jobs_dir",
@@ -44,4 +58,16 @@ __all__ = [
     "add_job_log",
     "save_confirmation",
     "get_job_status",
+    # execution_status
+    "STAGE_CONFIG",
+    "classify_error",
+    "init_execution_status",
+    "get_execution_status",
+    "update_stage_status",
+    "can_retry_stage",
+    "get_retry_delay",
+    "get_failed_stage",
+    "get_stage_execution_info",
+    "finalize_execution_status",
+    "is_stage_critical",
 ]

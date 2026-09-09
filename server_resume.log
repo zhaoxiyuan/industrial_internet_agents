@@ -1,0 +1,11 @@
+2026-09-08 14:19:23 [INFO] server: [WS-LOGS] 日志广播队列已设置
+2026-09-08 14:19:23 [INFO] server: [BROADCAST] 状态广播回调已设置
+2026-09-08 14:19:23 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器线程已启动
+2026-09-08 14:19:23 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器线程已启动
+2026-09-08 14:19:23 [INFO] websockets.server: server listening on 127.0.0.1:8081
+2026-09-08 14:19:23 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器已启动: ws://localhost:8081
+2026-09-08 14:19:23 [INFO] websockets.server: server listening on 127.0.0.1:8082
+2026-09-08 14:19:23 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器已启动: ws://localhost:8082
+2026-09-08 14:19:26 [INFO] server: [POST] 请求进入: path=/api/workflow/resume
+2026-09-08 14:19:26 [INFO] server: [POST] /api/workflow/resume 进入: job_id=20260908093711563, stage=None, force=True
+127.0.0.1 - - [08/Sep/2026 14:19:26] "POST /api/workflow/resume HTTP/1.1" 400 -
