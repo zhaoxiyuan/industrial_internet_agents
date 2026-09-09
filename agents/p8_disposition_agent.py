@@ -910,3 +910,81 @@ def disposition_demo(
         user_ctx=user_ctx,
         thread_id=thread_id or "default",   # ← None 回退 "default"（向后兼容）
     )
+
+
+# ============================================================
+# execute_stage（供 main_agent.py STAGE_EXECUTORS 调用）
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """执行 P8 阶段：人机协同处置。
+
+    流程：
+        1. 读 p7_result.json.risk_events
+        2. 调 run_disposition_agent 启动 P8 Agent
+        3. Agent 内部通过 read_p7_events 工具读 P7 → update_job 写入 working_memory
+        4. P8ArchiveMiddleware 在 P8_job 进入终态时自动归档
+
+    Args:
+        job_id: 作业 ID
+
+    Returns:
+        阶段执行结果 dict
+    """
+    import os
+    from datetime import datetime, timezone
+
+    log = get_stage_logger("P8")
+    log.log_enter(job_id)
+
+    # 读 p7_result.json
+    project_root = Path(__file__).resolve().parent.parent
+    p7_path = project_root / "data" / "jobs" / job_id / "p7_result.json"
+    risk_events = []
+    if p7_path.exists():
+        try:
+            p7_data = json.loads(p7_path.read_text(encoding="utf-8"))
+            risk_events = p7_data.get("risk_events", [])
+        except Exception:
+            pass
+
+    logger.info(f"[P8] execute_stage: job_id={job_id}, risk_events_count={len(risk_events)}")
+
+    result = {
+        "job_id": job_id,
+        "stage": "P8",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        # 构造 P8 Agent 启动消息
+        initial_msg = f"处理作业 {job_id} 的 P7 风险事件（共 {len(risk_events)} 个）"
+        if risk_events:
+            initial_msg += "；请先调 read_p7_events 工具读 p7_result.json"
+
+        # P8 Agent 接管：LLM 自主决策 → update_job 写 working_memory → 中间件归档
+        thread_id = f"p8-{job_id}"
+        p8_summary = run_disposition_agent(initial_msg, thread_id=thread_id)
+        result["p8_llm_summary"] = p8_summary
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        # 若有风险事件则请求人工确认
+        if risk_events:
+            result["pending_confirmation"] = {
+                "type": "p8_decision",
+                "message": "P8 处置任务已创建；请查看工作记忆或飞书通知确认",
+            }
+
+    except Exception as e:
+        log.log_error(job_id, e)
+        result["error"] = str(e)
+
+    # 保存结果
+    p8_result_path = project_root / "data" / "jobs" / job_id / "p8_result.json"
+    p8_result_path.parent.mkdir(parents=True, exist_ok=True)
+    p8_result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    log.log_exit(job_id, result)
+    return result

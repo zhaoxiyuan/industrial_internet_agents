@@ -1,0 +1,21 @@
+2026-09-08 14:34:09 [INFO] server: [WS-LOGS] 日志广播队列已设置
+2026-09-08 14:34:09 [INFO] server: [BROADCAST] 状态广播回调已设置
+2026-09-08 14:34:09 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器线程已启动
+2026-09-08 14:34:09 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器线程已启动
+2026-09-08 14:34:09 [INFO] websockets.server: server listening on 127.0.0.1:8081
+2026-09-08 14:34:09 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器已启动: ws://localhost:8081
+2026-09-08 14:34:09 [INFO] websockets.server: server listening on 127.0.0.1:8082
+2026-09-08 14:34:09 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器已启动: ws://localhost:8082
+2026-09-08 14:34:11 [INFO] server: [POST] 请求进入: path=/api/workflow/start
+2026-09-08 14:34:11 [INFO] server: [POST] /api/workflow/start 进入: job_id=20260908143411267
+2026-09-08 14:34:11 [INFO] server: [POST] /api/workflow/start 响应: {'status': 'starting', 'job_id': '20260908143411267', 'message': '工作流启动中...'}
+127.0.0.1 - - [08/Sep/2026 14:34:11] "POST /api/workflow/start HTTP/1.1" 200 -
+2026-09-08 14:34:11 [INFO] server: [WORKFLOW] 工作流开始执行: job_id=20260908143411267
+2026-09-08 14:34:11 [ERROR] server: [WORKFLOW] 工作流执行错误: job_id=20260908143411267
+Traceback (most recent call last):
+  File "/Users/dyjyyds/PycharmProjects/industrial_internet_agents/web/api/workflow.py", line 35, in run_workflow_background
+    result = run_workflow(app, thread_id=job_id)
+  File "/Users/dyjyyds/PycharmProjects/industrial_internet_agents/agents/main_agent.py", line 1078, in run_workflow
+    logger.info(f"[run_workflow] >>> 工作流入口: job_id={job_id}")
+    ^^^^^^
+NameError: name 'logger' is not defined

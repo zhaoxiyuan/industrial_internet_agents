@@ -1,0 +1,10 @@
+2026-09-08 14:15:40 [INFO] server: [WS-LOGS] 日志广播队列已设置
+2026-09-08 14:15:40 [INFO] server: [BROADCAST] 状态广播回调已设置
+2026-09-08 14:15:40 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器线程已启动
+2026-09-08 14:15:40 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器线程已启动
+2026-09-08 14:15:40 [INFO] websockets.server: server listening on 127.0.0.1:8082
+2026-09-08 14:15:40 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器已启动: ws://localhost:8082
+2026-09-08 14:15:40 [INFO] websockets.server: server listening on 127.0.0.1:8081
+2026-09-08 14:15:40 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器已启动: ws://localhost:8081
+2026-09-08 14:15:43 [INFO] server: [GET] 请求进入: path=/
+127.0.0.1 - - [08/Sep/2026 14:15:43] "GET / HTTP/1.1" 200 -

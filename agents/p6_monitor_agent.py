@@ -656,7 +656,7 @@ async function startMonitor() {
   const jobId = document.getElementById("txtJobId").value.trim();
   const scenario = document.getElementById("selScenarioJob").value;
   if (!jobId) { alert("请输入 job_id（17 位时间戳，例: 20260819154312029）"); return; }
-  if (!/^\d{17}$/.test(jobId)) {
+  if (!/^\\d{17}$/.test(jobId)) {
     alert("job_id 格式错误，应为 17 位数字（YYYYMMDDHHMMSS + 3位随机）");
     return;
   }
@@ -1381,7 +1381,13 @@ class MonitorStopRequest(BaseModel):
 
 
 @app.post("/api/monitor/start")
-async def monitor_start(req: MonitorStartRequest):
+async def api_monitor_start(req: MonitorStartRequest):
+    """启动监测的 HTTP 接口。
+
+    使用独立名称，避免覆盖上方供主工作流调用的 LangChain 工具
+    ``monitor_start``；否则 P6 执行时会拿到普通异步函数而无法调用
+    ``.invoke()``。
+    """
     """前端「开始监测」按钮：等价于「点击开始agent → 5秒后播放mock数据」"""
     print(f"[monitor_start] 进入: job_id={req.job_id}, scenario={req.scenario}, "
           f"play_delay_sec={req.play_delay_sec}")

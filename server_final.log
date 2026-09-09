@@ -1,0 +1,78 @@
+2026-09-08 14:37:36 [INFO] server: [WS-LOGS] 日志广播队列已设置
+2026-09-08 14:37:36 [INFO] server: [BROADCAST] 状态广播回调已设置
+2026-09-08 14:37:36 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器线程已启动
+2026-09-08 14:37:36 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器线程已启动
+2026-09-08 14:37:36 [INFO] websockets.server: server listening on 127.0.0.1:8081
+2026-09-08 14:37:36 [INFO] server: [WS-STATUS] 状态 WebSocket 服务器已启动: ws://localhost:8081
+2026-09-08 14:37:36 [INFO] websockets.server: server listening on 127.0.0.1:8082
+2026-09-08 14:37:36 [INFO] server: [WS-LOGS] 日志 WebSocket 服务器已启动: ws://localhost:8082
+2026-09-08 14:37:39 [INFO] server: [POST] 请求进入: path=/api/workflow/start
+2026-09-08 14:37:39 [INFO] server: [POST] /api/workflow/start 进入: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] server: [POST] /api/workflow/start 响应: {'status': 'starting', 'job_id': '20260908143739200', 'message': '工作流启动中...'}
+127.0.0.1 - - [08/Sep/2026 14:37:39] "POST /api/workflow/start HTTP/1.1" 200 -
+2026-09-08 14:37:39 [INFO] server: [WORKFLOW] 工作流开始执行: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] main_agent: [run_workflow] >>> 工作流入口: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] main_agent: [run_workflow] >>> 工作流入口: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] main_agent: [run_workflow] 执行阶段: P1
+2026-09-08 14:37:39 [INFO] main_agent: [run_workflow] 执行阶段: P1
+2026-09-08 14:37:39 [INFO] main_agent: [execute_stage_with_retry] P1 第 1 次执行
+2026-09-08 14:37:39 [INFO] main_agent: [execute_stage_with_retry] P1 第 1 次执行
+2026-09-08 14:37:39 [INFO] agent_logging: [P1] >>> 阶段入口: {
+  "job_id": "20260908143739200",
+  "timestamp": "2026-09-08T06:37:39.372751+00:00",
+  "resume": false
+}
+2026-09-08 14:37:39 [INFO] agent_logging: [P1] >>> 阶段入口: {
+  "job_id": "20260908143739200",
+  "timestamp": "2026-09-08T06:37:39.372751+00:00",
+  "resume": false
+}
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [P1] 调用 run_permit_agent_with_hitl: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [P1] 调用 run_permit_agent_with_hitl: job_id=20260908143739200
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [run_permit_agent_with_hitl] >>> Agent 入口: thread_id=20260908143739200, message=请处理以下作业申请：
+
+作业申请内容：{"job_content": "测试作业：受限空间作业", "region": "炼油厂区01", "personnel": [{"name": "张三", ", resume=False
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [run_permit_agent_with_hitl] >>> Agent 入口: thread_id=20260908143739200, message=请处理以下作业申请：
+
+作业申请内容：{"job_content": "测试作业：受限空间作业", "region": "炼油厂区01", "personnel": [{"name": "张三", ", resume=False
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [run_permit_agent_with_hitl] 第一阶段：非 HITL 执行获取日志
+2026-09-08 14:37:39 [INFO] p1_permit_agent: [run_permit_agent_with_hitl] 第一阶段：非 HITL 执行获取日志
+2026-09-08 14:37:39 [ERROR] agent_logging: [P1]     !!! 阶段错误 [20260908143739200]: Unable to infer model provider for model='mimo-v2.5'. Please specify 'model_provider' directly.
+
+Supported providers: anthropic, anthropic_bedrock, azure_ai, azure_openai, baseten, bedrock, bedrock_converse, cohere, deepseek, fireworks, google_anthropic_vertex, google_genai, google_vertexai, groq, huggingface, ibm, langsmith, litellm, meta, mistralai, nvidia, ollama, openai, openrouter, perplexity, together, upstage, xai
+
+For help with specific providers, see: https://docs.langchain.com/oss/python/integrations/providers
+2026-09-08 14:37:39 [ERROR] agent_logging: [P1]     !!! 阶段错误 [20260908143739200]: Unable to infer model provider for model='mimo-v2.5'. Please specify 'model_provider' directly.
+
+Supported providers: anthropic, anthropic_bedrock, azure_ai, azure_openai, baseten, bedrock, bedrock_converse, cohere, deepseek, fireworks, google_anthropic_vertex, google_genai, google_vertexai, groq, huggingface, ibm, langsmith, litellm, meta, mistralai, nvidia, ollama, openai, openrouter, perplexity, together, upstage, xai
+
+For help with specific providers, see: https://docs.langchain.com/oss/python/integrations/providers
+2026-09-08 14:37:39 [INFO] agent_logging: [P1] <<< 阶段出口: {
+  "job_id": "20260908143739200",
+  "elapsed": "0.00s"
+}
+2026-09-08 14:37:39 [INFO] agent_logging: [P1] <<< 阶段出口: {
+  "job_id": "20260908143739200",
+  "elapsed": "0.00s"
+}
+2026-09-08 14:37:39 [INFO] agent_logging: [P1]     结果摘要: {
+  "completed": false,
+  "has_pending": false,
+  "has_error": true
+}
+2026-09-08 14:37:39 [INFO] agent_logging: [P1]     结果摘要: {
+  "completed": false,
+  "has_pending": false,
+  "has_error": true
+}
+2026-09-08 14:37:39 [ERROR] main_agent: [run_workflow] 阶段 P1 执行失败: Unable to infer model provider for model='mimo-v2.5'. Please specify 'model_provider' directly.
+
+Supported providers: anthropic, anthropic_bedrock, azure_ai, azure_openai, baseten, bedrock, bedrock_converse, cohere, deepseek, fireworks, google_anthropic_vertex, google_genai, google_vertexai, groq, huggingface, ibm, langsmith, litellm, meta, mistralai, nvidia, ollama, openai, openrouter, perplexity, together, upstage, xai
+
+For help with specific providers, see: https://docs.langchain.com/oss/python/integrations/providers (类型: config, 关键: True)
+2026-09-08 14:37:39 [ERROR] main_agent: [run_workflow] 阶段 P1 执行失败: Unable to infer model provider for model='mimo-v2.5'. Please specify 'model_provider' directly.
+
+Supported providers: anthropic, anthropic_bedrock, azure_ai, azure_openai, baseten, bedrock, bedrock_converse, cohere, deepseek, fireworks, google_anthropic_vertex, google_genai, google_vertexai, groq, huggingface, ibm, langsmith, litellm, meta, mistralai, nvidia, ollama, openai, openrouter, perplexity, together, upstage, xai
+
+For help with specific providers, see: https://docs.langchain.com/oss/python/integrations/providers (类型: config, 关键: True)
+2026-09-08 14:37:39 [INFO] server: [WORKFLOW] 工作流执行完成: job_id=20260908143739200, result=error

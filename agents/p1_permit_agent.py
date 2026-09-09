@@ -1,15 +1,17 @@
 """
 P1: 作业预约、JSA分析与作业票
 Permit Agent - 处理作业申请、JSA分析和作业票生成
-支持 HumanInTheLoop - Agent 层级中断
+支持 HumanInTheLoop - P1 阶段末统一审批
 """
+import json
 import logging
+from contextvars import ContextVar
 from typing import Any, TypedDict, Dict
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from .model.chat_model import create_chat_model_with_logging
 from .model.config import get_llm_params
@@ -29,6 +31,104 @@ if not logger.handlers:
     ))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+_p1_job_context = ContextVar("p1_job_id", default="*")
+
+
+JSA_PROFILES = {
+    "动火作业": [
+        ("火灾、爆炸", "高", ["隔离可燃介质和能量", "清除动火点5米内可燃物", "配备消防器材并设专人监护"]),
+        ("可燃气体超限", "高", ["作业前30分钟内完成有代表性的气体检测", "便携式仪器检测值不大于10%LEL", "作业期间按要求复测"]),
+        ("火花飞溅和灼烫", "中", ["设置防火花飞溅隔离", "佩戴防护面罩、手套和阻燃防护用品"]),
+    ],
+    "受限空间作业": [
+        ("缺氧、富氧或有毒有害气体", "高", ["作业前和作业中检测氧气、可燃及有毒气体", "持续通风", "超限立即停止并撤离"]),
+        ("人员被困或盲目施救", "高", ["出入口外全程专人监护", "登记并清点人员和工器具", "配备救援器材并明确联络方式"]),
+        ("意外启动或介质突入", "高", ["管线加盲板或物理断开", "电气断电、上锁挂牌", "禁止以关闭阀门代替隔离"]),
+    ],
+    "高处作业": [
+        ("高处坠落", "高", ["验收作业平台、脚手架和防坠落设施", "安全带高挂低用", "无可靠挂点时设置生命线"]),
+        ("物体打击", "中", ["工具和零件放入工具袋", "设置警戒区", "禁止上下抛掷物品"]),
+        ("恶劣天气影响", "高", ["五级及以上风或暴雨、浓雾时停止露天高处作业", "雨雪天采取防滑防寒措施"]),
+    ],
+    "吊装作业": [
+        ("吊物坠落或起重机失稳", "高", ["核验起重量、额定能力和地基承载力", "检查吊具、索具及安全装置", "正式起吊前试吊"]),
+        ("人员进入吊装警戒区", "高", ["设置警戒区并专人监护", "吊物和起重臂移动区域下方禁止人员停留"]),
+    ],
+    "临时用电作业": [
+        ("触电", "高", ["由合格电工接线", "配置漏电保护器和独立开关", "停送电执行上锁挂牌"]),
+        ("电气火灾或爆炸", "高", ["爆炸危险区域使用相应防爆等级设备", "动力和照明线路分路设置"]),
+    ],
+}
+
+
+def _infer_job_type(application: dict) -> str:
+    explicit = application.get("job_type") or application.get("permit_type")
+    if explicit:
+        return str(explicit)
+    text = str(application.get("job_content", ""))
+    aliases = (("受限空间", "受限空间作业"), ("高空", "高处作业"), ("高处", "高处作业"), ("动火", "动火作业"), ("吊装", "吊装作业"), ("临时用电", "临时用电作业"), ("管线打开", "管线打开作业"))
+    return next((name for keyword, name in aliases if keyword in text), "非常规作业")
+
+
+def _build_fallback_permit(application: dict, job_id: str) -> tuple:
+    """将已持久化的实际申请整理为审批可读的作业票，避免使用工具内的固定示例值。"""
+    job_type = _infer_job_type(application)
+    profile = JSA_PROFILES.get(job_type, [
+        ("作业环境和条件变化", "中", ["作业前开展JSA和安全技术交底", "设置专人监护", "条件变化时立即停止并重新评估"])
+    ])
+    hazards = [
+        {"id": f"H-{index:03d}", "description": description, "severity": severity, "measures": measures}
+        for index, (description, severity, measures) in enumerate(profile, 1)
+    ]
+    missing = []
+    for field in ("job_content", "region", "planned_start", "planned_end"):
+        if not application.get(field):
+            missing.append(field)
+    if not application.get("personnel"):
+        missing.append("personnel")
+    if not application.get("equipment"):
+        missing.append("equipment")
+    if not application.get("job_level"):
+        missing.append("job_level")
+    for person in application.get("personnel") or []:
+        if isinstance(person, dict) and not (person.get("qualifications") or person.get("qualification")):
+            missing.append(f"personnel_{person.get('name') or 'unknown'}_qualifications")
+
+    jsa_result = {
+        "task_id": f"TASK-{job_id}",
+        "hazards": hazards,
+        "completeness_score": round(max(0.0, 1 - len(missing) * 0.08), 2),
+        "missing_items": missing,
+        "source": "application_rule_fallback",
+    }
+    permit_content = {
+        "job_type": job_type,
+        "job_level": application.get("job_level", ""),
+        "job_content": application.get("job_content", ""),
+        "region": application.get("region", ""),
+        "work_unit": application.get("work_unit") or application.get("applicant_unit", ""),
+        "territorial_unit": application.get("territorial_unit", ""),
+        "work_location": application.get("work_location") or application.get("region", ""),
+        "equipment": application.get("equipment", []),
+        "medium": application.get("medium", ""),
+        "personnel": application.get("personnel", []),
+        "planned_start": application.get("planned_start", ""),
+        "planned_end": application.get("planned_end", ""),
+        "related_permits": application.get("related_permits", []),
+        "attachments": application.get("attachments", []),
+        "gas_detection": application.get("gas_detection", []),
+        "hazards": hazards,
+        "measures": [measure for hazard in hazards for measure in hazard["measures"]],
+        "missing_fields": missing,
+    }
+    return jsa_result, permit_content, missing
+
+
+def _push_p1_tool_log(level: str, message: str, data: dict = None):
+    """将 P1 工具日志绑定到当前作业，避免通配日志串到其他作业窗口。"""
+    push_websocket_log(_p1_job_context.get(), level, "TOOL", message, data)
 
 
 # ============================================================
@@ -59,13 +159,13 @@ def permit_submit(application: str) -> str:
     import json
     from datetime import datetime, timezone
 
-    push_websocket_log("*", "INFO", "TOOL", f">>> permit_submit 工具入口", {"application": application[:200] + "..." if len(application) > 200 else application})
+    _push_p1_tool_log("INFO", f">>> permit_submit 工具入口", {"application": application[:200] + "..." if len(application) > 200 else application})
     logger.info(f"[permit_submit] >>> 工具入口: application={application[:200]}...")
     try:
         data = json.loads(application)
     except json.JSONDecodeError:
         logger.warning(f"[permit_submit] !!! JSON 解析失败")
-        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_submit JSON解析失败")
+        _push_p1_tool_log("ERROR", "!!! permit_submit JSON解析失败")
         return json.dumps(make_error(
             code="PERMIT_INVALID",
             message="无效的 JSON 格式",
@@ -111,7 +211,7 @@ def permit_submit(application: str) -> str:
     }
 
     logger.info(f"[permit_submit] <<< 工具出口: task_id={task_id}, permit_draft_id={permit_draft_id}, missing_fields_count={len(missing_fields)}")
-    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_submit 工具出口", {"task_id": task_id, "permit_draft_id": permit_draft_id, "missing_fields_count": len(missing_fields)})
+    _push_p1_tool_log("INFO", f"<<< permit_submit 工具出口", {"task_id": task_id, "permit_draft_id": permit_draft_id, "missing_fields_count": len(missing_fields)})
     return json.dumps(make_response("permit submit", result), ensure_ascii=False)
 
 
@@ -128,11 +228,11 @@ def jsa_analyze(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
-    push_websocket_log("*", "INFO", "TOOL", f">>> jsa_analyze 工具入口", {"task_id": task_id})
+    _push_p1_tool_log("INFO", f">>> jsa_analyze 工具入口", {"task_id": task_id})
     logger.info(f"[jsa_analyze] >>> 工具入口: task_id={task_id}")
     if not task_id:
         logger.warning(f"[jsa_analyze] !!! task_id 为空")
-        push_websocket_log("*", "ERROR", "TOOL", "!!! jsa_analyze task_id为空")
+        _push_p1_tool_log("ERROR", "!!! jsa_analyze task_id为空")
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
             message="task_id 不能为空",
@@ -140,7 +240,7 @@ def jsa_analyze(task_id: str) -> str:
         ), ensure_ascii=False)
 
     # JSA 分析过程日志
-    push_websocket_log("*", "INFO", "TOOL", f"JSA 分析开始: task_id={task_id}", {"step": "start"})
+    _push_p1_tool_log("INFO", f"JSA 分析开始: task_id={task_id}", {"step": "start"})
 
     # 危害因素识别过程
     hazards = [
@@ -166,19 +266,19 @@ def jsa_analyze(task_id: str) -> str:
 
     # 记录每个危害因素的识别
     for hazard in hazards:
-        push_websocket_log("*", "INFO", "TOOL", f"识别危害因素: [{hazard['id']}] {hazard['description']}", {
+        _push_p1_tool_log("INFO", f"识别危害因素: [{hazard['id']}] {hazard['description']}", {
             "hazard_id": hazard["id"],
             "severity": hazard["severity"],
             "measures_count": len(hazard["measures"])
         })
         for measure in hazard["measures"]:
-            push_websocket_log("*", "DEBUG", "TOOL", f"  -> 措施: {measure}", {"hazard_id": hazard["id"], "measure": measure})
+            _push_p1_tool_log("DEBUG", f"  -> 措施: {measure}", {"hazard_id": hazard["id"], "measure": measure})
 
     # 计算完整性得分
     completeness_score = 0.85
     missing_items = ["建议补充应急救援预案"]
 
-    push_websocket_log("*", "WARNING", "TOOL", f"JSA 分析完成: 识别到 {len(hazards)} 个危害因素, 完整性得分: {completeness_score}", {
+    _push_p1_tool_log("WARNING", f"JSA 分析完成: 识别到 {len(hazards)} 个危害因素, 完整性得分: {completeness_score}", {
         "hazards_count": len(hazards),
         "completeness_score": completeness_score,
         "missing_items": missing_items
@@ -207,11 +307,11 @@ def permit_generate_draft(task_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
-    push_websocket_log("*", "INFO", "TOOL", f">>> permit_generate_draft 工具入口", {"task_id": task_id})
+    _push_p1_tool_log("INFO", f">>> permit_generate_draft 工具入口", {"task_id": task_id})
     logger.info(f"[permit_generate_draft] >>> 工具入口: task_id={task_id}")
     if not task_id:
         logger.warning(f"[permit_generate_draft] !!! task_id 为空")
-        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_generate_draft task_id为空")
+        _push_p1_tool_log("ERROR", "!!! permit_generate_draft task_id为空")
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
             message="task_id 不能为空",
@@ -235,7 +335,7 @@ def permit_generate_draft(task_id: str) -> str:
     }
 
     logger.info(f"[permit_generate_draft] <<< 工具出口: permit_draft_id={result['permit_draft_id']}, missing_fields_count={len(result['missing_fields'])}")
-    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_generate_draft 工具出口", {"permit_draft_id": result['permit_draft_id'], "missing_fields_count": len(result['missing_fields'])})
+    _push_p1_tool_log("INFO", f"<<< permit_generate_draft 工具出口", {"permit_draft_id": result['permit_draft_id'], "missing_fields_count": len(result['missing_fields'])})
     return json.dumps(make_response("permit generate-draft", result), ensure_ascii=False)
 
 
@@ -252,11 +352,11 @@ def permit_check(permit_id: str) -> str:
     import json
     from datetime import datetime, timezone
 
-    push_websocket_log("*", "INFO", "TOOL", f">>> permit_check 工具入口", {"permit_id": permit_id})
+    _push_p1_tool_log("INFO", f">>> permit_check 工具入口", {"permit_id": permit_id})
     logger.info(f"[permit_check] >>> 工具入口: permit_id={permit_id}")
     if not permit_id:
         logger.warning(f"[permit_check] !!! permit_id 为空")
-        push_websocket_log("*", "ERROR", "TOOL", "!!! permit_check permit_id为空")
+        _push_p1_tool_log("ERROR", "!!! permit_check permit_id为空")
         return json.dumps(make_error(
             code="PERMIT_NOT_FOUND",
             message="permit_id 不能为空",
@@ -273,7 +373,7 @@ def permit_check(permit_id: str) -> str:
     }
 
     logger.info(f"[permit_check] <<< 工具出口: permit_id={permit_id}, status={result['status']}")
-    push_websocket_log("*", "INFO", "TOOL", f"<<< permit_check 工具出口", {"permit_id": permit_id, "status": result['status']})
+    _push_p1_tool_log("INFO", f"<<< permit_check 工具出口", {"permit_id": permit_id, "status": result['status']})
     return json.dumps(make_response("permit check", result), ensure_ascii=False)
 
 
@@ -297,9 +397,10 @@ def create_permit_agent(job_id: str = "*"):
 
 
 def create_permit_agent_with_hitl(thread_id: str = "default"):
-    """创建 P1 作业许可 Agent - 支持 HumanInTheLoop
+    """创建 P1 作业许可 Agent。
 
-    使用 HumanInTheLoopMiddleware 使所有工具调用前都暂停等待人工确认
+    工具调用阶段不再逐个中断；P1 全部准备工作完成后，由
+    ``_process_p1_result`` 统一产生一次最终人工审批。
 
     Args:
         thread_id: 线程ID，用于注册表管理
@@ -313,21 +414,10 @@ def create_permit_agent_with_hitl(thread_id: str = "default"):
     llm = create_chat_model_with_logging("P1", thread_id)
     tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
 
-    # 创建 HITL Middleware - 所有工具都需要人工确认
-    hitl_middleware = HumanInTheLoopMiddleware(
-        interrupt_on={
-            "permit_submit": True,      # 作业申请需要确认
-            "jsa_analyze": True,       # JSA分析需要确认
-            "permit_generate_draft": True,  # 生成作业票需要确认
-            "permit_check": True,       # 查询状态需要确认
-        }
-    )
-
     agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=load_system_prompt("P1"),
-        middleware=[hitl_middleware],
         checkpointer=_permit_checkpointer,
     )
 
@@ -337,104 +427,79 @@ def create_permit_agent_with_hitl(thread_id: str = "default"):
     return agent
 
 
-def run_permit_agent_with_hitl(message: str, thread_id: str = "default", resume: bool = False) -> dict:
-    """运行 P1 作业许可 Agent（支持 HITL 中断）
+def run_permit_agent_with_hitl(
+    message: str | None,
+    thread_id: str = "default",
+    resume: bool = False,
+    decision: str = "approve",
+    notes: str = "",
+) -> dict:
+    """运行 P1 作业许可 Agent。
+
+    新作业不做逐工具中断；resume 分支仅用于兼容已经产生的旧 checkpoint。
 
     Args:
         message: 输入消息
         thread_id: 线程ID（用于 checkpoint 恢复）
-        resume: 是否从中断点恢复（True=清除checkpoint重新执行）
+        resume: 是否从中断点恢复
+        decision: 人工决定（approve/reject）
+        notes: 人工决定备注
 
     Returns:
         包含 {"result": ..., "interrupted": bool, "next": list}
     """
-    import os
     push_websocket_log(thread_id, "INFO", "AGENT", f">>> P1 Agent 入口", {"message": message[:100] + "..." if message and len(message) > 100 else message, "resume": resume})
     logger.info(f"[run_permit_agent_with_hitl] >>> Agent 入口: thread_id={thread_id}, message={message[:100] if message else 'None'}, resume={resume}")
 
-    # 首次执行时：先用非 HITL agent 执行一次获取日志（工具完整执行）
-    if not resume and message and not is_agent_interrupted(thread_id):
-        push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] 第一阶段：执行 JSA 分析并输出日志")
-        logger.info(f"[run_permit_agent_with_hitl] 第一阶段：非 HITL 执行获取日志")
-        # 创建非 HITL agent 完整执行（用于输出日志）
-        llm = create_chat_model_with_logging("P1-LOGGING", thread_id)
-        tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
-        logging_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
-        # 非 HITL 执行，工具会完整执行并输出日志
-        logging_config = get_agent_config(thread_id, "P1-LOGGING", get_llm_params())
-        logging_result = logging_agent.invoke({"messages": [HumanMessage(content=message)]}, logging_config)
-        push_websocket_log(thread_id, "INFO", "AGENT", f"[P1] JSA 分析完成，开始等待人工确认")
-        logger.info(f"[run_permit_agent_with_hitl] 第一阶段完成，继续 HITL 执行")
-
-    # 恢复执行时：从文件读取原始消息，并清除checkpoint重新执行
-    if resume and not message:
-        # 读取保存的原始消息
-        jobs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "jobs")
-        msg_file = os.path.join(jobs_dir, thread_id, "p1_original_message.txt")
-        if os.path.exists(msg_file):
-            with open(msg_file, "r", encoding="utf-8") as f:
-                message = f.read()
-            logger.info(f"[run_permit_agent_with_hitl] 从文件恢复原始消息: length={len(message)}")
-
-        # 清除该 thread_id 的 checkpoint，重新执行
-        config = {"configurable": {"thread_id": thread_id}}
-
-        # 获取 agent 并清除 checkpoint
-        if thread_id in _agent_registry:
-            agent = _agent_registry[thread_id]
-            # 清除 checkpoint：通过写入空状态
-            try:
-                agent.delete_state(config)
-                logger.info(f"[run_permit_agent_with_hitl] checkpoint 已清除: thread_id={thread_id}")
-            except Exception as e:
-                logger.warning(f"[run_permit_agent_with_hitl] 清除 checkpoint 失败: {e}")
-
-        # 创建新的非 HITL agent 来执行（避免再次中断）
-        # 不设置 checkpointer，因为不需要中断恢复
-        logger.info(f"[run_permit_agent_with_hitl] 创建非 HITL Agent 重新执行")
-        push_websocket_log(thread_id, "INFO", "AGENT", f"创建非 HITL Agent 重新执行")
-        llm = create_chat_model_with_logging("P1-FRESH", thread_id)
-        tools = [permit_submit, jsa_analyze, permit_generate_draft, permit_check]
-        fresh_agent = create_agent(model=llm, tools=tools, system_prompt=load_system_prompt("P1"))
-        fresh_config = get_agent_config(thread_id, "P1-FRESH", get_llm_params())
-        result = fresh_agent.invoke({"messages": [HumanMessage(content=message)]}, fresh_config)
-
-        # 非 HITL agent 不会中断，直接返回结果
-        logger.info(f"[run_permit_agent_with_hitl] <<< 非 HITL Agent 执行完成")
-        push_websocket_log(thread_id, "INFO", "AGENT", f"<<< 非 HITL Agent 执行完成")
-        return {
-            "result": extract_output(result),
-            "interrupted": False,
-            "next": []
-        }
-
-    # 正常首次执行或新消息执行
+    # 首次和恢复始终复用同一个 HITL Agent/checkpoint，工具不会预执行或重跑。
     agent = create_permit_agent_with_hitl(thread_id)
-    config = {"configurable": {"thread_id": thread_id}}
-
-    # 保存原始消息到文件（用于恢复）
-    if message:
-        jobs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "jobs")
-        os.makedirs(os.path.join(jobs_dir, thread_id), exist_ok=True)
-        msg_file = os.path.join(jobs_dir, thread_id, "p1_original_message.txt")
-        with open(msg_file, "w", encoding="utf-8") as f:
-            f.write(message)
-        logger.info(f"[run_permit_agent_with_hitl] 原始消息已保存: {msg_file}")
-
-    # 检查是否有中断点可恢复
-    state = agent.get_state(config)
     hitl_config = get_agent_config(thread_id, "P1-HITL", get_llm_params())
-    if state and state.next:
-        logger.info(f"[run_permit_agent_with_hitl] 从中断点恢复执行: next={list(state.next)}")
-        push_websocket_log(thread_id, "INFO", "AGENT", f"从中断点恢复执行", {"next": list(state.next)})
-        result = agent.invoke(None, hitl_config)
+
+    if resume:
+        state = agent.get_state(hitl_config)
+        if not state or not state.next:
+            raise RuntimeError("P1 HITL checkpoint 不存在或已失效，无法从中断点继续")
+
+        # 一个模型响应可能同时提出多个工具调用，阶段级确认对本批请求统一处理。
+        action_count = 1
+        interrupts = getattr(state, "interrupts", ()) or ()
+        if interrupts:
+            interrupt_value = getattr(interrupts[-1], "value", {}) or {}
+            action_count = max(1, len(interrupt_value.get("action_requests", [])))
+        decision_type = decision if decision in {"approve", "reject"} else "approve"
+        decisions = [
+            {"type": decision_type, **({"message": notes} if notes else {})}
+            for _ in range(action_count)
+        ]
+        logger.info(
+            f"[run_permit_agent_with_hitl] 从 checkpoint 继续: "
+            f"thread_id={thread_id}, decision={decision_type}, actions={action_count}"
+        )
+        push_websocket_log(
+            thread_id,
+            "INFO",
+            "AGENT",
+            "P1 人工确认完成，从中断点继续",
+            {"decision": decision_type, "actions": action_count},
+        )
+        context_token = _p1_job_context.set(thread_id)
+        try:
+            result = agent.invoke(Command(resume={"decisions": decisions}), hitl_config)
+        finally:
+            _p1_job_context.reset(context_token)
     else:
+        if not message:
+            raise ValueError("P1 首次执行时 message 不能为空")
         logger.info(f"[run_permit_agent_with_hitl] 正常执行新消息")
         push_websocket_log(thread_id, "INFO", "AGENT", f"正常执行新消息")
-        result = agent.invoke({"messages": [HumanMessage(content=message)]}, hitl_config)
+        context_token = _p1_job_context.set(thread_id)
+        try:
+            result = agent.invoke({"messages": [HumanMessage(content=message)]}, hitl_config)
+        finally:
+            _p1_job_context.reset(context_token)
 
     # 检查是否中断
-    final_state = agent.get_state(config)
+    final_state = agent.get_state(hitl_config)
     interrupted = bool(final_state.next)
 
     if interrupted:
@@ -480,6 +545,12 @@ def clear_agent_registry(thread_id: str = None):
         _agent_registry = {}
 
 
+def reset_permit_execution(thread_id: str):
+    """丢弃被否决的 P1 中断点，使下一次重试成为一次全新的执行。"""
+    clear_agent_registry(thread_id)
+    _permit_checkpointer.delete_thread(thread_id)
+
+
 def run_permit_agent(message: str) -> str:
     """运行 P1 作业许可 Agent"""
     agent = create_permit_agent()
@@ -497,7 +568,12 @@ def permit_demo(message: str, history: list = None) -> str:
 # 阶段执行入口
 # ============================================================
 
-def execute_stage(job_id: str, resume: bool = False) -> dict:
+def execute_stage(
+    job_id: str,
+    resume: bool = False,
+    decision: str = "approve",
+    notes: str = "",
+) -> dict:
     """P1 阶段执行入口：作业预约、JSA分析与作业票
 
     支持 HumanInTheLoop 中断恢复
@@ -523,7 +599,13 @@ def execute_stage(job_id: str, resume: bool = False) -> dict:
     # 检查是否需要恢复执行
     if resume or is_agent_interrupted(job_id):
         log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
-        hitl_result = run_permit_agent_with_hitl(None, job_id, resume=True)
+        hitl_result = run_permit_agent_with_hitl(
+            None,
+            job_id,
+            resume=True,
+            decision=decision,
+            notes=notes,
+        )
         if not hitl_result:
             logger.error(f"[execute_stage P1] hitl_result 为空: job_id={job_id}, resume={resume}")
             return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
@@ -610,6 +692,8 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
     from .workflow import get_job_dir, get_stage_result_path, read_json_file, write_json_file
 
     result = existing_result.copy() if existing_result else {}
+    for stale_key in ("rejected", "decision", "error"):
+        result.pop(stale_key, None)
     result["job_id"] = job_id
     result["stage"] = "P1"
     result["completed"] = True
@@ -649,6 +733,12 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
 
         app_file = get_job_dir(job_id) + "/application.json"
         application = read_json_file(app_file).get("application", {})
+        fallback_jsa, fallback_content, fallback_missing = _build_fallback_permit(application, job_id)
+        result["task_id"] = result.get("task_id") or f"TASK-{job_id}"
+        result["permit_draft_id"] = result.get("permit_draft_id") or f"PD-{job_id}"
+        result["jsa_result"] = result.get("jsa_result") or fallback_jsa
+        result["permit_content"] = result.get("permit_content") or fallback_content
+        result["missing_fields"] = result.get("missing_fields") or fallback_missing
 
         permit_data = {
             "task_id": result.get("task_id"),
@@ -662,15 +752,16 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
         write_json_file(output_path, permit_data)
         result["permit_file"] = output_path
 
-        if result.get("missing_fields"):
-            result["pending_confirmation"] = {
-                "type": "missing_fields",
-                "fields": result["missing_fields"],
-                "message": "作业票存在缺失字段，需要人工确认"
-            }
-
     except Exception as e:
         result["error"] = str(e)
+
+    # P1 只保留这一处人工控制点：所有工具和分析完成后统一审批一次。
+    if not result.get("error"):
+        result["pending_confirmation"] = {
+            "type": "permit_final_approval",
+            "fields": result.get("missing_fields", []),
+            "message": "P1 作业申请、JSA 与作业票草稿已生成，请进行最终审批",
+        }
 
     write_json_file(get_stage_result_path(job_id, "p1"), result)
     add_job_log(job_id, {
