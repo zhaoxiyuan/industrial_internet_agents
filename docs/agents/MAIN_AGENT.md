@@ -10,6 +10,8 @@
 - 实时查询工作流状态
 - 处理人工确认请求
 - 管理作业生命周期：启动 → 执行 → 监控 → 闭环 → 归档
+- 为每个阶段记录 `pending/running/waiting/completed/failed`、执行次数和历史
+- 临时错误自动重试，并支持从失败阶段或指定阶段恢复
 
 ## 入口函数
 
@@ -81,9 +83,11 @@ P1 → P2 → P3 → ... → P10
 ### 异常处理流程
 
 ```
-阶段执行 → 正常完成 → pending_confirmation? → 等待确认 / 进入下一阶段
+阶段执行 → 正常完成 → pending_confirmation? → waiting / 进入下一阶段
          ↓
-      抛出异常 → 更新 error 状态 → 广播状态 → 记录日志 → 中断工作流
+      执行失败 → 记录原因和次数 → 临时错误自动重试
+                                      ↓ 重试耗尽
+                         关键阶段中断 / 非关键阶段继续
 ```
 
 ### 异常处理行为
@@ -134,8 +138,8 @@ MainAgentState = {
 
 ```
 pending → running → waiting(需确认) → completed
-                     ↓
-                   error(异常中断)
+             ↓
+           failed → /api/workflow/resume → running
 ```
 
 ## 文件位置

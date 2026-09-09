@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from web.api import config as config_api
 from web.api import workflow as workflow_api
+from web.api import docx_permit as docx_permit_api
 from web.api import snapshots as snapshots_api
 from feishu_gateway_cli import feishu_card as feishu_card_api
 from web.ws.manager import broadcast_workflow_state, get_logs_broadcast_queue
@@ -66,6 +67,14 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/api/workflow/confirm":
             data = self._read_json()
             workflow_api.handle_workflow_confirm(self, data)
+
+        elif path == "/api/workflow/resume":
+            data = self._read_json()
+            workflow_api.handle_workflow_resume(self, data)
+
+        elif path == "/api/workflow/parse-docx":
+            data = self._read_json()
+            docx_permit_api.handle_parse_docx(self, data)
 
         elif path == "/api/feishu/card-callback":
             # 2026-08-18：飞书客户端"显示出错"+ 卡不换的根因之一——
@@ -121,9 +130,24 @@ class Handler(SimpleHTTPRequestHandler):
                 logger.warning(f"[GET] /data/input/mock_job_content.json 文件不存在")
                 self.send_error(404)
 
+        elif path == "/api/workflow/latest-incomplete":
+            workflow_api.handle_latest_incomplete_workflow(self)
+
+        elif path == "/api/workflow/history":
+            limit = parse_qs(parsed.query).get("limit", [50])[0]
+            workflow_api.handle_workflow_history(self, limit)
+
+        elif path == "/api/workflow/job-detail":
+            job_id = parse_qs(parsed.query).get("job_id", [None])[0]
+            workflow_api.handle_workflow_job_detail(self, job_id)
+
         elif path == "/api/workflow/state":
             thread_id = parse_qs(parsed.query).get("thread_id", [None])[0]
             workflow_api.handle_workflow_state_get(self, thread_id)
+
+        elif path == "/api/workflow/execution-status":
+            job_id = parse_qs(parsed.query).get("job_id", [None])[0]
+            workflow_api.handle_execution_status(self, job_id)
 
         elif path == "/api/feishu/card-callbacks":
             feishu_card_api.handle_card_callback_list(self)

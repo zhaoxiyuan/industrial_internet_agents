@@ -1,42 +1,97 @@
 [
   {
-    "job_content": "受限空间作业：对炼油厂区01反应器R-101进行内部检查和清理作业",
-    "region": "炼油厂区01",
-    "person_name": "张三",
+    "job_type": "受限空间作业",
+    "job_level": "一般",
+    "job_content": "进入焦化 I F-0102 空气预热器人孔进行打开、检查和清理",
+    "region": "300万吨/年延迟焦化装置 I",
+    "work_location": "焦化 I F-0102",
+    "work_unit": "中国石油天然气第一建设有限公司",
+    "territorial_unit": "炼油一部",
+    "equipment": ["空气预热器 F-0102"],
+    "person_name": "王德军",
     "person_badge": "P-101",
-    "start": "2026-08-04T09:00:00Z",
-    "end": "2026-08-04T17:00:00Z"
+    "personnel": [
+      {"name": "王德军", "badge_id": "P-101", "role": "作业申请人", "qualifications": ["受限空间作业培训合格"]},
+      {"name": "管汉科", "badge_id": "P-201", "role": "作业监护人", "qualifications": ["监护人培训合格"]}
+    ],
+    "gas_detection": [{"time": "2026-09-09T08:36:00+08:00", "location": "F-0102人孔", "oxygen_percent": 20.9, "lel_percent": 0, "toxic_gas": 0, "result": "合格"}],
+    "related_permits": ["管线打开作业许可证"],
+    "attachments": ["JSA", "安全技术交底"],
+    "start": "2026-09-09T09:00:00+08:00",
+    "end": "2026-09-09T17:00:00+08:00"
   },
   {
-    "job_content": "高空作业：对炼油厂区01的塔器T-201进行防腐涂层修复",
-    "region": "炼油厂区02",
-    "person_name": "李四",
+    "job_type": "高处作业",
+    "job_level": "II级",
+    "job_content": "在五联合装置区对安全阀离线定期校验位置进行高处作业",
+    "region": "五联合装置区",
+    "work_location": "安全阀校验位",
+    "work_unit": "中油七建（静设备）",
+    "territorial_unit": "炼油四部",
+    "equipment": ["安全阀", "作业平台"],
+    "person_name": "李翔宇",
     "person_badge": "P-102",
-    "start": "2026-08-05T08:00:00Z",
-    "end": "2026-08-05T18:00:00Z"
+    "personnel": [{"name": "李翔宇", "badge_id": "P-102", "role": "作业申请人", "qualifications": ["高处作业资格"]}],
+    "attachments": ["JSA", "安全技术交底"],
+    "start": "2026-09-09T08:00:00+08:00",
+    "end": "2026-09-09T18:00:00+08:00"
   },
   {
-    "job_content": "动火作业：对储罐V-301进行焊缝修补，动火前需检测可燃气体浓度",
-    "region": "储罐区A",
-    "person_name": "王五",
+    "job_type": "动火作业",
+    "job_level": "二级",
+    "job_content": "对催化 I F-0102 空气预热器人孔打开位置进行焊接修补",
+    "region": "300万吨/年延迟焦化装置 I",
+    "work_location": "催化 I F-0102",
+    "work_unit": "中国石油天然气第一建设有限公司",
+    "territorial_unit": "炼油一部",
+    "equipment": ["空气预热器 F-0102", "电焊机"],
+    "medium": "油气介质",
+    "person_name": "王德军",
     "person_badge": "P-103",
-    "start": "2026-08-06T10:00:00Z",
-    "end": "2026-08-06T16:00:00Z"
+    "personnel": [
+      {"name": "王德军", "badge_id": "P-103", "role": "作业申请人", "qualifications": ["动火作业培训合格"]},
+      {"name": "张建凯", "badge_id": "P-203", "role": "动火人", "qualifications": ["焊接与热切割特种作业证"]}
+    ],
+    "gas_detection": [{"time": "2026-09-09T08:36:00+08:00", "location": "F-0102动火点", "oxygen_percent": 20.9, "lel_percent": 0, "toxic_gas": 0, "result": "合格"}],
+    "related_permits": ["受限空间作业许可证", "临时用电许可证"],
+    "attachments": ["JSA", "安全技术交底", "能量隔离单"],
+    "start": "2026-09-09T09:00:00+08:00",
+    "end": "2026-09-09T17:00:00+08:00"
   },
   {
-    "job_content": "吊装作业：对反应器R-101进行换热器更换吊装作业",
-    "region": "催化裂化装置",
-    "person_name": "赵六",
+    "job_type": "吊装作业",
+    "job_level": "三级",
+    "job_content": "在催化装置区吊装更换换热器管束",
+    "region": "催化装置",
+    "work_location": "换热器 E-201 北侧",
+    "work_unit": "中油七建",
+    "territorial_unit": "炼油四部",
+    "equipment": ["25t汽车吊", "换热器管束"],
+    "person_name": "赵强",
     "person_badge": "P-104",
-    "start": "2026-08-07T07:00:00Z",
-    "end": "2026-08-07T19:00:00Z"
+    "personnel": [
+      {"name": "赵强", "badge_id": "P-104", "role": "作业申请人", "qualifications": ["吊装作业培训合格"]},
+      {"name": "陈海", "badge_id": "P-204", "role": "起重机操作人", "qualifications": ["起重机作业证"]}
+    ],
+    "attachments": ["吊装作业JSA", "吊装路线图"],
+    "start": "2026-09-09T07:00:00+08:00",
+    "end": "2026-09-09T19:00:00+08:00"
   },
   {
-    "job_content": "临时用电作业：在炼油厂区01管廊架处接临时电源用于照明设备",
+    "job_type": "临时用电作业",
+    "job_level": "一般",
+    "job_content": "在管廊架区域接入临时电源，为检修照明和电动工具供电",
     "region": "管廊架区域",
-    "person_name": "钱七",
+    "work_location": "管廊架 P-205",
+    "work_unit": "中油七建",
+    "territorial_unit": "炼油一部",
+    "equipment": ["临时配电箱", "防爆照明灯"],
+    "person_name": "钱伟",
     "person_badge": "P-105",
-    "start": "2026-08-08T08:30:00Z",
-    "end": "2026-08-08T17:30:00Z"
+    "personnel": [{"name": "钱伟", "badge_id": "P-105", "role": "作业申请人/电工", "qualifications": ["低压电工特种作业证"]}],
+    "related_permits": ["动火作业许可证"],
+    "attachments": ["临时用电方案", "配电箱检查记录"],
+    "start": "2026-09-09T08:30:00+08:00",
+    "end": "2026-09-09T17:30:00+08:00"
   }
 ]
