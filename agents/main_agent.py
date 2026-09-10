@@ -1019,12 +1019,19 @@ def execute_stage_with_retry(
     retry_on_temporary = stage_config.get("retry_on_temporary", True)
 
     previous_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
+    interrupted_recovery = bool(
+        get_stage_execution_info(job_id, stage_name).get("interrupted")
+    )
     remaining_attempts = max_attempts - previous_attempts
     # HITL 确认后的调用仍属于原来的那次阶段执行，不消耗新的 attempt。
     if continuation:
         remaining_attempts += 1
     # force 只额外放行一次，避免一次强制恢复又连续产生 max_attempts 次副作用。
     if force and remaining_attempts <= 0:
+        remaining_attempts = 1
+    # 服务异常退出的那一次可能已经记到次数上限，但它没有得到业务结果；
+    # 用户点击继续时仍需允许重新进入一次当前阶段。
+    if interrupted_recovery and remaining_attempts <= 0:
         remaining_attempts = 1
     if remaining_attempts <= 0:
         return {
