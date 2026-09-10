@@ -13,6 +13,71 @@ logger = logging.getLogger("server")
 _running_workflows = {}  # job_id -> thread
 
 
+def recover_interrupted_workflows_on_startup():
+    """服务启动时，把上次进程遗留的 running 工单标记为可恢复失败。"""
+    from agents.workflow import (
+        ALL_STAGES,
+        add_job_log,
+        get_execution_status,
+        get_jobs_dir,
+        get_workflow_status,
+        mark_stage_interrupted,
+        update_workflow_status,
+    )
+
+    jobs_dir = get_jobs_dir()
+    if not os.path.isdir(jobs_dir):
+        return []
+
+    recovered = []
+    for job_id in os.listdir(jobs_dir):
+        if not _valid_job_id(job_id):
+            continue
+        workflow_status = get_workflow_status(job_id)
+        main_status = workflow_status.get("main_agent", {}) if isinstance(workflow_status, dict) else {}
+        if main_status.get("status") not in {"running", "executing", "starting"}:
+            continue
+
+        execution_status = get_execution_status(job_id)
+        stages = execution_status.get("stages", {})
+        stage = main_status.get("current_stage")
+        if stage not in ALL_STAGES:
+            stage = next(
+                (name for name in ALL_STAGES if stages.get(name, {}).get("status") == "running"),
+                None,
+            )
+        if stage not in ALL_STAGES:
+            stage = next(
+                (name for name in ALL_STAGES if stages.get(name, {}).get("status") != "completed"),
+                None,
+            )
+        if stage not in ALL_STAGES:
+            continue
+
+        reason = f"服务在 {stage} 执行过程中退出，任务已中断，可从该阶段继续"
+        mark_stage_interrupted(job_id, stage, reason)
+        update_workflow_status(job_id, {
+            f"{stage}_status": "failed",
+            "main_agent": {
+                "status": "error",
+                "current_stage": stage,
+                "pending_confirmations": [],
+                "error": reason,
+            },
+        })
+        add_job_log(job_id, {
+            "action": "service_interrupted",
+            "stage": stage,
+            "error": reason,
+            "error_type": "interrupted",
+            "message": reason,
+        })
+        recovered.append({"job_id": job_id, "stage": stage})
+        logger.warning("[STARTUP-RECOVERY] 检测到中断作业: job_id=%s, stage=%s", job_id, stage)
+
+    return recovered
+
+
 def _valid_job_id(job_id):
     return bool(re.fullmatch(r"\d{17}", str(job_id or "")))
 
