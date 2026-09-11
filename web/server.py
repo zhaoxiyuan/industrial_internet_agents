@@ -254,9 +254,16 @@ def main():
     set_broadcast_callback(broadcast_workflow_state)
     logger.info("[BROADCAST] 状态广播回调已设置")
 
+    # 先占用 HTTP 端口，避免误启动第二个服务进程时把第一个进程正在执行的
+    # 工单错误标记为“服务中断”。端口占用时会在恢复扫描前直接启动失败。
+    server = HTTPServer(("127.0.0.1", PORT), Handler)
+
+    recovered = workflow_api.recover_interrupted_workflows_on_startup()
+    if recovered:
+        logger.warning("[STARTUP-RECOVERY] 已标记 %s 个异常中断作业为可恢复", len(recovered))
+
     start_websocket_threads()
 
-    server = HTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Web 服务已启动: http://localhost:{PORT}")
     print(f"打开浏览器访问: http://localhost:{PORT}/index.html")
     print(f"状态 WebSocket: ws://localhost:{PORT + 1}/ws/status/{{job_id}}")

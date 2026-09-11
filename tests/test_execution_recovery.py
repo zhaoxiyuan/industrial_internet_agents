@@ -13,8 +13,10 @@ from agents.p1_permit_agent import (
     run_permit_agent_with_hitl,
 )
 from agents.workflow.execution_status import (
+    can_retry_stage,
     get_execution_status,
     init_execution_status,
+    mark_stage_interrupted,
     update_stage_status,
 )
 from agents.workflow.file_utils import get_stage_result_path, write_json_file
@@ -90,8 +92,74 @@ class ExecutionStatusTests(unittest.TestCase):
         self.assertEqual(stage["attempts"], 2)
         self.assertEqual([item["status"] for item in stage["history"]], ["failed", "completed"])
 
+    def test_interrupted_stage_at_attempt_limit_gets_one_recovery_run(self):
+        update_stage_status("job", "P4", "running")
+        update_stage_status("job", "P4", "failed", error="network timeout")
+        update_stage_status("job", "P4", "running")
+        mark_stage_interrupted("job", "P4", "服务执行过程中退出")
+        executor = Mock(return_value={"completed": True})
+
+        with patch("agents.main_agent.add_job_log"), patch("time.sleep"):
+            result = execute_stage_with_retry(
+                "job", "P4", executor, {"max_attempts": 2, "retry_on_temporary": True}
+            )
+
+        self.assertTrue(result["completed"])
+        executor.assert_called_once_with("job")
+        stage = get_execution_status("job")["stages"]["P4"]
+        self.assertEqual(stage["attempts"], 3)
+        self.assertNotIn("interrupted", stage)
+
 
 class ResumeWorkflowTests(unittest.TestCase):
+    def test_startup_converts_stale_running_job_to_resumable_failure(self):
+        from web.api.workflow import recover_interrupted_workflows_on_startup
+
+        job_id = "20260910123456789"
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "agents.workflow.file_utils.get_jobs_dir", return_value=temp_dir
+        ), patch("agents.workflow.get_jobs_dir", return_value=temp_dir):
+            init_execution_status(job_id)
+            init_workflow_status(job_id)
+            update_stage_status(job_id, "P6", "running")
+            from agents.workflow.workflow_state import update_workflow_status
+            update_workflow_status(job_id, {
+                "P6_status": "running",
+                "main_agent": {"status": "running", "current_stage": "P6"},
+            })
+
+            recovered = recover_interrupted_workflows_on_startup()
+
+            self.assertEqual(recovered, [{"job_id": job_id, "stage": "P6"}])
+            stage = get_execution_status(job_id)["stages"]["P6"]
+            self.assertEqual(stage["status"], "failed")
+            self.assertEqual(stage["last_error_type"], "interrupted")
+            self.assertTrue(stage["interrupted"])
+            self.assertTrue(can_retry_stage(job_id, "P6"))
+            workflow = get_workflow_status(job_id)
+            self.assertEqual(workflow["main_agent"]["status"], "error")
+            self.assertEqual(workflow["main_agent"]["current_stage"], "P6")
+
+    def test_startup_does_not_change_waiting_job(self):
+        from web.api.workflow import recover_interrupted_workflows_on_startup
+
+        job_id = "20260910123456789"
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "agents.workflow.file_utils.get_jobs_dir", return_value=temp_dir
+        ), patch("agents.workflow.get_jobs_dir", return_value=temp_dir):
+            init_execution_status(job_id)
+            init_workflow_status(job_id)
+            update_stage_status(job_id, "P1", "running")
+            update_stage_status(job_id, "P1", "waiting")
+            from agents.workflow.workflow_state import update_workflow_status
+            update_workflow_status(job_id, {
+                "P1_status": "waiting",
+                "main_agent": {"status": "waiting", "current_stage": "P1"},
+            })
+
+            self.assertEqual(recover_interrupted_workflows_on_startup(), [])
+            self.assertEqual(get_execution_status(job_id)["stages"]["P1"]["status"], "waiting")
+
     def test_resume_starts_at_requested_stage_without_reinitializing(self):
         p1 = Mock(return_value={"completed": True})
         p2 = Mock(return_value={"completed": True})

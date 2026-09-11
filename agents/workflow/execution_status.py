@@ -154,6 +154,9 @@ def update_stage_status(
         if new_attempt or stage_info["attempts"] == 0:
             stage_info["attempts"] += 1
         stage_info["last_attempt_at"] = now
+        # 一旦真正重新进入 executor，就不再属于上一次服务异常中断。
+        stage_info.pop("interrupted", None)
+        stage_info.pop("interrupted_at", None)
 
     if status == "completed":
         stage_info["completed_at"] = now
@@ -201,6 +204,44 @@ def update_stage_status(
     return execution_status
 
 
+def mark_stage_interrupted(job_id: str, stage: str, error: str) -> Dict[str, Any]:
+    """把服务退出时遗留的 running 阶段转换为可人工恢复的失败状态。"""
+    execution_status = get_execution_status(job_id)
+    stage_info = execution_status["stages"].get(stage)
+    if not stage_info:
+        return execution_status
+
+    now = datetime.now(timezone.utc).isoformat()
+    stage_info["status"] = "failed"
+    stage_info["last_error"] = error
+    stage_info["last_error_type"] = "interrupted"
+    stage_info["interrupted"] = True
+    stage_info["interrupted_at"] = now
+    history_entry = {
+        "attempt": stage_info.get("attempts", 0),
+        "status": "failed",
+        "started_at": stage_info.get("last_attempt_at"),
+        "completed_at": now,
+        "duration_ms": None,
+        "error": error,
+        "error_type": "interrupted",
+    }
+    history = stage_info.setdefault("history", [])
+    if (
+        history
+        and history[-1].get("attempt") == history_entry["attempt"]
+        and history[-1].get("status") in {"running", "waiting"}
+    ):
+        history[-1].update(history_entry)
+    else:
+        history.append(history_entry)
+
+    execution_status["current_stage"] = stage
+    execution_status["updated_at"] = now
+    write_json_file(get_execution_status_path(job_id), execution_status)
+    return execution_status
+
+
 def can_retry_stage(job_id: str, stage: str) -> bool:
     """检查失败阶段是否还允许人工重试。
 
@@ -212,6 +253,10 @@ def can_retry_stage(job_id: str, stage: str) -> bool:
 
     if not stage_info:
         return False
+
+    # 服务异常退出不应把工单永久锁死；即使此前已到次数上限，也放行一次恢复。
+    if stage_info.get("interrupted"):
+        return stage_info.get("status") == "failed"
 
     # 检查是否已达到最大重试次数
     max_attempts = config.get("max_attempts", 3)
@@ -268,6 +313,7 @@ __all__ = [
     "init_execution_status",
     "get_execution_status",
     "update_stage_status",
+    "mark_stage_interrupted",
     "can_retry_stage",
     "get_retry_delay",
     "get_failed_stage",
