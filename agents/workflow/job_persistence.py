@@ -8,71 +8,84 @@ from typing import Dict, Any
 
 from .file_utils import (
     get_job_dir, ensure_job_dir, get_stage_result_path,
-    read_json_file, write_json_file
+    get_job_lock, read_json_file, write_json_file
 )
 
 
 def save_job_application(job_id: str, application: dict) -> str:
     """保存作业申请"""
-    job_dir = ensure_job_dir(job_id)
-    filepath = os.path.join(job_dir, "application.json")
-    write_json_file(filepath, {
-        "job_id": job_id,
-        "application": application,
-        "saved_at": datetime.now(timezone.utc).isoformat()
-    })
-    return filepath
+    with get_job_lock(job_id):
+        job_dir = ensure_job_dir(job_id)
+        filepath = os.path.join(job_dir, "application.json")
+        write_json_file(filepath, {
+            "job_id": job_id,
+            "application": application,
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        })
+        return filepath
 
 
 def add_job_log(job_id: str, log_entry: dict) -> str:
     """追加作业执行日志"""
-    job_dir = ensure_job_dir(job_id)
-    log_file = os.path.join(job_dir, "logs.json")
+    with get_job_lock(job_id):
+        job_dir = ensure_job_dir(job_id)
+        log_file = os.path.join(job_dir, "logs.json")
 
-    logs = []
-    if os.path.exists(log_file):
-        try:
-            logs = read_json_file(log_file)
-            if isinstance(logs, dict):
-                logs = [logs]
-        except:
-            logs = []
+        logs = []
+        if os.path.exists(log_file):
+            try:
+                logs = read_json_file(log_file)
+                if isinstance(logs, dict):
+                    logs = [logs]
+                elif not isinstance(logs, list):
+                    logs = []
+            except (OSError, ValueError):
+                logs = []
 
-    log_entry["timestamp"] = datetime.now(timezone.utc).isoformat()
-    logs.append(log_entry)
+        record = dict(log_entry)
+        record["timestamp"] = datetime.now(timezone.utc).isoformat()
+        logs.append(record)
 
-    write_json_file(log_file, logs)
-    return log_file
+        write_json_file(log_file, logs)
+        return log_file
 
 
 def save_confirmation(job_id: str, stage: str, decision: str, notes: str = "") -> str:
     """保存确认记录"""
-    job_dir = ensure_job_dir(job_id)
-    confirm_file = os.path.join(job_dir, "confirmations.json")
+    with get_job_lock(job_id):
+        job_dir = ensure_job_dir(job_id)
+        confirm_file = os.path.join(job_dir, "confirmations.json")
 
-    confirmations = []
-    if os.path.exists(confirm_file):
-        try:
-            confirmations = read_json_file(confirm_file)
-            if isinstance(confirmations, dict):
-                confirmations = [confirmations]
-        except:
-            confirmations = []
+        confirmations = []
+        if os.path.exists(confirm_file):
+            try:
+                confirmations = read_json_file(confirm_file)
+                if isinstance(confirmations, dict):
+                    confirmations = [confirmations]
+                elif not isinstance(confirmations, list):
+                    confirmations = []
+            except (OSError, ValueError):
+                confirmations = []
 
-    record = {
-        "stage": stage,
-        "decision": decision,
-        "notes": notes,
-        "confirmed_at": datetime.now(timezone.utc).isoformat()
-    }
-    confirmations.append(record)
+        record = {
+            "stage": stage,
+            "decision": decision,
+            "notes": notes,
+            "confirmed_at": datetime.now(timezone.utc).isoformat()
+        }
+        confirmations.append(record)
 
-    write_json_file(confirm_file, confirmations)
-    return confirm_file
+        write_json_file(confirm_file, confirmations)
+        return confirm_file
 
 
 def get_job_status(job_id: str) -> dict:
     """获取作业状态"""
+    with get_job_lock(job_id):
+        return _get_job_status_unlocked(job_id)
+
+
+def _get_job_status_unlocked(job_id: str) -> dict:
     job_dir = get_job_dir(job_id)
     if not os.path.exists(job_dir):
         return {"error": "Job not found"}

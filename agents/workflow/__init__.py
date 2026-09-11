@@ -6,6 +6,7 @@ from .file_utils import (
     get_job_dir,
     ensure_job_dir,
     get_stage_result_path,
+    get_job_lock,
     read_json_file,
     write_json_file,
     get_workflow_status_path,
@@ -40,12 +41,20 @@ from .execution_status import (
     is_stage_critical,
 )
 
+from .execution_guard import (
+    claim_job_execution,
+    release_job_execution,
+    get_job_execution_owner,
+    clear_execution_registry,
+)
+
 __all__ = [
     # file_utils
     "get_jobs_dir",
     "get_job_dir",
     "ensure_job_dir",
     "get_stage_result_path",
+    "get_job_lock",
     "read_json_file",
     "write_json_file",
     "get_workflow_status_path",
@@ -72,4 +81,9 @@ __all__ = [
     "get_stage_execution_info",
     "finalize_execution_status",
     "is_stage_critical",
+    # execution guard
+    "claim_job_execution",
+    "release_job_execution",
+    "get_job_execution_owner",
+    "clear_execution_registry",
 ]

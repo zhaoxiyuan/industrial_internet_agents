@@ -21,10 +21,11 @@ from .utils.logging_handler import get_agent_config
 # 导入 Workflow 模块
 from .workflow import (
     get_job_dir, ensure_job_dir, get_stage_result_path,
-    read_json_file, write_json_file,
+    get_job_lock, read_json_file, write_json_file,
     init_workflow_status, update_workflow_status, get_workflow_status,
     ALL_STAGES,
     save_job_application, add_job_log, save_confirmation, get_job_status,
+    claim_job_execution, release_job_execution,
 )
 # 导入 Execution Status 模块
 from .workflow import (
@@ -1293,11 +1294,55 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         raise ValueError("decision 必须是 approve 或 reject")
 
     job_id = thread_id
+    if stage not in STAGE_EXECUTORS:
+        raise ValueError(f"无效阶段: {stage}")
 
+    execution_token = None
     result_file = get_stage_result_path(job_id, stage.lower())
-    result = read_json_file(result_file)
+    # 状态校验、占用执行权和标记 confirming 必须处于同一把工单锁内，
+    # 否则两个页面可能同时通过 waiting 检查并各自启动后续流程。
+    with get_job_lock(job_id):
+        result = read_json_file(result_file)
+        workflow_status = get_workflow_status(job_id)
+        stage_status = workflow_status.get("agents", {}).get(stage, {}).get("status")
+        # result 文件仅用于兼容没有统一状态文件的旧工单；新状态存在时必须
+        # 以 agents.<stage>.status 为准，confirming 不能再次被当作 waiting。
+        is_waiting = stage_status == "waiting" or (
+            stage_status in {None, "pending"} and bool(result.get("pending_confirmation"))
+        )
+        if not is_waiting:
+            return {
+                "job_id": job_id,
+                "current_stage": workflow_status.get("main_agent", {}).get("current_stage", stage),
+                "pending_confirmations": [],
+                "confirmed_stages": [],
+                "status": "already_processed",
+                "duplicate": True,
+                "message": f"{stage} 当前不在等待审批状态，本次请求未重复执行",
+            }
 
-    save_confirmation(job_id, stage, decision, notes)
+        if async_execute and decision == "approve":
+            execution_token = claim_job_execution(job_id, f"confirm:{stage}")
+            if execution_token is None:
+                return {
+                    "job_id": job_id,
+                    "current_stage": stage,
+                    "pending_confirmations": [stage],
+                    "confirmed_stages": [],
+                    "status": "already_executing",
+                    "duplicate": True,
+                    "message": "该工单已有后台执行任务，本次审批未重复启动",
+                }
+
+        update_workflow_status(job_id, {
+            f"{stage}_status": "confirming",
+            "main_agent": {
+                "status": "running",
+                "current_stage": stage,
+                "pending_confirmations": [],
+            },
+        })
+        save_confirmation(job_id, stage, decision, notes)
 
     # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
     # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
@@ -1377,10 +1422,15 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         # 启动后台线程执行
         thread = threading.Thread(
             target=_confirm_and_continue_async,
-            args=(job_id, stage, decision, notes, current_idx, stage_order)
+            args=(job_id, stage, decision, notes, current_idx, stage_order, execution_token)
         )
         thread.daemon = True
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            if execution_token is not None:
+                release_job_execution(job_id, execution_token)
+            raise
         return {
             "job_id": job_id,
             "current_stage": stage.upper(),
@@ -1555,7 +1605,15 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     }
 
 
-def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: str, current_idx: int, stage_order: list):
+def _confirm_and_continue_async(
+    job_id: str,
+    stage: str,
+    decision: str,
+    notes: str,
+    current_idx: int,
+    stage_order: list,
+    execution_token=None,
+):
     """后台执行工作流（供异步模式调用）
 
     注意：这是后台线程执行，不能直接返回结果到前端，只能通过 WebSocket 推送状态更新
@@ -1692,6 +1750,9 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
             "main_agent": {"status": "error", "current_stage": stage, "pending_confirmations": []}
         })
         _broadcast_state(job_id)
+    finally:
+        if execution_token is not None:
+            release_job_execution(job_id, execution_token)
 
 
 def get_workflow_state(thread_id: str) -> dict:

@@ -5,7 +5,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-from .file_utils import get_job_dir, read_json_file, write_json_file
+from .file_utils import get_job_dir, get_job_lock, read_json_file, write_json_file
 
 
 # 错误类型定义
@@ -84,6 +84,11 @@ def get_execution_status_path(job_id: str) -> str:
 
 def init_execution_status(job_id: str) -> Dict[str, Any]:
     """初始化执行状态"""
+    with get_job_lock(job_id):
+        return _init_execution_status_unlocked(job_id)
+
+
+def _init_execution_status_unlocked(job_id: str) -> Dict[str, Any]:
     status = {
         "job_id": job_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -110,13 +115,14 @@ def init_execution_status(job_id: str) -> Dict[str, Any]:
 
 def get_execution_status(job_id: str) -> Dict[str, Any]:
     """获取执行状态"""
-    status_file = get_execution_status_path(job_id)
-    status = read_json_file(status_file)
+    with get_job_lock(job_id):
+        status_file = get_execution_status_path(job_id)
+        status = read_json_file(status_file)
 
-    if not status:
-        status = init_execution_status(job_id)
+        if not status:
+            status = _init_execution_status_unlocked(job_id)
 
-    return status
+        return status
 
 
 def update_stage_status(
@@ -140,6 +146,20 @@ def update_stage_status(
     Returns:
         更新后的执行状态
     """
+    with get_job_lock(job_id):
+        return _update_stage_status_unlocked(
+            job_id, stage, status, error, duration_ms, new_attempt
+        )
+
+
+def _update_stage_status_unlocked(
+    job_id: str,
+    stage: str,
+    status: str,
+    error: Optional[str],
+    duration_ms: Optional[int],
+    new_attempt: bool,
+) -> Dict[str, Any]:
     execution_status = get_execution_status(job_id)
     stage_info = execution_status["stages"].get(stage)
 
@@ -206,6 +226,11 @@ def update_stage_status(
 
 def mark_stage_interrupted(job_id: str, stage: str, error: str) -> Dict[str, Any]:
     """把服务退出时遗留的 running 阶段转换为可人工恢复的失败状态。"""
+    with get_job_lock(job_id):
+        return _mark_stage_interrupted_unlocked(job_id, stage, error)
+
+
+def _mark_stage_interrupted_unlocked(job_id: str, stage: str, error: str) -> Dict[str, Any]:
     execution_status = get_execution_status(job_id)
     stage_info = execution_status["stages"].get(stage)
     if not stage_info:
@@ -291,11 +316,12 @@ def get_stage_execution_info(job_id: str, stage: str) -> Dict[str, Any]:
 
 def finalize_execution_status(job_id: str) -> Dict[str, Any]:
     """标记阶段序列已经走到末尾，同时保留各阶段的失败状态。"""
-    execution_status = get_execution_status(job_id)
-    execution_status["current_stage"] = "completed"
-    execution_status["updated_at"] = datetime.now(timezone.utc).isoformat()
-    write_json_file(get_execution_status_path(job_id), execution_status)
-    return execution_status
+    with get_job_lock(job_id):
+        execution_status = get_execution_status(job_id)
+        execution_status["current_stage"] = "completed"
+        execution_status["updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_json_file(get_execution_status_path(job_id), execution_status)
+        return execution_status
 
 
 def is_stage_critical(stage: str) -> bool:

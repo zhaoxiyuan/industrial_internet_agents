@@ -84,6 +84,13 @@ def _valid_job_id(job_id):
 
 def _read_job_files(job_id):
     """读取历史作业的持久化数据，不修改工作流状态。"""
+    from agents.workflow import get_job_lock
+
+    with get_job_lock(job_id):
+        return _read_job_files_unlocked(job_id)
+
+
+def _read_job_files_unlocked(job_id):
     from agents.workflow import get_job_dir, read_json_file
 
     job_dir = get_job_dir(job_id)
@@ -227,7 +234,22 @@ def handle_workflow_job_detail(handler, job_id):
 
 def handle_workflow_start(handler, app):
     """POST /api/workflow/start"""
-    job_id = datetime.now().strftime("%Y%m%d%H%M%S") + f"{random.randint(0, 999):03d}"
+    from agents.workflow import claim_job_execution, get_job_dir, release_job_execution
+
+    execution_token = None
+    job_id = None
+    for _ in range(100):
+        candidate = datetime.now().strftime("%Y%m%d%H%M%S") + f"{random.randint(0, 999):03d}"
+        if os.path.exists(get_job_dir(candidate)):
+            continue
+        execution_token = claim_job_execution(candidate, "start")
+        if execution_token is not None:
+            job_id = candidate
+            break
+    if not job_id:
+        handler.send_json({"status": "error", "error": "暂时无法生成唯一工单编号，请重试"}, status=503)
+        return
+
     app["job_id"] = job_id
 
     logger.info(f"[POST] /api/workflow/start 进入: job_id={job_id}")
@@ -241,12 +263,17 @@ def handle_workflow_start(handler, app):
     handler.send_json(response_data)
 
     def run_workflow_background(job_id, app):
+        released = False
         try:
             logger.info(f"[WORKFLOW] 工作流开始执行: job_id={job_id}")
             from web.ws.manager import broadcast_workflow_state
             broadcast_workflow_state(job_id)
             from agents.main_agent import run_workflow
             result = run_workflow(app, thread_id=job_id)
+            # run_workflow 返回 waiting/error/completed 后已经没有阶段 executor 在跑，
+            # 先释放占用，避免用户看到审批窗口后被短暂误判为重复执行。
+            release_job_execution(job_id, execution_token)
+            released = True
             logger.info(f"[WORKFLOW] 工作流执行完成: job_id={job_id}, result={result.get('status')}")
             broadcast_workflow_state(job_id)
         except Exception as e:
@@ -254,12 +281,19 @@ def handle_workflow_start(handler, app):
             from web.ws.manager import broadcast_workflow_state
             broadcast_workflow_state(job_id)
         finally:
+            if not released:
+                release_job_execution(job_id, execution_token)
             _running_workflows.pop(job_id, None)
 
     t = threading.Thread(target=run_workflow_background, args=(job_id, app))
     t.daemon = True
     _running_workflows[job_id] = t
-    t.start()
+    try:
+        t.start()
+    except Exception:
+        _running_workflows.pop(job_id, None)
+        release_job_execution(job_id, execution_token)
+        raise
 
 
 def handle_workflow_confirm(handler, data):
@@ -434,8 +468,9 @@ def handle_workflow_resume(handler, data):
 
     try:
         from agents.workflow import (
+            claim_job_execution,
             get_execution_status, get_failed_stage, can_retry_stage,
-            read_json_file, get_job_dir,
+            read_json_file, get_job_dir, release_job_execution,
         )
         from agents.main_agent import run_workflow, STAGE_EXECUTORS
 
@@ -487,8 +522,17 @@ def handle_workflow_resume(handler, data):
             }, status=404)
             return
 
+        execution_token = claim_job_execution(job_id, f"resume:{stage}")
+        if execution_token is None:
+            handler.send_json({
+                "status": "error",
+                "error": "该工单已有后台执行任务，请勿重复恢复",
+            }, status=409)
+            return
+
         # 后台执行恢复
         def run_resume_background():
+            released = False
             try:
                 logger.info(f"[RESUME] 开始恢复执行: job_id={job_id}, stage={stage}")
                 from web.ws.manager import broadcast_workflow_state
@@ -503,18 +547,27 @@ def handle_workflow_resume(handler, data):
                     force=force,
                 )
 
+                release_job_execution(job_id, execution_token)
+                released = True
                 logger.info(f"[RESUME] 恢复执行完成: job_id={job_id}, result={result.get('status')}")
                 broadcast_workflow_state(job_id)
             except Exception as e:
                 logger.exception(f"[RESUME] 恢复执行失败: job_id={job_id}")
                 broadcast_workflow_state(job_id)
             finally:
+                if not released:
+                    release_job_execution(job_id, execution_token)
                 _running_workflows.pop(job_id, None)
 
         t = threading.Thread(target=run_resume_background)
         t.daemon = True
         _running_workflows[job_id] = t
-        t.start()
+        try:
+            t.start()
+        except Exception:
+            _running_workflows.pop(job_id, None)
+            release_job_execution(job_id, execution_token)
+            raise
 
         response_data = {
             "status": "resuming",
