@@ -464,21 +464,23 @@ daemon 线程 fire-and-forget 调用，失败不影响飞书 toast 响应。
    ↓ Gateway /webhooks/feishu → web /api/feishu/card-callback
 feishu_card.process_card_callback
    ├─ _write_audit(record)                ← 同步：审计 JSONL
-   ├─ _replace_card_async(...)            ← daemon：删原卡 + 重发绿卡
    └─ _handle_card_action_with_llm_async(...)
         └─ A7.middleware.p8_card_action_agent.run_card_action_agent
              └─ apply_card_action 工具（闭包绑 job_id）
                   ├─ load_working_memory(job_id)
                   ├─ 计算新 status / decision（ACTION_TO_STATUS 映射表）
                   ├─ dump_working_memory(job_id, ...)         per-job JSON
-                  └─ 终态 → save_archived_job(..., job_id=...) 全局+per-job 双写
+                  ├─ 终态 → save_archived_job(..., job_id=...) 全局+per-job 双写
+                  └─ 成功后原位更新同一张飞书卡
+                       ├─ CardKit 实体：PUT /cardkit/v1/cards/{card_id}
+                       └─ 历史 inline 卡：PATCH /im/v1/messages/{message_id}
 ```
 
 **反向路径**：`alert_id → job_id` 由卡片推送时直接写入 `action.value.job_id`，
 callback 透传使用，**无需**经过 `feishu_card_index.json` 中间反查。
 
 **向后兼容**：旧卡片（action.value 缺 `job_id`）→ daemon 检测 `job_id is None` → 跳过，
-仅走审计 + 视觉替换，不影响既有行为。
+仅走审计并跳过状态/卡片更新，不影响新卡片链路。
 
 详见：[docs/agents/P8_CARD_ACTION_AGENT.md](agents/P8_CARD_ACTION_AGENT.md)
 及 [tests/test_p8_card_action_agent.py](../tests/test_p8_card_action_agent.py)（13 个测试）。

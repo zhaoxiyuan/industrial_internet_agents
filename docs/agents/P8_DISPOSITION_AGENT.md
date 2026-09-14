@@ -277,14 +277,14 @@ P8 采用 **三层职责分离**：
    ↓ Gateway /webhooks/feishu → web /api/feishu/card-callback
 feishu_card.process_card_callback
    ├─ _write_audit(record)              ← 同步：审计 JSONL
-   ├─ _replace_card_async(...)          ← daemon：删原卡 + 重发绿卡（视觉替换）
    └─ _handle_card_action_with_llm_async(...)  ← daemon（2026-08-20 新增）
         └─ A7.middleware.p8_card_action_agent.run_card_action_agent(...)
              └─ apply_card_action 工具（闭包绑 job_id）
                   ├─ load_working_memory(job_id)         读 per-job JSON
                   ├─ 计算新 status / decision（按 ACTION_TO_STATUS 映射表）
                   ├─ dump_working_memory(job_id, ...)     原子写 per-job JSON
-                  └─ 终态 → save_archived_job(..., job_id=job_id)  全局+per-job 双写
+                  ├─ 终态 → save_archived_job(..., job_id=job_id)  全局+per-job 双写
+                  └─ 原位更新同一张卡（CardKit PUT；历史 inline 卡走 IM PATCH）
 ```
 
 ### 与 P8 处置 Agent 的差异

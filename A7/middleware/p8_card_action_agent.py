@@ -56,7 +56,7 @@ logger = logging.getLogger("a7.p8_card_action_agent")
 # ============================================================
 # PUSH 卡片按钮（channel=PUSH，低风险）：
 #   ack         → 已知悉；维持 notified（人在跟进）
-#   handle      → 立即处理；维持 notified（人在跟）
+#   handle      → 立即处理；进入 waiting_decision（等待第二阶段终态决策）
 #   false_alarm → 误报；终态 completed
 # HITL 决策按钮（channel=HITL，高风险）：
 #   approve / rectify → completed
@@ -66,7 +66,7 @@ logger = logging.getLogger("a7.p8_card_action_agent")
 ACTION_TO_STATUS: Dict[str, str] = {
     # PUSH 三按钮
     "ack":         P8JobStatus.NOTIFIED.value,    # 已知悉：维持 notified
-    "handle":      P8JobStatus.NOTIFIED.value,    # 立即处理：维持 notified
+    "handle":      P8JobStatus.WAITING_DECISION.value,  # 立即处理：进入第二阶段决策
     "false_alarm": P8JobStatus.COMPLETED.value,   # 误报：终态
     # HITL 五按钮
     "approve":     P8JobStatus.COMPLETED.value,

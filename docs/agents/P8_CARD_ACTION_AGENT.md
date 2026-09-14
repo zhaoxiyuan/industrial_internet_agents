@@ -99,7 +99,8 @@ ACTION_TO_DECISION = {
 - `_handle_card_action_with_llm_async(...)`：daemon 线程 fire-and-forget 调 CardActionAgent
   - `job_id is None` → 跳过（旧卡片向后兼容）
   - 异常 → `logger.exception`（不阻塞 toast 响应）
-- `process_card_callback(...)`：紧跟 `_replace_card_async` 后触发新 dispatcher（独立 daemon）
+- `process_card_callback(...)`：触发 dispatcher；P8 状态更新成功后，再通过 CardKit PUT
+  原位更新同一张卡（历史 inline 卡兼容 IM Message PATCH），不撤回、不重发
 
 ## 文件位置
 

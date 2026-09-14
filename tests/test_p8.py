@@ -421,7 +421,7 @@ class TestApplyCardActionStateMachine(unittest.TestCase):
         self.assertEqual(r2["result"]["new_status"], "resumed")
 
     # AC-05：handle → notified（人跟进；维持）
-    def test_ac05_handle_keeps_notified(self):
+    def test_ac05_handle_enters_waiting_decision(self):
         # 先把 P8J_1 标为 notified（中间态）
         from A7.storage import dump_working_memory, load_working_memory
         wm = load_working_memory(JOB_ID)
@@ -436,7 +436,7 @@ class TestApplyCardActionStateMachine(unittest.TestCase):
             operator_open_id="ou_test",
             operator_name="测试员",
         ))
-        self.assertEqual(result["result"]["new_status"], "notified")
+        self.assertEqual(result["result"]["new_status"], "waiting_decision")
 
     # AC-06：false_alarm → completed（终态）+ decision=approve（误报视同批准）
     def test_ac06_false_alarm_terminal_approve(self):

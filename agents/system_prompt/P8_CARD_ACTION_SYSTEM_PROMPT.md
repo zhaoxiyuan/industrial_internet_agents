@@ -30,7 +30,7 @@ LLM 收到的 user message 形如：
 | action      | 新 status     | decision 字段 | 终态 |
 |-------------|---------------|---------------|------|
 | ack         | notified      | -             | 否   |
-| handle      | notified      | -             | 否   |
+| handle      | waiting_decision | -          | 否   |
 | false_alarm | completed     | approve       | 是   |
 | approve     | completed     | approve       | 是   |
 | rectify     | completed     | rectify       | 是   |
