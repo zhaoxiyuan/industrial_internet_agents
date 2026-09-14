@@ -36,7 +36,7 @@ if _env_file.exists():
     load_dotenv(_env_file)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -196,6 +196,10 @@ textarea { width:100%; background:#0f172a; color:#e2e8f0; border:1px solid #3341
 
 /* ── 动画 ── */
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
+
+/* ── 锁定文本框（job_id 监测中）── */
+input:disabled, textarea:disabled { opacity:0.7; cursor:not-allowed; }
+input[disabled] { background:#1e293b !important; color:#94a3b8 !important; }
 </style>
 </head>
 <body>
@@ -302,6 +306,8 @@ textarea { width:100%; background:#0f172a; color:#e2e8f0; border:1px solid #3341
         <span style="color:#94a3b8;font-size:12px;">📋 per-job 监测（写入 data/jobs/&lt;job_id&gt;/P6 + P7）：</span>
         <label style="color:#94a3b8;font-size:12px;">作业 ID:</label>
         <input id="txtJobId" type="text" placeholder="例: 20260819154312029"
+               maxlength="17" pattern="[0-9]{17}" inputmode="numeric"
+               oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,17)"
                style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;width:180px;" />
         <label style="color:#94a3b8;font-size:12px;">场景:</label>
         <select id="selScenarioJob" style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;">
@@ -406,9 +412,33 @@ async function pollLog() {
   await Promise.all([fetchLogCounts(), fetchRawEvents()]);
 }
 
+// 占位 job_id：5 类轮询 / 启动监测 / 清理日志 均统一走 17 位数字
+//   - 用户输入 17 位数字 → 原文传给后端
+//   - 文本框为空 / 非 17 位 → 全部替换为 17 个 0 传给后端
+//   原因：用户要求"不允许全局 A5/logs",所以 job_id 永远 17 位
+//   - 后端 6 处接口对非 17 位 job_id 会 400 拒绝
+//   - 占位 17 个 0 → 后端不会 400,但目录不存在 → 返空,不污染 A5/logs
+const JOB_ID_PLACEHOLDER = "00000000000000000";
+
+// 把任意输入归一化为 17 位 job_id（非 17 位 → 占位 17 个 0）
+function normalizeJobId(raw) {
+  if (raw && /^\d{17}$/.test(raw)) return raw;
+  return JOB_ID_PLACEHOLDER;
+}
+
+// 读文本框 → 归一化为 17 位（永远不为空 → 永远走 per-job dir → 禁用全局 A5/logs）
+function getActiveJobId() {
+  const tb = document.getElementById("txtJobId");
+  const txt = tb ? tb.value.trim() : "";
+  return normalizeJobId(txt);
+}
+
 async function fetchLogCounts() {
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
+  const jobId = getActiveJobId();
+  const url = jobId ? "/api/logs?job_id=" + encodeURIComponent(jobId) : "/api/logs";
   try {
-    const r = await fetch("/api/logs");
+    const r = await fetch(url);
     const d = await r.json();
     document.getElementById("cntSnapshot").textContent  = (d.snapshots  || []).length;
     document.getElementById("cntRaw").textContent       = (d.raw_events || []).length;
@@ -422,7 +452,10 @@ async function fetchLogCounts() {
 
 async function pollScenario() {
   try {
-    const r = await fetch("/api/scenario/status");
+    // 读文本框 → normalizeJobId 归一化为 17 位
+    const jobId = getActiveJobId();
+    const url = jobId ? "/api/scenario/status?job_id=" + encodeURIComponent(jobId) : "/api/scenario/status";
+    const r = await fetch(url);
     const d = await r.json();
     _currentSecond = d.current_second || 0;
     const pct = Math.min(100, (_currentSecond / 30) * 100);
@@ -436,13 +469,17 @@ async function pollScenario() {
 }
 
 async function fetchLatestSnapshot() {
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
+  const jobId = getActiveJobId();
+  const url = jobId ? "/api/logs?job_id=" + encodeURIComponent(jobId) : "/api/logs";
   try {
-    const r = await fetch("/api/logs");
+    const r = await fetch(url);
     const d = await r.json();
     const snaps = d.snapshots || [];
     if (snaps.length === 0) return;
     const latest = snaps[snaps.length - 1];
-    const fr = await fetch("/api/logs/" + encodeURIComponent(latest));
+    const fr = await fetch("/api/logs/" + encodeURIComponent(latest) +
+                          (jobId ? "?job_id=" + encodeURIComponent(jobId) : ""));
     if (!fr.ok) return;
     const sd = await fr.json();
     if (!sd.snapshots || !sd.snapshots[0]) return;
@@ -500,12 +537,16 @@ async function pollAgent() {
 
 async function fetchAgentStatus() {
   try {
-    const r = await fetch("/api/agent/status");
+    // 读文本框 → normalizeJobId 归一化为 17 位
+    const jobId = getActiveJobId();
+    const url = jobId ? "/api/agent/status?job_id=" + encodeURIComponent(jobId) : "/api/agent/status";
+    const r = await fetch(url);
     const d = await r.json();
     _agentRunning = d.running;
     document.getElementById("btnAgentStart").disabled = d.running;
     document.getElementById("btnAgentStop").disabled  = !d.running;
-    document.getElementById("agentStatus").textContent = d.running ? "运行中" : "已停止";
+    document.getElementById("agentStatus").textContent =
+      d.running ? ("运行中" + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)")) : "已停止";
     const s = d.stats || {};
     document.getElementById("statTotal").textContent  = s.total || 0;
     document.getElementById("statDone").textContent   = s.done || 0;
@@ -548,8 +589,11 @@ function renderQueue(pending) {
 }
 
 async function fetchRawEvents() {
+  // 读文本框 → normalizeJobId 归一化为 17 位
+  const jobId = getActiveJobId();
+  const url = jobId ? "/api/agent/events?job_id=" + encodeURIComponent(jobId) : "/api/agent/events";
   try {
-    const r = await fetch("/api/agent/events");
+    const r = await fetch(url);
     if (!r.ok) return;
     const d = await r.json();
     const events = d.events || [];
@@ -580,18 +624,21 @@ async function fetchRawEvents() {
 
 async function startScenario() {
   const scenario = document.getElementById("selScenario").value;
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
+  const jobId = getActiveJobId();
   try {
     const r = await fetch("/api/scenario/start", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ scenario }),
+      body: JSON.stringify({ scenario, job_id: jobId }),
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
     _scenarioRunning = true;
     document.getElementById("btnPlay").disabled = true;
     document.getElementById("btnStop").disabled = false;
-    document.getElementById("statusText").textContent = "启动中... " + d.scenario;
+    document.getElementById("statusText").textContent =
+      "启动中... " + d.scenario + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)");
     startScenarioPoll();
   } catch(e) { alert("启动失败: " + e); }
 }
@@ -608,11 +655,22 @@ async function stopScenario() {
 }
 
 async function clearLogs() {
-  if (!confirm("确定清理 A5/logs 下所有日志文件？")) return;
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空）
+  const jobId = getActiveJobId();
+  // 占位 00000000000000000 时不给 alert（用户故意没填 → 清理占位路径无害）
+  if (!jobId) {
+    alert("请先在「per-job 监测」面板启动一个 job（点击「🚀 开始监测」）");
+    return;
+  }
+  if (!confirm("确定清理 data/jobs/" + jobId + "/P6 下所有日志文件？")) return;
   try {
-    const r = await fetch("/api/logs/clear", {method:"POST"});
+    const r = await fetch("/api/logs/clear", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({job_id: jobId}),
+    });
     const d = await r.json();
-    document.getElementById("statusText").textContent = "已清理 " + d.removed + " 个文件";
+    document.getElementById("statusText").textContent = "已清理 " + d.removed + " 个文件 (job=" + d.job_id + ")";
     await fetchLogCounts();
     await fetchRawEvents();
   } catch(e) { alert("清理失败: " + e); }
@@ -621,18 +679,21 @@ async function clearLogs() {
 async function startAgent() {
   const interval = parseInt(document.getElementById("selInterval").value);
   const batch    = parseInt(document.getElementById("selBatch").value);
+  // 读文本框 → normalizeJobId 归一化为 17 位
+  const jobId = getActiveJobId();
   try {
     const r = await fetch("/api/agent/start", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ interval_sec: interval, batch_size: batch }),
+      body: JSON.stringify({ interval_sec: interval, batch_size: batch, job_id: jobId }),
     });
     const d = await r.json();
     if (d.error) { alert(d.error); return; }
     _agentRunning = true;
     document.getElementById("btnAgentStart").disabled = true;
     document.getElementById("btnAgentStop").disabled  = false;
-    document.getElementById("agentStatus").textContent = "运行中";
+    document.getElementById("agentStatus").textContent =
+      "运行中" + (d.job_id ? " (job=" + d.job_id + ")" : " (全局)");
     startAgentPoll();
   } catch(e) { alert("Agent启动失败: " + e); }
 }
@@ -649,17 +710,26 @@ async function stopAgent() {
 }
 
 // ── per-job 监测（2026-08-19 新增） ──────────────────────────────────────────
+// 调试日志：UI 没有 addLog 容器,这里只在 console 输出,绝不抛错
+//   之前 8 处 addLog 调用未定义 → ReferenceError 抛错
+//   → startMonitorPoll 终态分支里后续的 disabled = false 等 4 行永不执行
+//   → 30s 后按钮 + 文本框"看似没解锁"就是这原因
+function addLog(msg) {
+  try { console.log("[monitor]", msg); } catch(e) {}
+}
+
 let _monitorJobId = "";
 let _monitorPollTimer = null;
 
 async function startMonitor() {
-  const jobId = document.getElementById("txtJobId").value.trim();
+  const rawJobId = document.getElementById("txtJobId").value.trim();
   const scenario = document.getElementById("selScenarioJob").value;
-  if (!jobId) { alert("请输入 job_id（17 位时间戳，例: 20260819154312029）"); return; }
-  if (!/^\\d{17}$/.test(jobId)) {
-    alert("job_id 格式错误，应为 17 位数字（YYYYMMDDHHMMSS + 3位随机）");
-    return;
-  }
+  // 跟随 selInterval / selBatch（之前硬编码 2 / 10 → 前端下拉框失效）
+  const interval = parseInt(document.getElementById("selInterval").value);
+  const batch    = parseInt(document.getElementById("selBatch").value);
+  // 归一化为 17 位：用户输入 17 位 → 原文；非 17 位 / 空 → 17 个 0 占位
+  // 原因：用户要求"不允许全局 A5/logs" + 后端 6 处接口对非 17 位 job_id 400 拒绝
+  const jobId = normalizeJobId(rawJobId);
   _monitorJobId = jobId;
   try {
     const r = await fetch("/api/monitor/start", {
@@ -669,20 +739,30 @@ async function startMonitor() {
         job_id: jobId,
         scenario: scenario,
         duration_sec: 30,
-        interval_sec: 2,
-        batch_size: 10,
+        interval_sec: interval,
+        batch_size: batch,
         play_delay_sec: 5,
       }),
     });
     const d = await r.json();
     if (d.status === "ok") {
+      // ★ 启动时锁定 job_id 文本框 + 禁用 "开始监测" 按钮
+      //   防止用户在 5s 播放 + 30s 收集期间修改 job_id 造成数据源不一致
+      //   终态（completed/cancelled/error）或 stop 后会解锁
+      document.getElementById("txtJobId").disabled = true;
       document.getElementById("btnMonitorStart").disabled = true;
       document.getElementById("btnMonitorStop").disabled  = false;
       document.getElementById("monitorStatus").textContent =
         `运行中（5秒后播放场景 ${d.scenario}）`;
+      // 共享给 /a6 页面（A6 看板前端从 localStorage 读取）
+      localStorage.setItem("p6_active_job_id", d.job_id);
       addLog(`✅ monitor_start 成功: job_id=${d.job_id}, p6_dir=${d.p6_dir}`);
       addLog(`▶️ 5 秒后开始播放 mock 数据...`);
       startMonitorPoll();
+      // _monitorJobId 已在 startMonitor 入口处设为 jobId；4 类 UI 轮询在 page load 已启，
+      // 下一次 pollActiveJobs 会同步确认 → 切到 per-job dir 渲染
+      _monitorJobId = jobId;
+      try { localStorage.setItem("p6_active_job_id", jobId); } catch(e) {}
     } else {
       addLog(`❌ monitor_start 失败: ${d.error}`);
       alert(d.error || "monitor_start 失败");
@@ -703,11 +783,15 @@ async function stopMonitor() {
     });
     const d = await r.json();
     addLog(`■ monitor_stop: ${d.status} (job_id=${d.job_id}, final=${d.final_status || d.note})`);
+    // ★ 解锁 job_id 文本框 + 启用 "开始监测" 按钮
+    //   5 类 UI 轮询继续以文本框（= _monitorJobId）作为 job_id 源，不会停
+    document.getElementById("txtJobId").disabled = false;
     document.getElementById("btnMonitorStart").disabled = false;
     document.getElementById("btnMonitorStop").disabled  = true;
     document.getElementById("monitorStatus").textContent = "已停止";
     stopMonitorPoll();
-    _monitorJobId = "";
+    localStorage.removeItem("p6_active_job_id");
+    // 不清空 _monitorJobId：作为下行兑底，用户清空文本框后仍能查这个 job_id
   } catch(e) {
     addLog(`❌ monitor_stop 异常: ${e}`);
     alert("monitor_stop 异常: " + e);
@@ -727,10 +811,14 @@ function startMonitorPoll() {
         document.getElementById("monitorStatus").textContent = label;
         if (["completed", "cancelled", "error"].includes(s.status)) {
           addLog(`📋 monitor 终态: job_id=${_monitorJobId}, status=${s.status}`);
+          // ★ 终态解锁：解除文本框锁定 + 启用 "开始监测" 按钮
+          //   但 _monitorJobId 保留（兑底用）→ 5 类 UI 轮询继续读这个 job_id
+          //   轮询不停止：用户可改文本框切换到别的 job_id，或保持查看当前完成数据
+          document.getElementById("txtJobId").disabled = false;
           document.getElementById("btnMonitorStart").disabled = false;
           document.getElementById("btnMonitorStop").disabled  = true;
-          _monitorJobId = "";
-          stopMonitorPoll();
+          // 不调用 stopMonitorPoll()：继续每 2s 探活，万一后端还有别的 alive job
+          // （目前不会，但保留探活机制便于未来多并发）
         }
       }
     } catch(e) { /* 静默 */ }
@@ -739,6 +827,78 @@ function startMonitorPoll() {
 
 function stopMonitorPoll() {
   if (_monitorPollTimer) { clearInterval(_monitorPollTimer); _monitorPollTimer = null; }
+}
+
+// 页面加载时自动恢复 active job 状态（解决"刷新页面就看不到 PPE/传感器/位置数据"问题）
+// 流程：
+//   1) 从 localStorage 读上次记录的 active job_id
+//   2) 调 /api/monitor/status 确认该 job 还在 _active_jobs 中（status != null/completed/cancelled/error）
+//   3) 活着：恢复 _monitorJobId + 启动 pollScenario/pollLog/pollMonitor
+//   4) 死了/读不到：清 localStorage，保持空 job_id（按全局 A5/logs 显示）
+async function initMonitorOnLoad() {
+  let saved = "";
+  try { saved = localStorage.getItem("p6_active_job_id") || ""; } catch(e) {}
+  if (!saved) return;
+
+  try {
+    const r = await fetch("/api/monitor/status?job_id=" + encodeURIComponent(saved));
+    const d = await r.json();
+    const s = (d.status === "ok") ? d.job_state : null;
+    if (s && !["completed", "cancelled", "error"].includes(s.status)) {
+      _monitorJobId = saved;
+      console.log("[init] 恢复 active job_id=" + saved + ", status=" + s.status);
+      // 启动 per-job 模式必需的全部轮询
+      startLogPoll();          // 文件计数
+      startScenarioPoll();     // snapshot 渲染（PPE/传感器/位置）—— 关键
+      startMonitorPoll();      // monitor 状态文本
+    } else {
+      console.log("[init] job_id=" + saved + " 已不在 active，清掉 localStorage");
+      try { localStorage.removeItem("p6_active_job_id"); } catch(e) {}
+    }
+  } catch(e) {
+    console.error("[init] 恢复 active job 失败:", e);
+  }
+}
+
+// 每 1 秒探活后端 _active_jobs → 仅同步 localStorage + 兜底 _monitorJobId
+//   - 5 类轮询现在直接读文本框 txtJobId.value（getActiveJobId），不再依赖这里
+//   - 本函数只保留两个作用：
+//     ① 用户清空文本框后，仍能通过 _monitorJobId 兑底获取最后一次的有效 job_id
+//     ② 同步 localStorage 给 /a6 共享面板使用
+//   - 后端 alive job 变化时，同步 _monitorJobId（仅当文本框为空时）
+let _activeJobsTimer = null;
+async function pollActiveJobs() {
+  try {
+    const r = await fetch("/api/monitor/status");
+    if (!r.ok) return;
+    const d = await r.json();
+    const aliveJobs = (d.jobs || []).filter(j =>
+      ["starting", "agent_running", "playing"].includes(j.status));
+    if (aliveJobs.length === 0) {
+      // 后端无 alive job → _monitorJobId 保留（兑底用，文本框已被清空时仍能查）
+      // 不清空 _monitorJobId，不删除 localStorage（让 /a6 看板能继续查看历史 job）
+      return;
+    }
+    // 后端有 alive job → 仅当 _monitorJobId 尚未记录时同步一次（兑底）
+    // 文本框为主：用户已输入的值不会被这里覆盖
+    if (!_monitorJobId) {
+      const newJobId = aliveJobs[0].job_id;
+      _monitorJobId = newJobId;
+      console.log("[pollActiveJobs] 兑底 _monitorJobId=" + newJobId);
+      try { localStorage.setItem("p6_active_job_id", newJobId); } catch(e) {}
+    }
+  } catch(e) {
+    console.error("[pollActiveJobs] 探活失败:", e);
+  }
+}
+function startActiveJobsPoll() {
+  if (_activeJobsTimer) return;
+  _activeJobsTimer = setInterval(pollActiveJobs, 1000);
+  // 立即跑一次，page load 后不需要等 1s
+  pollActiveJobs();
+}
+function stopActiveJobsPoll() {
+  if (_activeJobsTimer) { clearInterval(_activeJobsTimer); _activeJobsTimer = null; }
 }
 
 async function loadRules() {
@@ -775,7 +935,15 @@ async function resetSystemPrompt() {
 
 loadRules();
 loadSystemPrompt();
+// ★ 5 类 UI 轮询在 P6 服务启动后就一直运行（用户要求，不依赖任何按钮/条件）
+//   - startLogPoll       → 日志文件状态 + 报警事件（fetchLogCounts + fetchRawEvents）
+//   - startScenarioPoll  → snapshot 渲染 PPE/传感器/位置（fetchLatestSnapshot）
+//   - startAgentPoll     → 处理队列 + Agent 进度（fetchAgentStatus）
+//   - startActiveJobsPoll→ 仅同步 _monitorJobId（兑底给文本框为空时使用）+ 同步 localStorage
 startLogPoll();
+startScenarioPoll();
+startAgentPoll();
+startActiveJobsPoll();
 </script>
 </body>
 </html>
@@ -801,6 +969,8 @@ class GlobalState:
         self.agent_batch_size: int = 10
         self.agent_running: bool = False
         self.scenario_running: bool = False
+        self.scenario_job_id: str = ""    # 当前 scenario 关联的 job_id（per-job 模式）
+        self.agent_job_id: str = ""       # 当前 agent 关联的 job_id（per-job 模式）
         self._start_wall: Optional[datetime] = None
 
     def reset(self):
@@ -811,6 +981,8 @@ class GlobalState:
         self.log_dir = ""
         self.agent_running = False
         self.scenario_running = False
+        self.scenario_job_id = ""
+        self.agent_job_id = ""
         self._start_wall = None
 
 
@@ -986,10 +1158,28 @@ async def _run_data_play(scenario: str, log_dir: str):
 # ============================================================
 
 async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
-                        agent: Optional[A5Agent] = None):
+                        agent: Optional[A5Agent] = None,
+                        running_predicate=None,
+                        job_id: str = ""):
+    """Agent 轮询循环。
+
+    Args:
+        log_dir: 读 snapshot + 写 raw_event 路径
+        interval_sec: 轮询间隔
+        batch_size: 每批最多 wall_time 数
+        agent: 复用 A5Agent 实例（per-job 模式传入，避免重复构造 LLM）
+        running_predicate: callable() -> bool；返回 False 时退出循环。
+            默认 lambda: state.agent_running（兼容旧 /api/agent/start）；
+            per-job 模式传 lambda: True（只要 job 没 cancel 就持续跑）。
+        job_id: 当前 active job_id（per-job 模式由 _run_agent_loop_for_job 闭包传入）；
+                用于 trigger_a6_assessment 时透传，定位 per-job P7 目录。
+                不传（兼容旧路径）→ 走全局 A6Agent。
+    """
     if agent is None:
         # 兼容旧调用：不传 agent 时 new 一个全局 A5Agent（raw_event 写到 LOG_DIR）
         agent = A5Agent(collector=None, work_permit=WORK_PERMIT, raw_event_dir=log_dir)
+    if running_predicate is None:
+        running_predicate = lambda: state.agent_running
     log_path = Path(log_dir)
     pending_tasks: list = []
     inflight_wts: set = set()
@@ -1015,8 +1205,7 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
                     pass
                 pending_tasks.remove(t)
 
-    while state.agent_running:
-        await asyncio.sleep(interval_sec)
+    while running_predicate():
         _load_inflight()
         _cleanup_done_tasks()
 
@@ -1031,24 +1220,25 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
             if status in ("new", "retryable"):
                 unprocessed.append((wall_time, sf))
 
-        if not unprocessed:
-            continue
+        if unprocessed:
+            batch = sorted(unprocessed)[:batch_size]
+            wall_times = [wt for wt, _ in batch]
+            batch_key = _sanitize_wall_time(wall_times[0])
+            _submit_batch(log_path, wall_times, batch_key)
+            for wt in wall_times:
+                inflight_wts.add(wt)
 
-        batch = sorted(unprocessed)[:batch_size]
-        wall_times = [wt for wt, _ in batch]
-        batch_key = _sanitize_wall_time(wall_times[0])
-        _submit_batch(log_path, wall_times, batch_key)
-        for wt in wall_times:
-            inflight_wts.add(wt)
+            snapshots_data = []
+            for wt, sf in batch:
+                try:
+                    data = json.load(open(sf, encoding="utf-8"))
+                    snap = data.get("snapshots", [{}])[0] if data.get("snapshots") else {}
+                    snapshots_data.append(snap)
+                except Exception:
+                    snapshots_data.append({})
 
-        snapshots_data = []
-        for wt, sf in batch:
-            try:
-                data = json.load(open(sf, encoding="utf-8"))
-                snap = data.get("snapshots", [{}])[0] if data.get("snapshots") else {}
-                snapshots_data.append(snap)
-            except Exception:
-                snapshots_data.append({})
+            # ★ 调度异步 batch 处理（fire-and-forget；不阻塞 polling loop）
+            pending_tasks.append(asyncio.create_task(_process_batch(batch_key, wall_times, snapshots_data)))
 
         ###############################################################################
         # ⚠️⚠️⚠️  P6 → P7 调用核心段（_process_batch） ⚠️⚠️⚠️
@@ -1124,15 +1314,17 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
                     # 🚨 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
                     #    P7 in-process 调用，跳过 HTTP — 详见上方注释块
                     if result.get("events"):
-                        # 透传当前 active job_id（per-job 模式）；无 active 时空串 → 回退到全局 A6Agent
-                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=_get_active_job_id()))
+                        # 透传当前 active job_id（per-job 模式由闭包 job_id 提供）；
+                        # 兼容旧 /api/agent/start 路径 → job_id="" → 回退全局 A6Agent
+                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=job_id))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
                     inflight_wts.discard(wt)
                     await _on_error(log_path, wt, e, 0)
 
-        pending_tasks.append(asyncio.create_task(_process_batch(batch_key, wall_times, snapshots_data)))
+        # 等待下一轮前先 sleep（让 scenario 有时间写入新 snapshot）
+        await asyncio.sleep(interval_sec)
 
     if pending_tasks:
         await asyncio.gather(*pending_tasks, return_exceptions=True)
@@ -1215,12 +1407,15 @@ async def _run_data_play_for_job(job_id: str, scenario: str, log_dir: str,
     await collector.stop()
 
 
-async def _run_agent_loop_for_job(job_id: str, interval_sec: int = 2,
+async def _run_agent_loop_for_job(job_id: str, interval_sec: int = 10,
                                    batch_size: int = 10):
     """per-job 版本：raw_event 写到 data/jobs/{job_id}/P6/
 
     A5Agent.raw_event_dir 显式指向 per-job 目录；
     其余逻辑复用 _run_agent_loop（trigger_a6_assessment 时透传当前 active job_id）。
+
+    退出条件：_active_jobs[job_id].status in (cancelled/error/completed)
+    或 _active_jobs[job_id] 不存在（被强制停掉）。
     """
     p6_dir = get_p6_log_dir(job_id)
     state = _active_jobs.get(job_id)
@@ -1230,7 +1425,18 @@ async def _run_agent_loop_for_job(job_id: str, interval_sec: int = 2,
 
     # per-job A5Agent：raw_event 写到 data/jobs/{job_id}/P6/raw_event_*.json
     agent = A5Agent(collector=None, work_permit=WORK_PERMIT, raw_event_dir=p6_dir)
-    await _run_agent_loop(p6_dir, interval_sec=interval_sec, batch_size=batch_size, agent=agent)
+
+    # per-job 退出条件：job 被 cancel / error / 不在 _active_jobs 中
+    #   - "completed" 不算退出：agent_loop 是常驻服务,一个 job 跑完不应该让整个 loop 自杀
+    #     应当继续监听 _active_jobs 里其他 job / 后续新建的 job
+    #   - 真正的停止信号只有 ① 用户主动 cancel ② job 异常到 error ③ entry 被踢出 _active_jobs
+    def _running():
+        s = _active_jobs.get(job_id)
+        return s is not None and s.get("status") not in ("cancelled", "error")
+
+    await _run_agent_loop(p6_dir, interval_sec=interval_sec, batch_size=batch_size,
+                          agent=agent, running_predicate=_running,
+                          job_id=job_id)
 
 
 async def _stop_one_job_active(job_id: str, state: Dict[str, Any]):
@@ -1263,18 +1469,28 @@ async def start_scenario(body: dict = None):
     await _stop_all()
 
     scenario = (body or {}).get("scenario", "B") if body else "B"
-    log_dir = str(LOG_DIR)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    job_id = (body or {}).get("job_id", "") if body else ""
+    # job_id 传值 → 写到 data/jobs/{job_id}/P6/（per-job 模式）；
+    # 不传 → 保留旧行为写 A5/logs（向后兼容调试）
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return JSONResponse(content={"error": f"job_id 格式错误: {job_id}"}, status_code=400)
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = str(LOG_DIR)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     state.scenario = scenario
     state.log_dir = log_dir
     state.scenario_running = True
+    state.scenario_job_id = job_id or ""
 
     state.scenario_task = asyncio.create_task(_run_data_play(scenario, log_dir))
 
     return {
         "status": "started",
         "scenario": scenario,
+        "job_id": job_id,
         "log_dir": log_dir,
         "duration_sec": 30,
     }
@@ -1318,8 +1534,13 @@ async def stop_scenario():
 
 
 @app.get("/api/scenario/status")
-async def get_scenario_status():
-    log_dir = state.log_dir or str(LOG_DIR)
+async def get_scenario_status(job_id: Optional[str] = None):
+    # job_id 传值 → 读 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 回退 state.log_dir 或 LOG_DIR（向后兼容）
+    if job_id:
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = state.log_dir or str(LOG_DIR)
 
     current_sec = 0
     if state.scenario_running and state.collector:
@@ -1342,6 +1563,7 @@ async def get_scenario_status():
         "current_second": current_sec,
         "total_seconds": 30,
         "log_dir": log_dir,
+        "job_id": job_id or state.scenario_job_id,
         "cv_count": cv_count,
         "log_files": _count_log_files(log_dir),
     }
@@ -1350,20 +1572,53 @@ async def get_scenario_status():
 # Agent 控制
 @app.post("/api/agent/start")
 async def start_agent(body: dict = None):
+    # 跨模式保护：per-job 模式（/api/monitor/start）有 active job 在跑时，
+    # 禁止再启全局 agent loop —— 否则两个 loop 会竞争同一 per-job 目录，
+    # 导致 batch 切分不均匀（user 2026-08-20 反馈："开始监测"后又点"启动 Agent"
+    # 会启 2 个 loop → 5 批不均匀 2/9/9/9/1 而非 3 批 ×10）
+    async with _monitor_mutex:
+        for active_job_id, active_state in list(_active_jobs.items()):
+            if active_state.get("status") in ("starting", "agent_running", "playing"):
+                return JSONResponse(
+                    content={
+                        "error": (
+                            f"per-job 模式有 active job {active_job_id} 在跑，"
+                            f"请先停止监测（/api/monitor/stop）"
+                        )
+                    },
+                    status_code=400,
+                )
+
     if state.agent_running and state.agent_task:
-        return {"error": "Agent 已在运行中，请先停止"}, 400
+        return JSONResponse(content={"error": "Agent 已在运行中，请先停止"}, status_code=400)
 
     interval = (body or {}).get("interval_sec", 10)
     batch_size = (body or {}).get("batch_size", 10)
+    job_id = (body or {}).get("job_id", "") if body else ""
+
+    # job_id 传值 → 写到 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 保留旧行为写 A5/logs（向后兼容）
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return JSONResponse(content={"error": f"job_id 格式错误: {job_id}"}, status_code=400)
+        log_dir = get_p6_log_dir(job_id)
+    else:
+        log_dir = str(LOG_DIR)
 
     state.agent_interval = interval
     state.agent_batch_size = batch_size
     state.agent_running = True
+    state.agent_job_id = job_id or ""
 
-    log_dir = str(LOG_DIR)
     state.agent_task = asyncio.create_task(_run_agent_loop(log_dir, interval, batch_size))
 
-    return {"status": "started", "interval_sec": interval, "batch_size": batch_size, "log_dir": log_dir}
+    return {
+        "status": "started",
+        "interval_sec": interval,
+        "batch_size": batch_size,
+        "job_id": job_id,
+        "log_dir": log_dir,
+    }
 
 
 # ── per-job 监测端点（2026-08-19 新增；与 P1-P5 job 规范对齐）───────────────
@@ -1371,7 +1626,7 @@ class MonitorStartRequest(BaseModel):
     job_id: str
     scenario: str = "B"          # A/B/C/D/E
     duration_sec: int = 30
-    interval_sec: int = 2
+    interval_sec: int = 10
     batch_size: int = 10
     play_delay_sec: int = 5      # 用户要求：5 秒后播放 mock 数据
 
@@ -1382,13 +1637,7 @@ class MonitorStopRequest(BaseModel):
 
 @app.post("/api/monitor/start")
 async def api_monitor_start(req: MonitorStartRequest):
-    """启动监测的 HTTP 接口。
-
-    使用独立名称，避免覆盖上方供主工作流调用的 LangChain 工具
-    ``monitor_start``；否则 P6 执行时会拿到普通异步函数而无法调用
-    ``.invoke()``。
-    """
-    """前端「开始监测」按钮：等价于「点击开始agent → 5秒后播放mock数据」"""
+    """前端启动监测，并避免覆盖主工作流调用的 ``monitor_start`` 工具。"""
     print(f"[monitor_start] 进入: job_id={req.job_id}, scenario={req.scenario}, "
           f"play_delay_sec={req.play_delay_sec}")
 
@@ -1541,8 +1790,20 @@ async def stop_agent():
 
 
 @app.get("/api/agent/status")
-async def get_agent_status():
-    log_dir = str(LOG_DIR)
+async def get_agent_status(job_id: Optional[str] = None):
+    # job_id 传值 → 读 data/jobs/{job_id}/P6/（per-job）；
+    # 不传 → 回退 LOG_DIR（向后兼容）
+    if job_id:
+        log_dir = get_p6_log_dir(job_id)
+        # per-job 模式：running 标志读 per-job state 而不是全局 state.agent_running
+        # （全局标志只对 /api/agent/start 老路径有意义；per-job 用 _active_jobs[job_id].status）
+        job_state = _active_jobs.get(job_id, {})
+        job_status = job_state.get("status", "")
+        running_flag = job_status in ("starting", "agent_running", "playing")
+    else:
+        log_dir = str(LOG_DIR)
+        running_flag = state.agent_running
+        job_status = ""
     pending = _get_all_batches(Path(log_dir))
     done = sum(1 for v in pending.values() if v["status"] == "done")
     error = sum(1 for v in pending.values() if v["status"] == "error")
@@ -1551,9 +1812,11 @@ async def get_agent_status():
     total = len(pending)
 
     return {
-        "running": state.agent_running,
+        "running": running_flag,
+        "status": job_status,
         "interval_sec": state.agent_interval,
         "batch_size": state.agent_batch_size,
+        "job_id": job_id or state.agent_job_id,
         "pending": pending,
         "stats": {
             "total": total,
@@ -1567,9 +1830,20 @@ async def get_agent_status():
 
 
 @app.get("/api/agent/events")
-async def get_agent_events():
+async def get_agent_events(job_id: Optional[str] = None):
+    """读 A5 raw_event_*.json 列表。
+
+    job_id 传值时读 data/jobs/{job_id}/P6/raw_event_*.json（per-job 路径）；
+    不传时回退到 A5/logs（向后兼容 — 页面加载时默认显示全局历史事件）。
+    """
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return JSONResponse(content={"error": f"job_id 格式错误: {job_id}"}, status_code=400)
+        base = Path(get_p6_log_dir(job_id))
+    else:
+        base = LOG_DIR
     events = []
-    for f in sorted(Path(LOG_DIR).glob("raw_event_*.json")):
+    for f in sorted(base.glob("raw_event_*.json")):
         try:
             data = json.load(open(f, encoding="utf-8"))
             for ev in data.get("events", []):
@@ -1577,15 +1851,26 @@ async def get_agent_events():
                 events.append(ev)
         except Exception:
             pass
-    return {"events": events}
+    return {"events": events, "job_id": job_id, "base": str(base)}
 
 
 # 日志文件读取
 @app.get("/api/logs/{path:path}")
-async def get_log_file(path: str):
-    file_path = LOG_DIR / path
+async def get_log_file(path: str, job_id: Optional[str] = None):
+    """读取单文件（cv/sensor/position/snapshot/raw_event/...）。
+
+    job_id 传值时读 data/jobs/{job_id}/P6/{path}（per-job 路径）；
+    不传时回退到 A5/logs（向后兼容 — 页面加载时默认显示全局历史数据）。
+    """
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return JSONResponse(content={"error": f"job_id 格式错误: {job_id}"}, status_code=400)
+        base = get_p6_log_dir(job_id)
+    else:
+        base = str(LOG_DIR)
+    file_path = Path(base) / path
     if not file_path.exists() or not file_path.is_file():
-        return {"error": f"文件不存在: {path}"}, 404
+        return JSONResponse(content={"error": f"文件不存在: {path} (base={base})"}, status_code=404)
     try:
         with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -1595,10 +1880,21 @@ async def get_log_file(path: str):
 
 
 @app.get("/api/logs")
-async def list_log_files():
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+async def list_log_files(job_id: Optional[str] = None):
+    """列出日志目录下的文件，按前缀分组。
+
+    job_id 传值时列 data/jobs/{job_id}/P6/（per-job 路径）；
+    不传时回退到 A5/logs（向后兼容 — 页面加载时默认显示全局历史数据）。
+    """
+    if job_id:
+        if not re.match(r"^\d{17}$", job_id):
+            return JSONResponse(content={"error": f"job_id 格式错误: {job_id}"}, status_code=400)
+        base = Path(get_p6_log_dir(job_id))
+    else:
+        base = LOG_DIR
+    base.mkdir(parents=True, exist_ok=True)
     result = {}
-    for f in sorted(LOG_DIR.iterdir()):
+    for f in sorted(base.iterdir()):
         if f.is_file():
             name = f.name
             if name.startswith("raw_event_"):
@@ -1626,14 +1922,23 @@ async def list_log_files():
 
 
 @app.post("/api/logs/clear")
-async def clear_logs():
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+async def clear_logs(body: dict):
+    """清空日志目录。
+
+    body.job_id 必传：data/jobs/{job_id}/P6/（per-job 路径）；
+    不传直接 400 报错（避免误清全局 A5/logs）。
+    """
+    job_id = (body or {}).get("job_id", "")
+    if not job_id or not re.match(r"^\d{17}$", job_id):
+        return JSONResponse(content={"error": "job_id 必传且须为 17 位数字"}, status_code=400)
+    base = Path(get_p6_log_dir(job_id))
+    base.mkdir(parents=True, exist_ok=True)
     count = 0
-    for f in LOG_DIR.iterdir():
+    for f in base.iterdir():
         if f.is_file():
             f.unlink()
             count += 1
-    return {"status": "cleared", "removed": count}
+    return {"status": "cleared", "removed": count, "job_id": job_id, "base": str(base)}
 
 
 # WebSocket（保留，向后兼容）
@@ -1753,7 +2058,7 @@ async def run_a5_monitoring(job_id: str, work_permit: dict, duration_sec: int = 
 
     await asyncio.gather(
         run_collector(),
-        _run_agent_loop(log_dir, interval_sec=2, batch_size=10),
+        _run_agent_loop(log_dir, interval_sec=10, batch_size=10),
     )
 
     log_path = Path(log_dir)
@@ -1800,6 +2105,67 @@ def map_a5_events_to_p6(raw_events: list, job_id: str) -> list:
 
 
 # ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P6 阶段执行入口：启动监测会话并收集候选事件。"""
+    from agents.workflow import (
+        add_job_log,
+        get_stage_result_path,
+        read_json_file,
+        write_json_file,
+    )
+    from agents.utils import get_stage_logger
+
+    log = get_stage_logger("P6")
+    log.log_enter(job_id)
+    result = {
+        "job_id": job_id,
+        "stage": "P6",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        p5_result = read_json_file(get_stage_result_path(job_id, "p5"))
+        task_id = p5_result.get("task_id", "")
+
+        monitor_result = json.loads(monitor_start.invoke({"task_id": task_id}))
+        log.log_tool_call("monitor_start", {"task_id": task_id}, monitor_result)
+        if "result" in monitor_result:
+            result["session_id"] = monitor_result["result"].get("session_id", "")
+
+        events_str = monitor_events.invoke({"task_id": task_id})
+        events = []
+        for line in events_str.strip().splitlines():
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        log.log_tool_call(
+            "monitor_events", {"task_id": task_id}, {"events_count": len(events)}
+        )
+
+        result["candidate_events"] = events
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception as exc:
+        log.log_error(job_id, exc)
+        result["error"] = str(exc)
+
+    write_json_file(get_stage_result_path(job_id, "p6"), result)
+    add_job_log(
+        job_id,
+        {"action": "execute_p6", "result": "success" if result["completed"] else "failed"},
+    )
+    log.log_exit(job_id, result)
+    return result
+
+
+# ============================================================
 # 启动入口
 # ============================================================
 
@@ -1812,69 +2178,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"A5 作业过程监测 P6 启动: http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-
-
-# ============================================================
-# 阶段执行入口
-# ============================================================
-
-def execute_stage(job_id: str) -> dict:
-    """P6 阶段执行入口：作业过程动态监测
-
-    读取 P5 结果中的 task_id，启动监测会话并获取事件
-    注意：P6 是 FastAPI 应用，实际监测逻辑通过独立服务运行
-    """
-    import json
-    import logging
-    from datetime import datetime, timezone
-
-    from .workflow import get_stage_result_path, read_json_file, write_json_file
-    from .utils import get_stage_logger, add_job_log
-
-    logger = logging.getLogger("p6_monitor_agent")
-    log = get_stage_logger("P6")
-    log.log_enter(job_id)
-
-    result = {
-        "job_id": job_id,
-        "stage": "P6",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "completed": False,
-    }
-
-    try:
-        # 1. 读取前置阶段结果
-        p5_result = read_json_file(get_stage_result_path(job_id, "p5"))
-        task_id = p5_result.get("task_id", "")
-        logger.info(f"[P6] task_id={task_id}")
-
-        # 2. 调用本模块工具
-        logger.info(f"[P6] 调用 monitor_start: task_id={task_id}")
-        monitor_result = json.loads(monitor_start.invoke(task_id))
-        log.log_tool_call("monitor_start", {"task_id": task_id}, monitor_result)
-        if "result" in monitor_result:
-            result["session_id"] = monitor_result["result"].get("session_id", "")
-
-        logger.info(f"[P6] 调用 monitor_events: task_id={task_id}")
-        events_str = monitor_events.invoke(task_id)
-        events = []
-        for line in events_str.strip().split("\n"):
-            if line:
-                try:
-                    events.append(json.loads(line))
-                except:
-                    pass
-        log.log_tool_call("monitor_events", {"task_id": task_id}, {"events_count": len(events)})
-
-        result["candidate_events"] = events
-        result["completed"] = True
-        result["completed_at"] = datetime.now(timezone.utc).isoformat()
-
-    except Exception as e:
-        log.log_error(job_id, e)
-        result["error"] = str(e)
-
-    write_json_file(get_stage_result_path(job_id, "p6"), result)
-    add_job_log(job_id, {"action": "execute_p6", "result": "success" if result["completed"] else "failed"})
-    log.log_exit(job_id, result)
-    return result

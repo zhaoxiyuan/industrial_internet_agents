@@ -147,6 +147,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -541,7 +542,8 @@ def send_to_user(
 #   1. 业务端直接调飞书 ``POST /open-apis/cardkit/v1/cards/`` 创建卡片实体 → card_id
 #      （业务端不走 Gateway；cardkit 是飞书 OpenAPI，业务端可直调）
 #   2. 调 Gateway ``POST /v1/messages/send``（msg_type="interactive"），
-#      content = '{"card_id": "<card_id>"}'，透传到 im/v1/messages
+#      content = '{"type":"card","data":{"card_id":"<card_id>"}}'
+#      作为卡片实体引用透传到 im/v1/messages
 #   3. 若带 --alert-id，把 alert_id → card_id 映射落盘 data/feishu_card_index.json
 #      （callback 时反查，用于异步更新卡片）
 #
@@ -551,6 +553,9 @@ def send_to_user(
 DEFAULT_CARD_TITLE: str = "告警通知"
 # alert_id 缺省时使用的 JSON key 哨兵（前端按此判断是否写入 value）
 _ALERT_ID_KEY: str = "alert_id"
+# 2026-08-20 新增：job_id 缺省时使用的 JSON key 哨兵（与 _ALERT_ID_KEY 同模式）
+# 用于卡片回调时反查主流程作业 ID（不依赖 alert_id 反查 card_index 即可定位 job）
+_JOB_ID_KEY: str = "job_id"
 
 
 def parse_options(raw_options: Optional[List[str]]) -> List[Tuple[str, str]]:
@@ -623,6 +628,7 @@ def build_feishu_card(
     options: List[Tuple[str, str]],
     title: str = DEFAULT_CARD_TITLE,
     alert_id: Optional[str] = None,
+    job_id: Optional[str] = None,    # 2026-08-20 新增：主流程作业 ID（callback 反查用）
 ) -> Dict[str, Any]:
     """构建飞书交互式卡片 JSON dict（不调用网络；Card 2.0 schema）。
 
@@ -633,8 +639,9 @@ def build_feishu_card(
         - ``body.elements[0]``: ``markdown``，正文 text（Card 2.0 用 markdown 而非 div+lark_md）
         - ``body.elements[1]``（仅 options 非空时追加）: ``column_set`` 横向布局，
           每个按钮一个 column；columns 默认等宽 stretch
-        - 每个按钮 ``value``: JSON 字符串 ``{"action": "...", "alert_id": "..."}``
-          （Card 2.0 强制 value 是 string；alert_id 缺省时不写该字段）
+        - 每个按钮 ``value``: JSON 字符串
+          ``{"action": "...", "alert_id": "...", "job_id": "..."}``
+          （Card 2.0 强制 value 是 string；alert_id / job_id 缺省时不写该字段）
 
     Args:
         text: 卡片正文（飞书 ``markdown``，支持 Markdown 语法）。
@@ -643,6 +650,9 @@ def build_feishu_card(
         title: 卡片标题；空字符串回落到默认 "告警通知"。
         alert_id: 业务 ID；会写入每个按钮的 ``value`` JSON 字符串里，
             缺省时省略。
+        job_id: 2026-08-20 新增：主流程作业 ID；与 alert_id 同模式写入 value；
+            卡片回调时由 feishu_card._extract_action 反查，按钮点击后由
+            CardActionAgent 用 job_id 定位 per-job working_memory.json。
 
     Returns:
         Card JSON dict（可直接 ``json.dumps(..., ensure_ascii=False)``）。
@@ -660,6 +670,9 @@ def build_feishu_card(
     # alert_id 空白视为 None（不写入 value）
     has_alert_id = bool(alert_id and str(alert_id).strip())
     clean_alert_id = str(alert_id).strip() if has_alert_id else None
+    # 2026-08-20 新增：job_id 同模式处理
+    has_job_id = bool(job_id and str(job_id).strip())
+    clean_job_id = str(job_id).strip() if has_job_id else None
 
     elements: List[Dict[str, Any]] = [
         {
@@ -675,6 +688,9 @@ def build_feishu_card(
             value_dict: Dict[str, str] = {"action": action}
             if has_alert_id:
                 value_dict[_ALERT_ID_KEY] = clean_alert_id
+            # 2026-08-20 新增：job_id 写入 value（callback 反查用）
+            if has_job_id:
+                value_dict[_JOB_ID_KEY] = clean_job_id
             columns.append({
                 "tag": "column",
                 "width": "auto",
@@ -722,13 +738,14 @@ def send_to_group_card(
     alert_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
 ) -> SendMessageResult:
-    """发送飞书交互式卡片到指定群（V5 cardkit 路径）。
+    """发送飞书交互式卡片到指定群（Card 2.0 cardkit 实体路径）。
 
     V5 流程（严格按 docs/飞书卡片教程/）：
         1. 业务端直接调飞书 ``POST /open-apis/cardkit/v1/cards/`` 创建卡片实体 → card_id
            （业务端不走 Gateway；cardkit 是飞书 OpenAPI，业务端可直调）
         2. 调 Gateway ``POST /v1/messages/send``（msg_type="interactive"），
-           content = ``'{"card_id": "<card_id>"}'``，透传到 im/v1/messages
+           content 使用飞书卡片实体引用 envelope：
+           ``{"type":"card","data":{"card_id":"<card_id>"}}``
         3. 若带 ``alert_id``，把 alert_id → card_id 映射落盘
            data/feishu_card_index.json（callback 时反查，用于异步更新卡片）
 
@@ -771,16 +788,42 @@ def send_to_group_card(
         resolved_chat_id = chat_id.strip()
         log_tag = f"chat_id={resolved_chat_id}（直传，不走 GROUP_MAP）"
 
-    # Step 1: im/v1/messages 发消息（content = Card 2.0 JSON 字符串，inline 渲染）
-    # 注：原计划走 cardkit 创建 card_id 再引用，但飞书 im/v1/messages 对
-    # cardkit-created 卡片返回 200621 "parse card json err"（im 端无法渲染
-    # cardkit 存储格式），实测 inline 直接传 Card 2.0 JSON 字符串 OK。
-    # Callback 路径仍可通过返回新 Card 2.0 JSON 实时替换（飞书原生行为）。
-    content_str = json.dumps(card, ensure_ascii=False)
+    # CardKit 实体只能由创建它的应用更新。把 Gateway 默认账号在发送时解析并固化，
+    # 确保 create → send → callback update 全链路使用同一个飞书应用身份。
+    effective_account_id = (
+        (account_id or "").strip()
+        or os.environ.get("CG_DEFAULT_ACCOUNT_ID", "").strip()
+        or "default"
+    )
 
-    # Gateway 校验 text 非空（即便 msg_type=interactive + content 非空），
-    # 这里把卡片首段 markdown 内容同步塞给 text 作为兼容性兜底（飞书 im
-    # 渲染以 content 中的 Card 2.0 为准；text 仅用于网关通过校验）。
+    # 与 cc connect 的飞书实现保持同一协议：先创建 CardKit 实体，再将实体引用
+    # 作为 interactive 消息发送。此前仅传 {"card_id":"..."} 会被 IM API 当成
+    # 不完整卡片 JSON，从而返回 200621 parse card json err。
+    existing_card = feishu_card_api.lookup_card_id(str(alert_id)) if alert_id else None
+    card_id = str((existing_card or {}).get("card_id") or "").strip()
+    if not card_id:
+        card_id = feishu_card_api.create_card_entity(
+            card,
+            account_id=effective_account_id,
+        )
+        # 先登记 card_id，再调用 Gateway。即使发送响应在网络中丢失，重试也会复用
+        # 同一实体和 Gateway idempotency_key，不会因重复创建实体产生 UUID conflict。
+        if alert_id:
+            feishu_card_api.register_card(
+                str(alert_id),
+                card_id,
+                account_id=effective_account_id,
+                sequence=0,
+                card_json=card,
+            )
+    card_reference = {
+        "type": "card",
+        "data": {"card_id": card_id},
+    }
+    content_str = json.dumps(card_reference, ensure_ascii=False, separators=(",", ":"))
+
+    # Gateway 当前仍要求 text/content 至少一个非空；正文仅用于兼容和审计，
+    # 飞书实际渲染使用 content 中的 card_id 实体引用。
     body_elems = (card.get("body") or {}).get("elements") or []
     first_content = ""
     if isinstance(body_elems, list) and body_elems:
@@ -791,8 +834,8 @@ def send_to_group_card(
 
     logger.info(
         "[p8-notify] send_to_group_card 进入: %s alert_id=%s "
-        "idempotency_key=%s content_len=%d",
-        log_tag, alert_id, idempotency_key, len(content_str),
+        "idempotency_key=%s card_id=%s content_len=%d",
+        log_tag, alert_id, idempotency_key, card_id, len(content_str),
     )
     try:
         result = send_message(
@@ -802,7 +845,7 @@ def send_to_group_card(
             receive_id_type="chat_id",
             msg_type="interactive",
             content=content_str,
-            account_id=account_id,
+            account_id=effective_account_id,
             idempotency_key=idempotency_key,
         )
     except Exception as exc:
@@ -811,6 +854,18 @@ def send_to_group_card(
             log_tag, alert_id, exc,
         )
         raise
+
+    # 发送成功后补全 message_id。callback 只需要按 alert_id 反查 card_id，
+    # 即可 PUT 原位更新同一条消息，无需撤回和重发。
+    if alert_id:
+        feishu_card_api.register_card(
+            str(alert_id),
+            card_id,
+            account_id=effective_account_id,
+            message_id=result.platform_message_id,
+            sequence=0,
+            card_json=card,
+        )
 
     logger.info(
         "[p8-notify] send_to_group_card 响应: %s alert_id=%s status=%s "

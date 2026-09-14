@@ -162,8 +162,6 @@ def _build_docx_permit_result(application: dict, job_id: str) -> dict:
             "jsa_result": "job_type_rule_analysis",
         },
     }
-
-
 def _push_p1_tool_log(level: str, message: str, data: dict = None):
     """将 P1 工具日志绑定到当前作业，避免通配日志串到其他作业窗口。"""
     push_websocket_log(_p1_job_context.get(), level, "TOOL", message, data)

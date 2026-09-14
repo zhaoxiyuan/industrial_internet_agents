@@ -54,8 +54,8 @@ Card 2.0 schema（cardkit 创建 / 更新接口仅支持此结构）：
 cardkit 接口（教程：docs/飞书卡片教程/全量更新卡片.md）：
     POST /open-apis/cardkit/v1/cards/
     body = {
-        "card": {"type": "card_json", "data": "<stringified Card 2.0 JSON>"},
-        "uuid": "<可选幂等>"
+        "type": "card_json",
+        "data": "<stringified Card 2.0 JSON>"
     }
     resp = {"code": 0, "msg": "success", "data": {"card_id": "..."}}
 
@@ -89,9 +89,11 @@ import re
 import threading
 import time
 import uuid as _uuid
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 from dotenv import load_dotenv
@@ -131,7 +133,18 @@ _ACTION_LABELS: Dict[str, str] = {
     "cancel": "取消",
     "reject": "驳回",
     "delete": "删除",
+    "approve": "处理完成",
+    "escalate": "升级",
+    "resume": "恢复",
 }
+
+_TERMINAL_ACTIONS = {"false_alarm", "approve", "rectify", "reject", "escalate", "resume"}
+_FOLLOW_UP_ACTIONS = (
+    ("处理完成（归档）", "approve", "primary"),
+    ("驳回", "reject", "danger"),
+    ("升级", "escalate", "default"),
+    ("恢复", "resume", "default"),
+)
 
 # 模块级 requests.Session（连接复用，与 channel_gateway_client.py 同模式）
 _cg_session = requests.Session()
@@ -172,6 +185,7 @@ def register_card(
     account_id: Optional[str] = None,
     message_id: Optional[str] = None,
     sequence: Optional[int] = None,
+    card_json: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """注册 alert_id → card_id 映射；写入 data/feishu_card_index.json（原子写）。
 
@@ -189,6 +203,8 @@ def register_card(
             "sequence": int(sequence) if sequence is not None else int(existing.get("sequence", 0)),
             "created_at": existing.get("created_at") or datetime.now().isoformat(timespec="seconds"),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
+            # 保留原始正文，供第一次非终态点击后只替换按钮、不改显示内容。
+            "card_json": card_json if isinstance(card_json, dict) else existing.get("card_json"),
         }
         data[alert_id] = entry
         _save_index(data)
@@ -276,9 +292,17 @@ def _resolve_account_credentials(
         FeishuCardkitError: 三级查找都拿不到 app_id 或 app_secret 时抛 503。
     """
     # 账户级 env var key（按 feishu_config_app._account_id_to_env_suffix 规则）
+    # send_message(account_id=None) 会由 Gateway 使用 CG_DEFAULT_ACCOUNT_ID；
+    # CardKit 创建/更新必须与消息发送使用同一个应用身份，因此这里采用同样默认值。
+    resolved_account_id = (account_id or "").strip()
+    if not resolved_account_id or resolved_account_id.lower() == "default":
+        configured_default = os.environ.get("CG_DEFAULT_ACCOUNT_ID", "").strip()
+        if configured_default and configured_default.lower() != "default":
+            resolved_account_id = configured_default
+
     suffix: str = ""
-    if account_id:
-        s = re.sub(r"[^a-z0-9]+", "_", account_id.strip().lower()).strip("_")
+    if resolved_account_id:
+        s = re.sub(r"[^a-z0-9]+", "_", resolved_account_id.lower()).strip("_")
         suffix = s.upper() if s else ""
 
     if suffix:
@@ -296,7 +320,7 @@ def _resolve_account_credentials(
         return app_id, app_secret, domain
 
     raise FeishuCardkitError(
-        f"飞书账号凭证未配置（account_id={account_id!r}）。"
+        f"飞书账号凭证未配置（account_id={resolved_account_id or account_id!r}）。"
         "三级 fallback 都没找到 app_id + app_secret："
         f"账户级 FEISHU_{suffix or '<UPPER>'}_APP_ID/SECRET、"
         "顶层 FEISHU_APP_ID/SECRET。"
@@ -386,14 +410,12 @@ def create_card_entity(
     card_json: Dict[str, Any],
     *,
     account_id: Optional[str] = None,
-    op_uuid: Optional[str] = None,
 ) -> str:
     """POST /open-apis/cardkit/v1/cards/
 
     Args:
         card_json: Card 2.0 schema dict（必须含 ``schema: "2.0"``）。
         account_id: 飞书账号 ID；缺省走项目根 .env 默认账号。
-        op_uuid: 幂等 UUID；缺省自动生成。
 
     Returns:
         card_id（字符串）。
@@ -403,13 +425,10 @@ def create_card_entity(
     """
     app_id, app_secret, domain = _resolve_account_credentials(account_id)
     token = _get_tenant_access_token(app_id, app_secret, domain)
-    uuid_str = op_uuid or _uuid.uuid4().hex
-
-    url = f"{_domain_base(domain)}/open-apis/cardkit/v1/cards/"
+    url = f"{_domain_base(domain)}/open-apis/cardkit/v1/cards"
     body = {
         "type": "card_json",
         "data": _stringify_card(card_json),
-        "uuid": uuid_str,
     }
     try:
         resp = _cg_session.post(
@@ -487,8 +506,10 @@ def update_card_entity(
 
     url = f"{_domain_base(domain)}/open-apis/cardkit/v1/cards/{card_id}"
     body = {
-        "type": "card_json",
-        "data": _stringify_card(card_json),
+        "card": {
+            "type": "card_json",
+            "data": _stringify_card(card_json),
+        },
         "uuid": uuid_str,
         "sequence": int(sequence),
     }
@@ -563,9 +584,9 @@ def _action_label(action: Optional[str]) -> str:
 
 
 def _check_already_processed(alert_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """检查 alert_id 是否已被处置过（同 alert_id 二次点击返回 warning toast）。
+    """检查 alert_id 是否已经收到终态决策。
 
-    按 audit log 倒序扫描（最新在前），找到该 alert_id 的最早一条记录。
+    ack/handle 是第一阶段动作，不锁死卡片；只有终态动作才阻止再次决策。
     """
     if not alert_id:
         return None
@@ -584,7 +605,11 @@ def _check_already_processed(alert_id: Optional[str]) -> Optional[Dict[str, Any]
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(record, dict) and record.get("alert_id") == alert_id:
+        if (
+            isinstance(record, dict)
+            and record.get("alert_id") == alert_id
+            and record.get("action") in _TERMINAL_ACTIONS
+        ):
             return record
     return None
 
@@ -656,6 +681,9 @@ def _extract_action(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "action": action,
         "alert_id": (value.get("alert_id") or "").strip() or None,
+        # 2026-08-20 新增：卡片 value.job_id 透传（主流程作业 ID；callback 反查用）
+        # 旧卡片无该字段 → 返 None（向后兼容；仅走审计 + 视觉替换，不调 CardActionAgent）
+        "job_id": (value.get("job_id") or "").strip() or None,
         "button_text": button_text or None,
         "operator_open_id": open_id,
         "operator_name": operator_name or None,
@@ -670,6 +698,7 @@ def _build_processed_card(
     button_text: str,
     operator_name: Optional[str],
     processed_at: str,
+    job_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """生成「已处置」替换卡（Card 2.0 schema）—— 群里所有人看到的卡片会被替换成这个。
 
@@ -682,148 +711,330 @@ def _build_processed_card(
     operator_display = operator_name or "未知"
     alert_display = alert_id or "未知告警"
 
+    visual = {
+        "approve": ("green", "处理完成（已归档）"),
+        "rectify": ("green", "整改完成（已归档）"),
+        "reject": ("carmine", "已驳回"),
+        "escalate": ("orange", "已升级"),
+        "resume": ("blue", "已恢复"),
+        "false_alarm": ("grey", "已标记误报（已归档）"),
+    }
+    template, status_title = visual.get(action, ("green", f"已处置 · {label}"))
+    elements = [
+        {
+            "tag": "markdown",
+            "content": (
+                f"**告警 ID**：`{alert_display}`\n"
+                f"**处理结果**：{label}\n"
+                f"**处理人**：{operator_display}\n"
+                f"**处理时间**：{processed_at}"
+            ),
+        },
+        {"tag": "hr"},
+        {"tag": "markdown", "content": f"✅ 本告警状态已更新为：**{status_title}**。"},
+    ]
+    if job_id:
+        elements.append({
+            "tag": "action",
+            "actions": [{
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "查看信息"},
+                "type": "default",
+                "width": "fill",
+                "behaviors": [{"type": "open_url", "default_url": _detail_url(job_id, alert_id)}],
+            }],
+        })
     return {
         "schema": "2.0",
         "header": {
-            "template": "green",  # 绿色=已处置
+            "template": template,
             "title": {
                 "tag": "plain_text",
-                "content": f"已处置 · {label}",
+                "content": status_title,
             },
         },
-        "body": {
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": (
-                        f"**告警 ID**：`{alert_display}`\n"
-                        f"**处理结果**：{label}\n"
-                        f"**处理人**：{operator_display}\n"
-                        f"**处理时间**：{processed_at}"
-                    ),
-                },
-                {"tag": "hr"},
-                {
-                    "tag": "markdown",
-                    "content": (
-                        "✅ 本告警已处置完毕，群内卡片已锁定。"
-                        "如需重新发起处置，请联系值班管理员。"
-                    ),
-                },
-            ],
-        },
+        "body": {"elements": elements},
     }
+
+
+def _detail_url(job_id: Optional[str], alert_id: Optional[str]) -> str:
+    """生成“查看信息”跳转地址；公网部署可用 P8_DETAIL_BASE_URL 覆盖。"""
+    base = os.environ.get("P8_DETAIL_BASE_URL", "http://127.0.0.1:8080").strip().rstrip("/")
+    url = base + "/p8_detail.html"
+    if job_id:
+        url += "?job_id=" + quote(job_id, safe="")
+    if alert_id:
+        url += ("&" if "?" in url else "?") + "p8_job_id=" + quote(alert_id, safe="")
+    return url
+
+
+def _button(label: str, action: str, button_type: str, alert_id: str, job_id: str) -> Dict[str, Any]:
+    value = json.dumps(
+        {"action": action, "alert_id": alert_id, "job_id": job_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": label},
+        "type": button_type,
+        "value": value,
+        "width": "fill",
+    }
+
+
+def _build_follow_up_card(
+    *,
+    original_card: Optional[Dict[str, Any]],
+    alert_id: str,
+    job_id: str,
+) -> Dict[str, Any]:
+    """保留原卡内容，只把按钮区替换为第二阶段决策及 URL 跳转按钮。"""
+    card = deepcopy(original_card) if isinstance(original_card, dict) else {
+        "schema": "2.0",
+        "header": {"template": "orange", "title": {"tag": "plain_text", "content": "告警处理中"}},
+        "body": {"elements": [{"tag": "markdown", "content": f"**告警 ID**：`{alert_id}`"}]},
+    }
+    card["schema"] = "2.0"
+    body = card.setdefault("body", {})
+    elements = body.setdefault("elements", [])
+    # 原发送卡的交互区是 column_set；正文等其他元素保持原样。
+    elements[:] = [e for e in elements if not (isinstance(e, dict) and e.get("tag") in {"action", "column_set"})]
+
+    columns = []
+    for label, action, button_type in _FOLLOW_UP_ACTIONS:
+        columns.append({
+            "tag": "column", "width": "weighted", "weight": 1,
+            "vertical_align": "center",
+            "elements": [_button(label, action, button_type, alert_id, job_id)],
+        })
+    elements.append({"tag": "column_set", "flex_mode": "stretch", "columns": columns})
+    # Card 2.0 URL 行为：只跳转，不产生 card.action.trigger 回调。
+    elements.append({
+        "tag": "action",
+        "actions": [{
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "查看信息"},
+            "type": "default",
+            "width": "fill",
+            "behaviors": [{"type": "open_url", "default_url": _detail_url(job_id, alert_id)}],
+        }],
+    })
+    return card
 
 
 # ============================================================
 # 段 4: 业务编排（公开 API）— process_card_callback
 # ============================================================
 
-def _delete_feishu_message(message_id: str, account_id: Optional[str]) -> bool:
-    """直接调飞书 ``DELETE /open-apis/im/v1/messages/{message_id}`` 删除指定消息。
-
-    用于方案 A「删除原卡片 + 重发新卡片」流程：先删掉群里的红色告警卡，
-    再在同一群重发绿色"已处置"卡，达成视觉替换（避开不稳定实时 card 替换）。
-
-    Returns:
-        True=删除成功；False=失败（会打 logger.exception，不抛异常）。
-    """
-    try:
-        # 默认走 P8 账号（项目根 .env 配的是 FEISHU_P8_* 账户级 env var，
-        # 没有顶层 FEISHU_APP_ID/SECRET；显式传 "P8" 命中三级 fallback 第一档）
-        app_id, app_secret, domain = _resolve_account_credentials(account_id or "P8")
-        token = _get_tenant_access_token(app_id, app_secret, domain)
-        url = f"{_domain_base(domain)}/open-apis/im/v1/messages/{message_id}"
-        resp = _cg_session.delete(url, headers={"Authorization": f"Bearer {token}"})
-        try:
-            body = resp.json()
-        except Exception:
-            body = {"raw": resp.text[:200]}
-        if resp.status_code == 200 and body.get("code") in (0, None):
-            logger.info(
-                "[feishu-card] 删除消息成功 message_id=%s account_id=%s",
-                message_id, account_id,
-            )
-            return True
-        logger.warning(
-            "[feishu-card] 删除消息失败 message_id=%s status=%s code=%s msg=%s",
-            message_id, resp.status_code, body.get("code"), body.get("msg"),
-        )
-        return False
-    except Exception:
-        logger.exception("[feishu-card] 删除消息异常 message_id=%s", message_id)
-        return False
-
-
-def _replace_card_async(
+def _patch_feishu_message(
+    message_id: str,
+    card_json: Dict[str, Any],
     *,
-    alert_id: Optional[str],
-    chat_id: Optional[str],
-    message_id: Optional[str],
-    processed_card: Dict[str, Any],
     account_id: Optional[str] = None,
 ) -> None:
-    """方案 A 异步替换卡片：先删除原卡片消息，再在同一群重发"已处置"卡。
+    """使用 IM Message Patch 原位更新 inline interactive 卡片。
 
-    流程（替代之前的 cardkit update_card_entity —— 在我们 P8 app 上 im/v1/messages
-    对 cardkit 创建的卡片引用返回 200621，所以 cardkit+im 官方路径不可用；
-    此外飞书 callback 实时返回 card 让客户端替换的协议会触发 2026072 报错）。
-
-    daemon 线程 fire-and-forget：失败仅写 logger.exception，不影响已返回的 toast 响应。
+    这是旧 inline 卡片的兼容路径；新发送的 CardKit 实体卡优先走
+    :func:`update_card_entity`。两条路径都保留原 ``message_id``，不会撤回或重发。
     """
-    def _run() -> None:
-        # 1) 删除原卡片（message_id 缺失时跳过；通常 callback payload 必带）
-        if message_id:
-            _delete_feishu_message(message_id, account_id)
-        else:
+    app_id, app_secret, domain = _resolve_account_credentials(account_id)
+    token = _get_tenant_access_token(app_id, app_secret, domain)
+    url = f"{_domain_base(domain)}/open-apis/im/v1/messages/{message_id}"
+    try:
+        resp = _cg_session.patch(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": _stringify_card(card_json)},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise FeishuCardkitError(
+            f"patch message 网络失败: {exc}", http_status=0,
+        ) from exc
+    try:
+        result = resp.json()
+    except ValueError as exc:
+        raise FeishuCardkitError(
+            f"patch message 响应非 JSON: {exc}", http_status=resp.status_code,
+        ) from exc
+    if resp.status_code != 200 or result.get("code", -1) != 0:
+        raise FeishuCardkitError(
+            f"patch message 失败: code={result.get('code')} msg={result.get('msg')}",
+            code=result.get("code"),
+            http_status=resp.status_code,
+            details=result,
+        )
+
+
+def _update_card_in_place(
+    *,
+    alert_id: str,
+    message_id: Optional[str],
+    processed_card: Dict[str, Any],
+) -> None:
+    """按发送时保存的 handle 原位更新卡片，绝不撤回或重发。
+
+    CardKit 实体卡使用全量 PUT；历史 inline 卡片或索引缺失时使用消息 PATCH。
+    对飞书交互窗口错误 200810 做有限退避，等待 callback 结束后再更新。
+    """
+    entry = lookup_card_id(alert_id) or {}
+    card_id = str(entry.get("card_id") or "").strip()
+    tracked_message_id = str(message_id or entry.get("message_id") or "").strip()
+    account_id = entry.get("account_id")
+
+    if not card_id:
+        if not tracked_message_id:
             logger.warning(
-                "[feishu-card] 重发跳过删除: alert_id=%s message_id 为空",
+                "[feishu-card] 原位更新跳过: alert_id=%s 无 card_id/message_id",
                 alert_id,
             )
-
-        # 2) 重发"已处置"卡（chat_id 缺失时跳过）
-        if not chat_id:
-            logger.warning(
-                "[feishu-card] 重发跳过: alert_id=%s chat_id 为空", alert_id,
-            )
             return
+        _patch_feishu_message(
+            tracked_message_id,
+            processed_card,
+            account_id=account_id,
+        )
+        logger.info(
+            "[feishu-card] inline 卡片原位 PATCH 成功 alert_id=%s message_id=%s",
+            alert_id, tracked_message_id,
+        )
+        return
+
+    sequence = int(entry.get("sequence") or 0) + 1
+    retry_delays = (0.25, 0.75, 1.5, 3.0)
+    for attempt, delay in enumerate(retry_delays, start=1):
+        if delay:
+            time.sleep(delay)
         try:
-            # 延迟 import 避免循环依赖
-            from agents.channel_gateway_client import send_message
-
-            # Gateway 校验 text 非空：取 processed_card 第一段 markdown 兜底
-            body_elems = (processed_card.get("body") or {}).get("elements") or []
-            text_for_gateway = "[已处置]"
-            if isinstance(body_elems, list) and body_elems:
-                first_el = body_elems[0]
-                if isinstance(first_el, dict):
-                    text_for_gateway = str(first_el.get("content", "") or "")[:200] or "[已处置]"
-
-            content_str = json.dumps(processed_card, ensure_ascii=False)
-            result = send_message(
-                text=text_for_gateway,
-                channel="feishu",
-                account_id=account_id or "P8",
-                conversation_id=chat_id,
-                receive_id_type="chat_id",
-                msg_type="interactive",
-                content=content_str,
-                idempotency_key=f"replaced-{alert_id}" if alert_id else None,
+            update_card_entity(
+                card_id,
+                processed_card,
+                sequence=sequence,
+                account_id=account_id,
+            )
+            register_card(
+                alert_id,
+                card_id,
+                account_id=account_id,
+                message_id=tracked_message_id or None,
+                sequence=sequence,
             )
             logger.info(
-                "[feishu-card] 重发已处置卡成功 alert_id=%s chat_id=%s "
-                "new_message_id=%s status=%s",
-                alert_id, chat_id,
-                getattr(result, "platform_message_id", None),
-                getattr(result, "status", None),
+                "[feishu-card] CardKit 原位更新成功 alert_id=%s card_id=%s "
+                "message_id=%s sequence=%d",
+                alert_id, card_id, tracked_message_id or None, sequence,
+            )
+            return
+        except FeishuCardkitError as exc:
+            if exc.code == 200810 and attempt < len(retry_delays):
+                logger.info(
+                    "[feishu-card] 卡片仍在交互中，稍后重试 alert_id=%s attempt=%d",
+                    alert_id, attempt,
+                )
+                continue
+            raise
+
+
+def _handle_card_action_with_llm_async(
+    *,
+    alert_id: Optional[str],
+    action: Optional[str],
+    button_text: Optional[str],
+    operator_open_id: Optional[str],
+    operator_name: Optional[str],
+    job_id: Optional[str],
+    message_id: Optional[str],
+    processed_card: Dict[str, Any],
+) -> None:
+    """按钮点击后异步调 CardActionAgent 决定 P8_job 状态变更（2026-08-20 新增）。
+
+    daemon 线程 fire-and-forget：
+    - 失败仅 ``logger.exception``，不影响已返回的 toast 响应
+    - ``job_id`` 缺失（旧卡片无 job_id 字段）→ 跳过（向后兼容）
+    - CardActionAgent 成功返回后才原位更新卡片，避免视觉结果先于业务状态
+
+    链路：
+
+    ::
+
+        process_card_callback
+          └── _handle_card_action_with_llm_async (daemon, 本函数)
+                ├── CardActionAgent → apply_card_action → 持久化 P8 状态
+                └── _update_card_in_place
+                     ├── CardKit PUT（实体卡）
+                     └── IM Message PATCH（历史 inline 卡片）
+    """
+    def _run() -> None:
+        # 1. 前置校验：job_id 缺失 → 跳过（向后兼容旧卡片）
+        if not job_id:
+            logger.info(
+                "[feishu-card] card-action-llm 跳过: action.value 缺 job_id"
+                " (alert_id=%s action=%s)",
+                alert_id, action,
+            )
+            return
+        if not alert_id or not action:
+            logger.info(
+                "[feishu-card] card-action-llm 跳过: alert_id/action 为空"
+                " (job_id=%s)",
+                job_id,
+            )
+            return
+
+        # 2. 构造 user_ctx（最简化；不耦合 chat_reply / 不读 FEISHU_USER_MAP）
+        #    说明：CardActionAgent 不需要 chat_reply 路径下的复杂 user_ctx；
+        #    operator_name 由飞书 callback payload 直接透传，无需再查表。
+        user_ctx = {
+            "role": "未识别用户",
+            "name": operator_name or "未知",
+            "open_id": operator_open_id or "",
+        }
+
+        # 3. 拼 user message（LLM 解析 + 工具调用输入）
+        msg = (
+            f"[card_click] alert_id={alert_id} action={action} "
+            f"button_text={button_text or ''} "
+            f"operator_open_id={operator_open_id or ''} "
+            f"operator_name={operator_name or ''} "
+            f"job_id={job_id}"
+        )
+
+        # 4. 调 CardActionAgent（失败吞掉，logger.exception）
+        try:
+            # 延迟 import 避免循环（feishu_card → agents → ...）
+            from A7.middleware.p8_card_action_agent import run_card_action_agent
+            run_card_action_agent(msg, user_ctx=user_ctx, job_id=job_id)
+            logger.info(
+                "[feishu-card] card-action-llm 完成 alert_id=%s action=%s job_id=%s",
+                alert_id, action, job_id,
+            )
+
+            # 保持 P8 原有业务逻辑：Agent/状态机先完成，再把同一张飞书卡片更新为终态。
+            # 更新失败只影响卡片展示，不回滚已经落盘的 P8 业务状态。
+            entry = lookup_card_id(alert_id) or {}
+            next_card = processed_card
+            if action in {"ack", "handle"}:
+                next_card = _build_follow_up_card(
+                    original_card=entry.get("card_json"),
+                    alert_id=alert_id,
+                    job_id=job_id,
+                )
+            _update_card_in_place(
+                alert_id=alert_id,
+                message_id=message_id,
+                processed_card=next_card,
             )
         except Exception:
-            logger.exception("[feishu-card] 重发已处置卡失败 alert_id=%s", alert_id)
+            logger.exception(
+                "[feishu-card] card-action 或原位更新失败 alert_id=%s action=%s",
+                alert_id, action,
+            )
 
     t = threading.Thread(
         target=_run,
         daemon=True,
-        name=f"feishu-card-replace-{alert_id or 'unknown'}",
+        name=f"feishu-card-action-llm-{alert_id or 'unknown'}",
     )
     t.start()
 
@@ -831,12 +1042,12 @@ def _replace_card_async(
 def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
     """处理一个飞书 Card 按钮点击 payload，返回回给飞书的完整响应体。
 
-    V5 行为（方案 A：删除 + 重发）：
+    行为（CardKit 实体卡 + 原位更新）：
         1. ``url_verification`` 挑战 → ``{"challenge": "..."}``
         2. 入参非法（缺 event/action.value）→ ``{"status": "error", "error": "..."}``
         3. 幂等命中（同 alert_id 已处置）→ ``{"toast": {"type": "warning", "content": "..."}}``
         4. 首次成功：写审计日志 + 同步返回 ``{"toast": {"type": "success"}}``
-           + daemon 线程**异步**删原卡 + 重发绿色"已处置"卡（飞书 callback 2s 内必须返回）。
+           + daemon 线程执行 P8 CardActionAgent；成功后 PUT/PATCH 原位更新同一张卡。
 
     Args:
         payload: 飞书 card.action.trigger 回调 payload dict。
@@ -847,17 +1058,11 @@ def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
         见 docs/飞书卡片教程/，官方只支持 toast 响应）。
 
     Note:
-        为什么不调 cardkit 全量更新（PUT /cardkit/v1/cards/{card_id}）：
-            - 需要 send_to_group_card 走 cardkit create + im(card_id) 渲染链路，
-              但 P8 app 实测 im 对 cardkit 创建卡片返回 200621 "parse card json err"，
-              此官方路径在生产不可用。
-            - cardkit update 只能改 cardkit 创建的卡片，改不了 inline 渲染的消息。
-        为什么不用 callback 实时返回 card 字段：
-            - 飞书客户端渲染会失败（2026072），用户看到"出错了"+ 卡片无变化。
-        方案 A（删除 + 重发）：
-            - DELETE /im/v1/messages/{message_id} 删原卡片
-            - POST /im/v1/messages 用 inline Card 2.0 重发绿色"已处置"卡
-            - 用户感知 = "样式变绿 + 按钮消失 + 显示处理人/决策"。
+        更新策略：
+            - 新卡片按 cc connect 的协议使用 card_id 引用发送，callback 后走
+              PUT /cardkit/v1/cards/{card_id}。
+            - 历史 inline 卡片降级走 PATCH /im/v1/messages/{message_id}。
+            - 两条路径均保留原 message_id，不撤回、不产生新消息。
     """
     # 0. 入参兜底：非 dict / None 一律视为非法（飞书侧不应触发，防御性）
     if not isinstance(payload, dict):
@@ -893,7 +1098,7 @@ def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    # 4. 首次成功：写审计 + 构造替换卡（异步：删除原卡 + 重发新卡）
+    # 4. 首次成功：写审计 + 构造终态卡
     received_at = datetime.now().isoformat(timespec="seconds")
     record = {
         "received_at": received_at,
@@ -909,13 +1114,18 @@ def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
         button_text=info["button_text"] or "",
         operator_name=info["operator_name"],
         processed_at=received_at,
+        job_id=info["job_id"],
     )
 
-    # 异步执行方案 A（不阻塞 callback 响应；飞书 2s 超时）。
-    # 失败仅写 logger.exception，**不影响**已返回的 toast 响应。
-    _replace_card_async(
+    # 异步调 CardActionAgent 触发 P8_job 状态变更；完成后原位更新同一张卡。
+    # 不阻塞 callback 的 2s 响应窗口，也不再撤回/重发消息。
+    _handle_card_action_with_llm_async(
         alert_id=info["alert_id"],
-        chat_id=info["open_chat_id"],
+        action=info["action"],
+        button_text=info["button_text"],
+        operator_open_id=info["operator_open_id"],
+        operator_name=info["operator_name"],
+        job_id=info["job_id"],
         message_id=info["message_id"],
         processed_card=processed_card,
     )

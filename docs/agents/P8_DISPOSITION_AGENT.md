@@ -19,17 +19,24 @@
 
 | 函数 | 说明 |
 |------|------|
-| `run_disposition_agent(message)` | 运行 P8 Agent |
-| `disposition_demo(message, history)` | Gradio ChatInterface 兼容格式 |
+| `run_disposition_agent(message, *, thread_id="default", user_ctx=None, job_id=None)` | 运行 P8 Agent（基础版，无 HITL） |
+| `run_disposition_agent_with_hitl(message, *, thread_id="default", user_ctx=None, job_id=None)` | 运行 P8 Agent（生产用，HITL 中断） |
+| `disposition_demo(message, history=None, *, user_ctx=None, thread_id=None, job_id=None)` | Gradio ChatInterface / chat_reply 兼容格式 |
+
+> **`job_id` 参数（2026-08-20 新增）**：所有入口函数接受可选 `job_id`。
+> - **主流程**（`execute_p8` 调 `run_disposition_agent`）：传 `job_id`，启用 per-job 持久化（middleware 触发归档双写 + working_memory dump）
+> - **Bot 模式**（`chat_reply_handler` 调 `disposition_demo`）：从消息正文 `[job_id=...]` 前缀解析；无前缀 → `None`，**不**触发 per-job 持久化（临时会话无需持久化）
+>
+> 详细签名 / 入参 / 出参 / 默认值：[`P8_DISPOSITION_TOOLS.md` § 7 / § 8 / § 9 / § 10](P8_DISPOSITION_TOOLS.md)。
 
 ## 工具定义
 
 | 工具 | 触发条件 | 说明 | HITL |
 |------|----------|------|------|
-| `update_job` | 用户创建/更新处置任务 | 创建或更新 P8_job（reducer 按 pid upsert to working_memory） | ✅ 需要确认 |
+| `update_job` | 用户创建/更新处置任务 | 创建或更新 P8_job（reducer 按 pid upsert to working_memory）。**2026-08-20 新增 `job_id` 入参** —— P8Job 自带归属，archived dict 可按作业定位 / 清理 | ✅ 需要确认 |
 | `hitl_decide` | 用户进入 HITL 决策 | 强制 channel=HITL + status=waiting_decision | ✅ 需要确认 |
 | `read_p7_events` | 用户查看 P7 风险事件 | 读 `data/jobs/{job_id}/p7_result.json` | ❌ 自动批准 |
-| `notify_feishu` | channel=PUSH 决策完成后推送 | **飞书交互式卡片推送（2026-08-19 重构走 feishu_sender 封装）** | ✅ 需要确认 |
+| `notify_feishu` | channel=PUSH 决策完成后推送 | **飞书交互式卡片推送（2026-08-19 重构走 feishu_sender 封装）**。**2026-08-20 新增**：透传 `job_id` 给 `build_feishu_card`，写入每个按钮 `value.job_id`（callback 反查用） | ✅ 需要确认 |
 | `list_active_p8_jobs` | 用户列出当前 in-progress P8_job | 读 working_memory（仅占位，REST 走 `/api/jobs/{job_id}/working-memory`） | ❌ 自动批准 |
 | `recall_jobs` | 用户明确查询历史（"昨天那个事件最后怎么处理的"） | **长期记忆查询（罗盘长期记忆 LLM 入口）**：索引层子串搜索 + 数据层精确查询；两步走检索模式 | ❌ 自动批准（只读） |
 
@@ -195,13 +202,106 @@ LLM → notify_feishu(p8_job_id, title, body, ..., options=["已知悉:ack", "�
 
 数据源：[`A7/storage/p8_long_term.py`](../../A7/storage/p8_long_term.py)
 
-- **双层 JSON 持久化**：索引层（`p8_archive.index.json`，轻量）+ 数据层（`p8_archive.json`，完整）
-- **仓库级全局**：路径 `data/jobs/_long_term/`；跨 job_id 共享
-- **9 个公共函数**（详见源码顶部注释块）：
-  - 写入（仅 P8ArchiveMiddleware）：`save_archived_job`
+> **2026-08-20 重构**：删除全局 `data/jobs/_long_term/`；改为单一 per-job 真相源 `data/jobs/{job_id}/P8/archived.json`，跨 job 查询通过按需扫描聚合。
+
+- **per-job 真相源**：单一文件 `data/jobs/{job_id}/P8/archived.json`（dict 结构：`p8_job_id → archived dict`）
+- **跨 job 查询**：通过 `load_all_archived_jobs()` / `search_*` 按需扫描所有 per-job 文件聚合（O(J)，J ≤ 1000）
+- **无内存缓存 / 无 lock / 无 init**：每次读直接扫盘，避免跨进程 divergence
+- **索引条目按需构造**：`_make_index_entry()` 在 `search_archived_descriptions()` 时实时计算（不再单独持久化 index 文件）
+- **7 个公共函数**（详见源码顶部注释块）：
+  - 写入（仅 P8ArchiveMiddleware / CardActionAgent）：`save_archived_job(pid, job, job_id=...)` — **job_id 必填**
   - 数据层：`get_archived_job` / `search_archived_jobs` / `load_all_archived_jobs`
-  - 索引层：`get_index_entry` / `search_archived_descriptions` / `load_all_index_entries`
-  - 维护：`reset_archive`
+  - 索引层：`get_index_entry` / `search_archived_descriptions`
+  - 维护：`reset_archive(job_id=None)`
 - **索引条目格式**：`[<max_level>] <risk_basis 前 30 字>；<decision> by <decider> @ <archived_at 截 YYYY-MM-DD HH:MM>`
-- **线程安全**：模块级 `threading.Lock` 包裹所有 IO
-- **进程重启可恢复**：模块导入时自动 `_init()` 从 JSON 加载到内存
+
+## per-job 持久化（2026-08-20 新增）
+
+P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`，参考 [`docs/architecture.md` § 9](../../docs/architecture.md)）；P8 在 2026-08-20 跟进。
+P8 采用 **三层职责分离**：
+
+| 层 | 路径 | 写入入口 | 用途 |
+|----|------|---------|------|
+| **per-job 归档（唯一长期记忆）** | `data/jobs/{job_id}/P8/archived.json` | `save_archived_job(pid, job, job_id=...)` 必写 | 行业追溯 + 单 job 清理 + 跨 job 聚合读取（recall_jobs / load_all_archived_jobs） |
+| **per-job working_memory** | `data/jobs/{job_id}/P8/working_memory.json` | middleware.after_model dump + run_disposition_agent invoke end flush | MemorySaver 进程内数据持久化（重启不丢） |
+| **per-job 主流程结果** | `data/jobs/{job_id}/P8/result.json` | `execute_p8` 写 | 主流程结果（命名对齐 P6/P7 扁平风格） |
+
+### 设计要点
+
+1. **`P8Job.job_id` 字段（2026-08-20 新增）**：archived dict 自带归属，`data/jobs/{job_id}/P8/archived.json` 可独立反序列化
+3. **`MemorySaver` 进程内问题**：模块级 `_p8_checkpointer = MemorySaver()` 单例，重启即丢；通过**异步 dump**到 per-job JSON 兜底
+4. **Bot 模式不持久化**：`chat_reply_handler` 无 `[job_id=...]` 前缀 → `job_id=None` → middleware 跳过 per-job 写（save_archived_job 抛 ValueError 触发提前返回）+ working_memory 不 dump（临时会话无需持久化）
+5. **路径安全**：`^[A-Za-z0-9_-]+$` 正则校验 job_id；非法 → `ValueError`
+6. **cache key 隔离**：`create_disposition_agent(user_ctx, job_id)` cache key 拼 `job={job_id}` 防 working_memory 跨 job 串台
+
+### 持久化时序
+
+```
+1. create_disposition_agent(job_id=...)    → 启动时 lazy load working_memory.json 到 MemorySaver
+2. update_job 工具内部                       → per-job working_memory dump（reducer upsert by p8_job_id）
+3. P8ArchiveMiddleware.after_model(终态)    → save_archived_job 全局+per-job 双写 + dump working_memory
+4. run_disposition_agent invoke end         → flush_working_memory 从 MemorySaver 实时 dump
+5. execute_p8 end                          → 写 P8/result.json + 保留 p8_result.json 1 cycle
+```
+
+> **2026-08-20 修复**：update_job 工具内部增加 per-job dump（路径 2），解决以下场景
+> 下 per-job `working_memory.json` 不写盘的 bug：
+> - chat_reply 解析 `[job_id=...]` → 无 → `job_id=None`
+> - `run_disposition_agent` 的 flush_working_memory 跳过（job_id 为空）
+> - LLM 从上下文推断出 job_id 并传给 update_job
+> - P8_job 状态非终态 → `P8ArchiveMiddleware.after_model` 不触发 dump
+> → per-job working_memory.json 永远不写
+>
+> 修复：在 `update_job` 工具内直接调 `dump_working_memory(job_id, merged_list)`，
+> 与 LangGraph reducer 同语义（按 `p8_job_id` upsert；保留既有 entries）。
+> 失败不抛（不阻断 LLM 主流程）；其他路径（3/4）作为兜底保留。
+
+### 失败语义
+
+- **load 失败** → 返空 list，不阻断 agent 创建
+- **dump 失败** → `logger.warning`，不抛错（不影响 LLM 行为）
+- **per-job 双写失败** → 仅 warning；全局层已成功（行业追溯不受影响）
+- **跨进程"伪恢复"** → `MemorySaver` 注入是 best-effort；完整持久化建议后续迁移 SqliteSaver
+
+**详见**：[`docs/P8_人机协同处置_文件组织与职责.md` § 5.1.5](../../docs/P8_人机协同处置_文件组织与职责.md)
+及 [`tests/test_p8.py`](../../tests/test_p8.py)（28 个测试：3 PR-读真实 P7 + 4 FC-飞书卡片 + 13 AC-状态机 + 2 CA-真实 LLM E2E + 1 PIPELINE-端到端管道 + 4 PA-P8 主 Agent LLM 端到端 + 1 PA-05-卡片推送→点击回调→CardActionAgent 全闭环）。
+
+## 卡片按钮回调 → CardActionAgent（2026-08-20 新增）
+
+飞书卡片按钮点击**现**会真正驱动 P8_job 状态变更（之前只写审计 + 视觉替换）。
+
+### 链路
+
+```
+飞书用户点击按钮
+   ↓ Gateway /webhooks/feishu → web /api/feishu/card-callback
+feishu_card.process_card_callback
+   ├─ _write_audit(record)              ← 同步：审计 JSONL
+   └─ _handle_card_action_with_llm_async(...)  ← daemon（2026-08-20 新增）
+        └─ A7.middleware.p8_card_action_agent.run_card_action_agent(...)
+             └─ apply_card_action 工具（闭包绑 job_id）
+                  ├─ load_working_memory(job_id)         读 per-job JSON
+                  ├─ 计算新 status / decision（按 ACTION_TO_STATUS 映射表）
+                  ├─ dump_working_memory(job_id, ...)     原子写 per-job JSON
+                  ├─ 终态 → save_archived_job(..., job_id=job_id)  全局+per-job 双写
+                  └─ 原位更新同一张卡（CardKit PUT；历史 inline 卡走 IM PATCH）
+```
+
+### 与 P8 处置 Agent 的差异
+
+| 维度 | P8 处置 Agent | CardActionAgent（slim） |
+|------|---------------|-------------------------|
+| 入口函数 | `run_disposition_agent` | `run_card_action_agent` |
+| checkpointer | `MemorySaver`（单例） | **无**（fire-and-forget） |
+| HITL middleware | `HumanInTheLoopMiddleware` | **无**（异步链路不再二次确认） |
+| 工具数 | 6（update_job/hitl_decide/...） | 1（apply_card_action） |
+| 持久化 | middleware.after_model + flush | 工具内部直接 dump + 双写 |
+| system_prompt | P8_DISPOSITION_SYSTEM_PROMPT | P8_CARD_ACTION_SYSTEM_PROMPT（slim） |
+
+### 反向路径：`alert_id → job_id`
+
+旧实现下，card callback 拿到的 `alert_id` 必须经过 `data/feishu_card_index.json` 反查 → `card_id` → `message_id` 才能关联到主流程 job_id。**现在**卡片推送时即把 `job_id` 写入 `value.job_id`，callback 直接透传，无中间反查步骤。
+
+**向后兼容**：旧卡片（action.value 缺 `job_id`）→ `_handle_card_action_with_llm_async` 检测 `job_id is None` → 直接跳过，**仅走审计 + 视觉替换**，不影响既有行为。
+
+详见：[`P8_CARD_ACTION_AGENT.md`](P8_CARD_ACTION_AGENT.md)

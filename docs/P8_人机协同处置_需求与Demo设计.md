@@ -584,7 +584,7 @@ def notify_feishu(p8_job_id: str, message: str) -> str: ...
     "query: 关键词（如'昨天可燃气体'或 p8_job_id）。默认走索引层子串搜索（轻量；一句话描述）。"
     "如需精确查询某条详情，传 detail_p8_job_id='<p8_job_id>'（数据层；完整 archived P8Job）。"
     "两步走模式：先 query 找 p8_job_id，再 detail_p8_job_id 取详情。"
-    "数据源：A7/storage/p8_long_term.py（仓库级双层 JSON；索引层 + 数据层）。"
+    "数据源：A7/storage/p8_long_term.py（**2026-08-20 重构**：per-job ``archived.json`` 持久化 + 跨 job 按需扫描聚合；删除全局 _long_term/）。"
 ))
 def recall_jobs(query: str, detail_p8_job_id: str | None = None) -> str: ...
 ```

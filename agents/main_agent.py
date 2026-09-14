@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TypedDict, Optional, Any, List
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
@@ -71,7 +72,10 @@ from .p6_monitor_agent import monitor_start, monitor_events
 from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import run_disposition_agent
 from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
-from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
+# 2026-08-20 临时注释：p10_archive_agent 重构 in-flight；archive_* 调用仅在
+# execute_p10（P10 阶段）使用，不影响 P1-P9 / chat_reply / web。P10 重构完
+# 取消注释。
+# from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
 
 
 # ============================================================
@@ -573,6 +577,12 @@ def execute_p8(job_id: str) -> dict:
         3. Agent 内部通过 read_p7_events 工具读 P7 → update_job 写入 working_memory
         4. P8ArchiveMiddleware 在 P8_job 进入终态时自动归档
         5. 不在主流程等待人工决策（HITL 中断由其他通道恢复）
+
+    2026-08-20 改造：per-job 化
+        - 透传 ``job_id`` 到 ``run_disposition_agent`` → middleware 触发
+          ``data/jobs/{job_id}/P8/archived.json`` 双写 + working_memory dump
+        - result 同时写入 ``data/jobs/{job_id}/P8/result.json``（新约定）+ 旧
+          ``p8_result.json``（保留 1 cycle 向后兼容）
     """
     log = get_stage_logger("P8")
     log.log_enter(job_id)
@@ -601,7 +611,7 @@ def execute_p8(job_id: str) -> dict:
         # P8 Agent 接管：LLM 自主决策 → update_job 写 working_memory → 中间件归档
         p8_summary = run_disposition_agent(
             initial_msg,
-            job_id=job_id,
+            job_id=job_id,         # 2026-08-20 透传：触发 per-job 双写 + dump
             walltime=walltime,
         )
         result["p8_llm_summary"] = p8_summary
@@ -620,6 +630,12 @@ def execute_p8(job_id: str) -> dict:
         log.log_error(job_id, e)
         result["error"] = str(e)
 
+    # 2026-08-20 新增：per-job result 写入（与 P6/P7 命名风格对齐）
+    p8_dir = Path(get_job_dir(job_id)) / "P8"
+    p8_dir.mkdir(parents=True, exist_ok=True)
+    write_json_file(str(p8_dir / "result.json"), result)
+
+    # 向后兼容：保留 p8_result.json 1 cycle（旧接口契约；P9 等仍会读此路径）
     write_json_file(get_stage_result_path(job_id, "p8"), result)
     add_job_log(job_id, {"action": "execute_p8", "result": "success" if result["completed"] else "failed"})
     log.log_exit(job_id, result)
@@ -1031,7 +1047,6 @@ def execute_stage_with_retry(
     # force 只额外放行一次，避免一次强制恢复又连续产生 max_attempts 次副作用。
     if force and remaining_attempts <= 0:
         remaining_attempts = 1
-
     # 中断恢复预算是与执行次数相互独立的约束，必须在**每一次**恢复前检查，
     # 不能挂在「普通执行次数是否用完」的分支里。否则只要还剩有普通次数就直接
     # 放行、完全不看预算，等于把预算是否生效交给 max_attempts 的取值决定：
@@ -1369,6 +1384,55 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
             },
         })
         save_confirmation(job_id, stage, decision, notes)
+
+    # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
+    # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
+    if decision == "reject":
+        rejection_reason = notes.strip() if notes and notes.strip() else f"{stage} 人工否决"
+        result = result or {"job_id": job_id, "stage": stage}
+        result.update({
+            "completed": False,
+            "rejected": True,
+            "decision": "reject",
+            "error": rejection_reason,
+        })
+        result.pop("pending_confirmation", None)
+        write_json_file(result_file, result)
+
+        # P1 的 checkpoint 还停在工具调用之前；否决后清除它，下一次从 P1
+        # 重试时重新生成并再次等待人工确认，而不是默认批准旧工具调用。
+        if stage == "P1":
+            reset_permit_execution(job_id)
+
+        update_stage_status(job_id, stage, "failed", error=rejection_reason)
+        update_workflow_status(job_id, {
+            f"{stage}_status": "failed",
+            "main_agent": {
+                "status": "error",
+                "current_stage": stage,
+                "pending_confirmations": [],
+                "error": rejection_reason,
+            },
+        })
+        add_job_log(job_id, {
+            "action": "stage_rejected",
+            "stage": stage,
+            "decision": decision,
+            "notes": notes,
+            "error": rejection_reason,
+            "message": f"{stage} 被人工否决，工作流已停止",
+        })
+        _broadcast_state(job_id)
+        return {
+            "job_id": job_id,
+            "current_stage": stage,
+            "pending_confirmations": [],
+            "confirmed_stages": [],
+            "status": "error",
+            "rejected": True,
+            "error": rejection_reason,
+            "can_retry": can_retry_stage(job_id, stage),
+        }
 
     # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
     # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。

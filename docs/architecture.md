@@ -185,7 +185,9 @@ main_agent.py: confirm_and_continue(thread_id, stage, decision)
     ┌─────────────────────────────────────────────────────┐
     │ P8: execute_p8()                                    │
     │  disposition_create (遍历风险事件)                   │
-    │  → 保存 p8_result.json                              │
+    │  → 保存 p8_result.json（向后兼容）                  │
+    │  → 保存 P8/result.json（per-job 新约定，2026-08-20）│
+    │  → middleware 自动归档 → per-job 双写 + dump        │
     │  → pending: 处置任务确认                            │
     └─────────────────────────────────────────────────────┘
           ↓ 用户确认
@@ -409,3 +411,76 @@ industrial_internet_agents/
 ├── CLAUDE.md                   # Claude Code 指导文件
 └── requirements.txt            # Python 依赖
 ```
+
+---
+
+## 9. P8 per-job 路径规范（2026-08-20 新增，2026-08-20 重构）
+
+P6/P7 已 per-job 化（`data/jobs/{job_id}/P6/`、`P7/`）；P8 在 2026-08-20 跟进。
+**2026-08-20 重构**：删除全局 `data/jobs/_long_term/`，改为**单一 per-job 真相源**；跨 job 视图通过按需扫描聚合。
+
+```
+data/jobs/
+└── {job_id}/                            # 单 job 数据
+    ├── application.json                 # 申请
+    ├── p7_result.json                   # P7 输出（主流程聚合）
+    ├── p8_result.json                   # P8 输出快照（向后兼容保留 1 cycle）
+    ├── P6/                              # P6 per-job 产物
+    ├── P7/
+    │   ├── a6_*.json                    # 每个 a6_event 单独文件
+    │   └── ...
+    └── P8/                              # P8 per-job 持久化
+        ├── working_memory.json          # 工作记忆 snapshot（list[P8Job]）
+        ├── archived.json                # 长期记忆（唯一真相源；dict{pid → archived}）
+        └── result.json                  # execute_p8 主流程结果
+```
+
+**写入时机**：
+
+| 文件 | 写入入口 |
+|------|---------|
+| `{job_id}/P8/archived.json` | `A7.storage.p8_long_term.save_archived_job(pid, job, job_id=...)`（**2026-08-20 重构**：job_id 必填；唯一长期记忆真相源） |
+| `{job_id}/P8/working_memory.json` | `P8ArchiveMiddleware.after_model`（终态归档后）<br>+ `run_disposition_agent` invoke end flush |
+| `{job_id}/P8/result.json` | `agents.main_agent.execute_p8` 结束 |
+| `{job_id}/p8_result.json` | 同上（向后兼容；1 cycle 保留期） |
+
+**Bot 模式说明**：chat_reply 解析消息正文 `[job_id=...]` 前缀；无前缀 → `job_id=None`
+→ middleware 跳过 per-job 写（save_archived_job 抛 ValueError 提前返回）+ working_memory 不 dump（临时会话无需持久化）。
+
+**thread_id 按 job 隔离方案**：Bot 场景下 thread_id 当前仍按 `chat_id/open_id` 拼装（同群多 job 会串台）。
+完整方案设计见 [`docs/P8_BOT_THREAD_ID_按作业票隔离_方案设计.md`](P8_BOT_THREAD_ID_按作业票隔离_方案设计.md)（推荐方案 D：智能焦点 + 事件 metadata + 显式前缀兜底）。
+
+**详见**：[docs/P8_人机协同处置_文件组织与职责.md § 5.1.5](P8_人机协同处置_文件组织与职责.md#515p5.1.5)
+及 [tests/test_p8.py](../tests/test_p8.py)（28 个测试：3 PR + 4 FC + 13 AC + 2 CA + 1 PIPELINE + 4 PA + 1 PA-05 全闭环）。
+
+## 10. 卡片按钮回调 → LLM 改 P8_job 状态（2026-08-20 新增）
+
+飞书卡片按钮点击**现**会真正驱动 P8_job 状态变更（之前只写审计 + 视觉替换卡）。
+新增专用 [`CardActionAgent`](agents/P8_CARD_ACTION_AGENT.md)（不复用 P8Agent），
+daemon 线程 fire-and-forget 调用，失败不影响飞书 toast 响应。
+
+```
+飞书用户点击按钮
+   ↓ Gateway /webhooks/feishu → web /api/feishu/card-callback
+feishu_card.process_card_callback
+   ├─ _write_audit(record)                ← 同步：审计 JSONL
+   └─ _handle_card_action_with_llm_async(...)
+        └─ A7.middleware.p8_card_action_agent.run_card_action_agent
+             └─ apply_card_action 工具（闭包绑 job_id）
+                  ├─ load_working_memory(job_id)
+                  ├─ 计算新 status / decision（ACTION_TO_STATUS 映射表）
+                  ├─ dump_working_memory(job_id, ...)         per-job JSON
+                  ├─ 终态 → save_archived_job(..., job_id=...) 全局+per-job 双写
+                  └─ 成功后原位更新同一张飞书卡
+                       ├─ CardKit 实体：PUT /cardkit/v1/cards/{card_id}
+                       └─ 历史 inline 卡：PATCH /im/v1/messages/{message_id}
+```
+
+**反向路径**：`alert_id → job_id` 由卡片推送时直接写入 `action.value.job_id`，
+callback 透传使用，**无需**经过 `feishu_card_index.json` 中间反查。
+
+**向后兼容**：旧卡片（action.value 缺 `job_id`）→ daemon 检测 `job_id is None` → 跳过，
+仅走审计并跳过状态/卡片更新，不影响新卡片链路。
+
+详见：[docs/agents/P8_CARD_ACTION_AGENT.md](agents/P8_CARD_ACTION_AGENT.md)
+及 [tests/test_p8_card_action_agent.py](../tests/test_p8_card_action_agent.py)（13 个测试）。

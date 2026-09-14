@@ -142,6 +142,13 @@ class P8Job(BaseModel):
         description="P8 自生成 ID（格式 P8J-YYYYMMDD-HHMMSS-NNN）",
     )
 
+    # 2026-08-20 新增：主流程作业归属（per-job 持久化 + 按 job 清理依据）
+    job_id: Optional[str] = Field(
+        default=None,
+        description="主流程作业 ID（如 JOB-20260813-001 / 17 位时间戳）；"
+                    "Bot 模式 + 无作业上下文场景为 None。",
+    )
+
     # ===== 关联字段 =====
     a6_event_ids: list[str] = Field(
         ...,  # 必填
@@ -249,6 +256,11 @@ class P8JobUpdate(BaseModel):
         default=None,
         pattern=r"^P8J-\d{8}-\d{6}-\d{3}$",  # None 或符合 P8J 格式
         description="None → 新建；否则按 ID 更新",
+    )
+    # 2026-08-20 新增：主流程作业归属（与 P8Job.job_id 对齐；per-job 持久化依据）
+    job_id: Optional[str] = Field(
+        default=None,
+        description="主流程作业 ID（如 JOB-20260813-001）；None → Bot 模式或无作业上下文。",
     )
     status: Optional[P8JobStatus] = Field(
         default=None,

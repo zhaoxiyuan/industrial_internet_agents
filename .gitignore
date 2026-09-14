@@ -36,6 +36,15 @@ openclaw-channel-gateway-standalone/.gateway.pid
 # 卡片回调审计日志（每次点击追加）
 /data/card_callbacks.jsonl
 
+# 飞书卡片运行时索引（本机自动生成，不跨环境同步）
+/data/feishu_card_index.json
+
+# 本地 GitHub API 辅助脚本（读取本机 .env 凭据）
+/_github_helper.py
+
+# Claude/Codex 本机权限与偏好设置
+/.claude/settings.local.json
+
 # 各处备份文件
 *.bak
 **/*.bak
@@ -53,6 +62,13 @@ A6/logs/
 
 #我的更新
 docs/update/
+# A7 运行时日志（chat_reply daemon / web server）
+A7/data/
+
+# 外部独立仓库（cc-connect：单独 git 仓库，126MB；通过 git clone 单独管理）
+"cc connect/"
+cc connect/
+
 
 # 助手本地记忆目录（非项目代码，仅本机使用）
 .workbuddy/
