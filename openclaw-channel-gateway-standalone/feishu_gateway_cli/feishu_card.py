@@ -656,6 +656,9 @@ def _extract_action(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "action": action,
         "alert_id": (value.get("alert_id") or "").strip() or None,
+        # 2026-08-20 新增：卡片 value.job_id 透传（主流程作业 ID；callback 反查用）
+        # 旧卡片无该字段 → 返 None（向后兼容；仅走审计 + 视觉替换，不调 CardActionAgent）
+        "job_id": (value.get("job_id") or "").strip() or None,
         "button_text": button_text or None,
         "operator_open_id": open_id,
         "operator_name": operator_name or None,
@@ -828,6 +831,92 @@ def _replace_card_async(
     t.start()
 
 
+def _handle_card_action_with_llm_async(
+    *,
+    alert_id: Optional[str],
+    action: Optional[str],
+    button_text: Optional[str],
+    operator_open_id: Optional[str],
+    operator_name: Optional[str],
+    job_id: Optional[str],
+) -> None:
+    """按钮点击后异步调 CardActionAgent 决定 P8_job 状态变更（2026-08-20 新增）。
+
+    daemon 线程 fire-and-forget：
+    - 失败仅 ``logger.exception``，不影响已返回的 toast 响应
+    - ``job_id`` 缺失（旧卡片无 job_id 字段）→ 跳过（向后兼容）
+    - 与 ``_replace_card_async`` 并行触发（视觉替换 / 业务变更独立）
+
+    链路：
+
+    ::
+
+        process_card_callback
+          ├── _replace_card_async       (daemon, 视觉替换)
+          └── _handle_card_action_with_llm_async (daemon, 本函数)
+                └── A7.middleware.p8_card_action_agent.run_card_action_agent
+                     └── apply_card_action (closure-bound job_id)
+                          ├── dump_working_memory(job_id, ...)
+                          └── save_archived_job(pid, ..., job_id=job_id)
+    """
+    def _run() -> None:
+        # 1. 前置校验：job_id 缺失 → 跳过（向后兼容旧卡片）
+        if not job_id:
+            logger.info(
+                "[feishu-card] card-action-llm 跳过: action.value 缺 job_id"
+                " (alert_id=%s action=%s)",
+                alert_id, action,
+            )
+            return
+        if not alert_id or not action:
+            logger.info(
+                "[feishu-card] card-action-llm 跳过: alert_id/action 为空"
+                " (job_id=%s)",
+                job_id,
+            )
+            return
+
+        # 2. 构造 user_ctx（最简化；不耦合 chat_reply / 不读 FEISHU_USER_MAP）
+        #    说明：CardActionAgent 不需要 chat_reply 路径下的复杂 user_ctx；
+        #    operator_name 由飞书 callback payload 直接透传，无需再查表。
+        user_ctx = {
+            "role": "未识别用户",
+            "name": operator_name or "未知",
+            "open_id": operator_open_id or "",
+        }
+
+        # 3. 拼 user message（LLM 解析 + 工具调用输入）
+        msg = (
+            f"[card_click] alert_id={alert_id} action={action} "
+            f"button_text={button_text or ''} "
+            f"operator_open_id={operator_open_id or ''} "
+            f"operator_name={operator_name or ''} "
+            f"job_id={job_id}"
+        )
+
+        # 4. 调 CardActionAgent（失败吞掉，logger.exception）
+        try:
+            # 延迟 import 避免循环（feishu_card → agents → ...）
+            from A7.middleware.p8_card_action_agent import run_card_action_agent
+            run_card_action_agent(msg, user_ctx=user_ctx, job_id=job_id)
+            logger.info(
+                "[feishu-card] card-action-llm 完成 alert_id=%s action=%s job_id=%s",
+                alert_id, action, job_id,
+            )
+        except Exception:
+            logger.exception(
+                "[feishu-card] card-action-llm 失败 alert_id=%s action=%s",
+                alert_id, action,
+            )
+
+    t = threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"feishu-card-action-llm-{alert_id or 'unknown'}",
+    )
+    t.start()
+
+
 def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
     """处理一个飞书 Card 按钮点击 payload，返回回给飞书的完整响应体。
 
@@ -918,6 +1007,17 @@ def process_card_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
         chat_id=info["open_chat_id"],
         message_id=info["message_id"],
         processed_card=processed_card,
+    )
+
+    # 2026-08-20 新增：异步调 CardActionAgent 触发 P8_job 状态变更（独立 daemon）
+    # 与 _replace_card_async 并行；job_id 缺失（旧卡片）时内部自动跳过
+    _handle_card_action_with_llm_async(
+        alert_id=info["alert_id"],
+        action=info["action"],
+        button_text=info["button_text"],
+        operator_open_id=info["operator_open_id"],
+        operator_name=info["operator_name"],
+        job_id=info["job_id"],
     )
 
     # 同步仅返回 toast（不返回 card 字段 —— 飞书渲染会 2026072）。

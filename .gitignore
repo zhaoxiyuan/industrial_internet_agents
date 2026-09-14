@@ -54,4 +54,11 @@ A6/log_test/
 A5/logs/
 A6/logs/
 
+# A7 运行时日志（chat_reply daemon / web server）
+A7/data/
+
+# 外部独立仓库（cc-connect：单独 git 仓库，126MB；通过 git clone 单独管理）
+"cc connect/"
+cc connect/
+
 

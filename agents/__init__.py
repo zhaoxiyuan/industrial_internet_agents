@@ -94,16 +94,27 @@ from .p9_closure_agent import (
     closure_close,
 )
 
-from .p10_archive_agent import (
-    create_archive_agent,
-    create_archive_agent_with_hitl,
-    run_archive_agent,
-    archive_demo,
-    archive_task,
-    archive_cases,
-    archive_performance,
-    archive_suggestions,
-)
+# ============================================================
+# 2026-08-20 临时注释：p10_archive_agent 重构 in-flight（文件被清空），
+# 导致 `from agents.channel_gateway_client import ...` 这类**任何**
+# `from agents.X` 都会强制加载 agents/__init__.py，连带触发 p10 import，
+# 进而导致 chat_reply.py / web/server.py 启动失败。
+#
+# 临时措施：注释掉 P10 的 eager import；P10 CLI 命令暂时不可用，但 P1-P9
+# 全部正常加载，chat_reply / web / Gradio 都能起。
+#
+# **TODO（P10 重构完成后取消注释）**：删除此注释块，恢复原 import。
+# ============================================================
+# from .p10_archive_agent import (
+#     create_archive_agent,
+#     create_archive_agent_with_hitl,
+#     run_archive_agent,
+#     archive_demo,
+#     archive_task,
+#     archive_cases,
+#     archive_performance,
+#     archive_suggestions,
+# )
 
 from .main_agent import (
     create_main_agent,

@@ -280,8 +280,15 @@ class AsyncCollector:
         """
         start_sec = self._wall_to_sec(start_wall)
         end_sec = self._wall_to_sec(end_wall)
-        if start_sec < 0 or end_sec < 0:
+        # end_sec < 0 → wall_time 字符串格式错误，直接放弃
+        if end_sec < 0:
             return []
+        # 钳位：_sec_to_wall 用 isoformat(timespec="milliseconds") 截掉微秒，
+        # 导致 sec=0 时 _wall_to_sec 返回 -0.000~ （比 _start_wall 还早 ~0.5ms）。
+        # 之前直接 return[] 会丢第一秒 snapshot 的 cv/sensor/position 数据；
+        # 这里钳到 0 → 至少能查 [0, end_sec) 范围（虽然多包了 0~0.5ms 的边界但不会丢数据）
+        if start_sec < 0:
+            start_sec = 0.0
 
         types = [source_type] if source_type else ["cv", "sensor", "position"]
         results = []
