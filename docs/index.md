@@ -65,7 +65,7 @@ elif path == "/api/workflow/start":
 ### 4. 工作流执行 (`agents/main_agent.py`)
 
 ```python
-def run_workflow(application, thread_id):
+def run_workflow(application, thread_id, start_stage="P1", resume=False, force=False):
     config = {"configurable": {"thread_id": thread_id}}
     graph = get_workflow()
 
@@ -262,6 +262,8 @@ data/jobs/{job_id}/
 | `app.js` | `confirmDecision()` | 确认决策 |
 | `server.py` | `/api/workflow/start` | 启动接口 |
 | `server.py` | `/api/workflow/confirm` | 确认接口 |
+| `server.py` | `/api/workflow/resume` | 从失败/指定阶段恢复 |
 | `server.py` | `/api/workflow/state` | 状态查询 |
+| `server.py` | `/api/workflow/execution-status` | 阶段执行次数与失败历史查询 |
 | `main_agent.py` | `run_workflow()` | 执行工作流 |
 | `main_agent.py` | `confirm_and_continue()` | 确认后继续 |

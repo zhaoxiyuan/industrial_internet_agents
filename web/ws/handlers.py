@@ -20,6 +20,48 @@ from web.ws.manager import (
 logger = logging.getLogger("server")
 
 
+def _message_targets(connections, job_id):
+    """返回消息应送达的连接快照；通配日志广播给所有当前连接。"""
+    if job_id == "*":
+        return [ws for group in connections.values() for ws in tuple(group)]
+    return list(connections.get(job_id, ()))
+
+
+async def _broadcast_dispatcher(message_queue, connections, channel):
+    """由一个协程消费队列，再扇出给目标连接，避免多个连接竞争并丢消息。"""
+    while True:
+        try:
+            msg = await asyncio.to_thread(message_queue.get, True, 1.0)
+        except queue.Empty:
+            continue
+
+        targets = _message_targets(connections, msg.get("job_id"))
+        if not targets:
+            continue
+        payload = json.dumps(msg, ensure_ascii=False)
+        results = await asyncio.gather(
+            *(ws.send(payload) for ws in targets),
+            return_exceptions=True,
+        )
+        for websocket, result in zip(targets, results):
+            if isinstance(result, Exception):
+                for group in connections.values():
+                    group.discard(websocket)
+            else:
+                logger.info(
+                    f"[WS-{channel.upper()}] 推送消息: "
+                    f"job_id={msg.get('job_id')}, type={msg.get('type')}"
+                )
+
+
+async def status_broadcast_dispatcher():
+    await _broadcast_dispatcher(status_broadcast_queue, status_connections, "status")
+
+
+async def logs_broadcast_dispatcher():
+    await _broadcast_dispatcher(logs_broadcast_queue, logs_connections, "logs")
+
+
 async def status_websocket_handler(websocket):
     """状态 WebSocket 连接处理器"""
     path = getattr(websocket, 'path', '/')
@@ -47,6 +89,7 @@ async def status_websocket_handler(websocket):
             "confirmed": result.get("confirmed_stages", []),
             "current_stage": result.get("current_stage", ""),
             "thread_id": job_id,
+            "agents": result.get("agents", {}),
         }
         logger.info(f"[WS-STATUS] 发送初始状态: job_id={job_id}")
         await websocket.send(json.dumps({"type": "state_update", "data": state_data}, ensure_ascii=False))
@@ -55,17 +98,11 @@ async def status_websocket_handler(websocket):
 
     try:
         while True:
+            await asyncio.sleep(10)
             try:
-                msg = await asyncio.to_thread(status_broadcast_queue.get, True, 1.0)
-                if msg.get("job_id") == job_id:
-                    await websocket.send(json.dumps(msg, ensure_ascii=False))
-                    logger.info(f"[WS-STATUS] 推送状态: job_id={job_id}, type={msg.get('type')}")
-            except queue.Empty:
-                try:
-                    await websocket.send(json.dumps({"type": "heartbeat", "channel": "status"}, ensure_ascii=False))
-                except Exception as e:
-                    logger.warning(f"[WS-STATUS] 发送心跳失败: {e}")
-                    break
+                await websocket.send(json.dumps({"type": "heartbeat", "channel": "status"}, ensure_ascii=False))
+            except Exception:
+                break
     except websockets.exceptions.ConnectionClosed:
         logger.info(f"[WS-STATUS] 连接关闭: job_id={job_id}")
     except Exception as e:
@@ -103,17 +140,11 @@ async def logs_websocket_handler(websocket):
 
     try:
         while True:
+            await asyncio.sleep(10)
             try:
-                msg = await asyncio.to_thread(logs_broadcast_queue.get, True, 1.0)
-                if msg.get("job_id") == job_id or msg.get("job_id") == "*":
-                    await websocket.send(json.dumps(msg, ensure_ascii=False))
-                    logger.info(f"[WS-LOGS] 推送日志: job_id={msg.get('job_id')}, level={msg.get('level')}")
-            except queue.Empty:
-                try:
-                    await websocket.send(json.dumps({"type": "heartbeat", "channel": "logs"}, ensure_ascii=False))
-                except Exception as e:
-                    logger.warning(f"[WS-LOGS] 发送心跳失败: {e}")
-                    break
+                await websocket.send(json.dumps({"type": "heartbeat", "channel": "logs"}, ensure_ascii=False))
+            except Exception:
+                break
     except websockets.exceptions.ConnectionClosed:
         logger.info(f"[WS-LOGS] 连接关闭: job_id={job_id}")
     except Exception as e:

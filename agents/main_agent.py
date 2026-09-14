@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
-from .model.chat_model import create_chat_model_with_logging, get_llm_params
+from .model.chat_model import create_chat_model_with_logging
+from .model.config import get_llm_params
 from .utils import extract_output, get_stage_logger, push_websocket_log
 from .utils.logging_handler import get_agent_config
 
@@ -25,8 +27,13 @@ from .workflow import (
     ALL_STAGES,
     save_job_application, add_job_log, save_confirmation, get_job_status,
 )
-# 导入工具响应和 Prompt 加载器
-from .utils import make_response, make_error, SCHEMA_VERSION, load_system_prompt
+# 导入 Execution Status 模块
+from .workflow import (
+    STAGE_CONFIG, classify_error, init_execution_status, get_execution_status,
+    update_stage_status, can_retry_stage, get_retry_delay, get_failed_stage,
+    get_stage_execution_info, finalize_execution_status, is_stage_critical,
+)
+
 
 # 配置日志
 logger = logging.getLogger("main_agent")
@@ -39,8 +46,22 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+
+# 阶段执行映射
+# 导入各子Agent的阶段执行入口
+from .p1_permit_agent import execute_stage as p1_execute_stage, is_agent_interrupted
+from .p2_task_agent import execute_stage as p2_execute_stage
+from .p3_context_agent import execute_stage as p3_execute_stage
+from .p4_binding_agent import execute_stage as p4_execute_stage
+from .p5_verify_agent import execute_stage as p5_execute_stage
+from .p6_monitor_agent import execute_stage as p6_execute_stage
+from .p7_risk_agent import execute_stage as p7_execute_stage
+from .p8_disposition_agent import execute_stage as p8_execute_stage
+from .p9_closure_agent import execute_stage as p9_execute_stage
+from .p10_archive_agent import execute_stage as p10_execute_stage
+
 # 导入各阶段工具函数
-from .p1_permit_agent import permit_submit, jsa_analyze, permit_generate_draft, run_permit_agent_with_hitl, is_agent_interrupted, get_agent_next_tools
+from .p1_permit_agent import permit_submit, jsa_analyze, permit_generate_draft, run_permit_agent_with_hitl, is_agent_interrupted, get_agent_next_tools, reset_permit_execution
 from .p2_task_agent import task_instance_create
 from .p3_context_agent import context_build
 from .p4_binding_agent import binding_match
@@ -177,6 +198,8 @@ def execute_p1(job_id: str, resume: bool = False) -> dict:
 def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) -> dict:
     """处理 P1 执行结果，提取并保存作业票数据"""
     result = existing_result.copy() if existing_result else {}
+    for stale_key in ("rejected", "decision", "error"):
+        result.pop(stale_key, None)
     result["job_id"] = job_id
     result["stage"] = "P1"
     result["completed"] = True
@@ -240,15 +263,16 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
         write_json_file(output_path, permit_data)
         result["permit_file"] = output_path
 
-        if result.get("missing_fields"):
-            result["pending_confirmation"] = {
-                "type": "missing_fields",
-                "fields": result["missing_fields"],
-                "message": "作业票存在缺失字段，需要人工确认"
-            }
-
     except Exception as e:
         result["error"] = str(e)
+
+    # P1 只在全部分析和草稿生成完成后统一审批一次。
+    if not result.get("error"):
+        result["pending_confirmation"] = {
+            "type": "permit_final_approval",
+            "fields": result.get("missing_fields", []),
+            "message": "P1 作业申请、JSA 与作业票草稿已生成，请进行最终审批",
+        }
 
     write_json_file(get_stage_result_path(job_id, "p1"), result)
     add_job_log(job_id, {
@@ -729,18 +753,21 @@ def execute_p10(job_id: str) -> dict:
     return result
 
 
-# 阶段执行映射
+# P1 特殊处理：保留 HITL 逻辑
+execute_p1 = p1_execute_stage
+
+# 阶段执行映射（从子Agent导入）
 STAGE_EXECUTORS = {
-    "P1": execute_p1,
-    "P2": execute_p2,
-    "P3": execute_p3,
-    "P4": execute_p4,
-    "P5": execute_p5,
-    "P6": execute_p6,
-    "P7": execute_p7,
-    "P8": execute_p8,
-    "P9": execute_p9,
-    "P10": execute_p10,
+    "P1": p1_execute_stage,
+    "P2": p2_execute_stage,
+    "P3": p3_execute_stage,
+    "P4": p4_execute_stage,
+    "P5": p5_execute_stage,
+    "P6": p6_execute_stage,
+    "P7": p7_execute_stage,
+    "P8": p8_execute_stage,
+    "P9": p9_execute_stage,
+    "P10": p10_execute_stage,
 }
 
 
@@ -992,47 +1019,193 @@ def main_demo(message: str, history: list = None) -> str:
 # 工作流入口函数（供 server.py 调用）
 # ============================================================
 
-def run_workflow(application: dict, thread_id: str) -> dict:
-    """运行工作流（按文件传递模式执行）"""
+
+def execute_stage_with_retry(
+    job_id: str,
+    stage_name: str,
+    executor,
+    stage_config: dict,
+    force: bool = False,
+    continuation: bool = False,
+) -> dict:
+    """带重试机制的阶段执行"""
+    import time
+
+    max_attempts = stage_config.get("max_attempts", 3)
+    retry_on_temporary = stage_config.get("retry_on_temporary", True)
+
+    previous_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
+    interrupted_recovery = bool(
+        get_stage_execution_info(job_id, stage_name).get("interrupted")
+    )
+    remaining_attempts = max_attempts - previous_attempts
+    # HITL 确认后的调用仍属于原来的那次阶段执行，不消耗新的 attempt。
+    if continuation:
+        remaining_attempts += 1
+    # force 只额外放行一次，避免一次强制恢复又连续产生 max_attempts 次副作用。
+    if force and remaining_attempts <= 0:
+        remaining_attempts = 1
+    # 服务异常退出的那一次可能已经记到次数上限，但它没有得到业务结果；
+    # 用户点击继续时仍需允许重新进入一次当前阶段。
+    if interrupted_recovery and remaining_attempts <= 0:
+        remaining_attempts = 1
+    if remaining_attempts <= 0:
+        return {
+            "job_id": job_id,
+            "stage": stage_name,
+            "completed": False,
+            "error": f"{stage_name} 已达到最大执行次数 {max_attempts}",
+        }
+
+    for invocation_index in range(remaining_attempts):
+        update_stage_status(
+            job_id,
+            stage_name,
+            "running",
+            new_attempt=not (continuation and invocation_index == 0),
+        )
+        attempt = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
+        logger.info(f"[execute_stage_with_retry] {stage_name} 第 {attempt} 次执行")
+
+        start_time = time.time()
+
+        try:
+            result = executor(job_id)
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            # HITL 是正常暂停，不是失败；必须先于 completed 判断。
+            if result.get("pending_confirmation"):
+                update_stage_status(job_id, stage_name, "waiting", duration_ms=duration_ms)
+                return result
+
+            if result.get("completed"):
+                update_stage_status(job_id, stage_name, "completed", duration_ms=duration_ms)
+                add_job_log(job_id, {
+                    "action": "stage_attempt",
+                    "stage": stage_name,
+                    "attempt": attempt,
+                    "status": "completed",
+                    "duration_ms": duration_ms,
+                    "message": f"{stage_name} 第 {attempt} 次执行成功"
+                })
+                return result
+
+            error = result.get("error", "未知错误")
+            error_type = classify_error(error)
+
+            update_stage_status(job_id, stage_name, "failed", error=error, duration_ms=duration_ms)
+            add_job_log(job_id, {
+                "action": "stage_attempt",
+                "stage": stage_name,
+                "attempt": attempt,
+                "status": "failed",
+                "error": error,
+                "error_type": error_type,
+                "duration_ms": duration_ms,
+                "message": f"{stage_name} 第 {attempt} 次执行失败: {error}"
+            })
+
+            current_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
+            if current_attempts < max_attempts and retry_on_temporary and error_type == "temporary":
+                delay = get_retry_delay(attempt)
+                logger.info(f"[execute_stage_with_retry] {stage_name} 将在 {delay}ms 后重试")
+                time.sleep(delay / 1000)
+                continue
+            else:
+                return result
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            error = str(e)
+            error_type = classify_error(error)
+
+            logger.exception(f"[execute_stage_with_retry] {stage_name} 第 {attempt} 次执行异常")
+
+            update_stage_status(job_id, stage_name, "failed", error=error, duration_ms=duration_ms)
+            add_job_log(job_id, {
+                "action": "stage_attempt",
+                "stage": stage_name,
+                "attempt": attempt,
+                "status": "failed",
+                "error": error,
+                "error_type": error_type,
+                "duration_ms": duration_ms,
+                "message": f"{stage_name} 第 {attempt} 次执行异常: {error}"
+            })
+
+            current_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
+            if current_attempts < max_attempts and retry_on_temporary and error_type == "temporary":
+                delay = get_retry_delay(attempt)
+                logger.info(f"[execute_stage_with_retry] {stage_name} 将在 {delay}ms 后重试")
+                time.sleep(delay / 1000)
+                continue
+            else:
+                return {"job_id": job_id, "stage": stage_name, "completed": False, "error": error}
+
+    return {"job_id": job_id, "stage": stage_name, "completed": False, "error": f"{stage_name} 执行失败，已重试 {max_attempts} 次"}
+
+
+def run_workflow(
+    application: dict,
+    thread_id: str,
+    start_stage: str = "P1",
+    resume: bool = False,
+    force: bool = False,
+) -> dict:
+    """运行工作流（带重试机制和状态检查）"""
     import os
     job_id = thread_id
     logger.info(f"[run_workflow] >>> 工作流入口: job_id={job_id}")
 
-    save_job_application(job_id, application)
+    start_stage = start_stage.upper()
+    if start_stage not in STAGE_EXECUTORS:
+        raise ValueError(f"无效阶段: {start_stage}")
 
-    # 初始化工作流状态文件
-    init_workflow_status(job_id)
-    update_workflow_status(job_id, {
-        "main_agent": {"status": "running", "current_stage": ""},
-        "P1_status": "pending", "P2_status": "pending", "P3_status": "pending",
-        "P4_status": "pending", "P5_status": "pending", "P6_status": "pending",
-        "P7_status": "pending", "P8_status": "pending", "P9_status": "pending",
-        "P10_status": "pending"
-    })
+    if not resume:
+        save_job_application(job_id, application)
+        init_workflow_status(job_id)
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "running", "current_stage": ""},
+            "P1_status": "pending", "P2_status": "pending", "P3_status": "pending",
+            "P4_status": "pending", "P5_status": "pending", "P6_status": "pending",
+            "P7_status": "pending", "P8_status": "pending", "P9_status": "pending",
+            "P10_status": "pending"
+        })
+        init_execution_status(job_id)
+        add_job_log(job_id, {"action": "workflow_start", "message": f"开始执行作业 {job_id}"})
+    else:
+        update_workflow_status(job_id, {
+            "main_agent": {"status": "running", "current_stage": start_stage, "error": None}
+        })
+        add_job_log(job_id, {
+            "action": "workflow_resume",
+            "stage": start_stage,
+            "message": f"从 {start_stage} 恢复执行作业 {job_id}",
+        })
     _broadcast_state(job_id)
 
-    add_job_log(job_id, {
-        "action": "workflow_start",
-        "message": f"开始执行作业 {job_id}"
-    })
-
-    for stage_name, executor in STAGE_EXECUTORS.items():
+    stage_names = list(STAGE_EXECUTORS.keys())
+    start_index = stage_names.index(start_stage)
+    for stage_name in stage_names[start_index:]:
+        executor = STAGE_EXECUTORS[stage_name]
         logger.info(f"[run_workflow] 执行阶段: {stage_name}")
-        add_job_log(job_id, {
-            "action": f"execute_{stage_name.lower()}",
-            "message": f"开始执行 {stage_name}"
-        })
+        add_job_log(job_id, {"action": f"execute_{stage_name.lower()}", "message": f"开始执行 {stage_name}"})
 
-        # 更新主Agent当前阶段
         update_workflow_status(job_id, {
             "main_agent": {"status": "running", "current_stage": stage_name},
             f"{stage_name}_status": "running"
         })
         _broadcast_state(job_id)
 
-        result = executor(job_id)
+        stage_config = STAGE_CONFIG.get(stage_name, {})
+        result = execute_stage_with_retry(
+            job_id,
+            stage_name,
+            executor,
+            stage_config,
+            force=force and stage_name == start_stage,
+        )
 
-        # 更新阶段状态
         if result.get("pending_confirmation"):
             update_workflow_status(job_id, {
                 f"{stage_name}_status": "waiting",
@@ -1049,31 +1222,67 @@ def run_workflow(application: dict, thread_id: str) -> dict:
                 "job_id": job_id,
                 "current_stage": stage_name,
                 "pending_confirmations": [stage_name],
-                "confirmed_stages": {},
+                "confirmed_stages": {s: "completed" for s in list(STAGE_EXECUTORS.keys())[:list(STAGE_EXECUTORS.keys()).index(stage_name)]},
                 "status": "waiting"
             }
+
+        if not result.get("completed"):
+            error = result.get("error", "未知错误")
+            error_type = classify_error(error)
+            is_critical = is_stage_critical(stage_name)
+
+            logger.error(f"[run_workflow] 阶段 {stage_name} 执行失败: {error} (类型: {error_type}, 关键: {is_critical})")
+
+            update_workflow_status(job_id, {
+                f"{stage_name}_status": "failed",
+                "main_agent": {"status": "error", "current_stage": stage_name, "error": error}
+            })
+            _broadcast_state(job_id)
+
+            add_job_log(job_id, {
+                "action": "stage_failed",
+                "stage": stage_name,
+                "error": error,
+                "error_type": error_type,
+                "is_critical": is_critical,
+                "message": f"{stage_name} 执行失败: {error}"
+            })
+
+            if is_critical:
+                return {
+                    "job_id": job_id,
+                    "current_stage": stage_name,
+                    "status": "error",
+                    "error": error,
+                    "error_type": error_type,
+                    "can_retry": can_retry_stage(job_id, stage_name),
+                    "confirmed_stages": {s: "completed" for s in list(STAGE_EXECUTORS.keys())[:list(STAGE_EXECUTORS.keys()).index(stage_name)]}
+                }
+            else:
+                logger.warning(f"[run_workflow] 非关键阶段 {stage_name} 失败，继续执行")
         else:
             update_workflow_status(job_id, {f"{stage_name}_status": "completed"})
             _broadcast_state(job_id)
 
     logger.info(f"[run_workflow] <<< 工作流完成: job_id={job_id}")
+    finalize_execution_status(job_id)
     update_workflow_status(job_id, {
         "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
     })
     _broadcast_state(job_id)
-    add_job_log(job_id, {
-        "action": "workflow_completed",
-        "message": f"作业 {job_id} 执行完成"
-    })
+    add_job_log(job_id, {"action": "workflow_completed", "message": f"作业 {job_id} 执行完成"})
 
     return {
         "job_id": job_id,
         "current_stage": "completed",
         "pending_confirmations": [],
-        "confirmed_stages": list(STAGE_EXECUTORS.keys()),
+        "confirmed_stages": {
+            stage: "completed"
+            for stage, info in get_execution_status(job_id).get("stages", {}).items()
+            if info.get("status") == "completed"
+        },
         "status": "completed"
     }
-
 
 def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False) -> dict:
     """确认阶段并继续工作流
@@ -1094,6 +1303,11 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     if not stage:
         raise ValueError("stage 不能为空")
 
+    stage = stage.upper()
+    decision = (decision or "").lower()
+    if decision not in {"approve", "reject"}:
+        raise ValueError("decision 必须是 approve 或 reject")
+
     job_id = thread_id
 
     result_file = get_stage_result_path(job_id, stage.lower())
@@ -1101,14 +1315,67 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
 
     save_confirmation(job_id, stage, decision, notes)
 
+    # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
+    # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
+    if decision == "reject":
+        rejection_reason = notes.strip() if notes and notes.strip() else f"{stage} 人工否决"
+        result = result or {"job_id": job_id, "stage": stage}
+        result.update({
+            "completed": False,
+            "rejected": True,
+            "decision": "reject",
+            "error": rejection_reason,
+        })
+        result.pop("pending_confirmation", None)
+        write_json_file(result_file, result)
+
+        # P1 的 checkpoint 还停在工具调用之前；否决后清除它，下一次从 P1
+        # 重试时重新生成并再次等待人工确认，而不是默认批准旧工具调用。
+        if stage == "P1":
+            reset_permit_execution(job_id)
+
+        update_stage_status(job_id, stage, "failed", error=rejection_reason)
+        update_workflow_status(job_id, {
+            f"{stage}_status": "failed",
+            "main_agent": {
+                "status": "error",
+                "current_stage": stage,
+                "pending_confirmations": [],
+                "error": rejection_reason,
+            },
+        })
+        add_job_log(job_id, {
+            "action": "stage_rejected",
+            "stage": stage,
+            "decision": decision,
+            "notes": notes,
+            "error": rejection_reason,
+            "message": f"{stage} 被人工否决，工作流已停止",
+        })
+        _broadcast_state(job_id)
+        return {
+            "job_id": job_id,
+            "current_stage": stage,
+            "pending_confirmations": [],
+            "confirmed_stages": [],
+            "status": "error",
+            "rejected": True,
+            "error": rejection_reason,
+            "can_retry": can_retry_stage(job_id, stage),
+        }
+
     # 更新工作流状态：清除该阶段的 waiting 状态
-    update_workflow_status(job_id, {f"{stage.upper()}_status": "completed"})
+    update_workflow_status(job_id, {f"{stage}_status": "completed"})
     _broadcast_state(job_id)
 
     # 清除 pending_confirmation 标记
     if result and "pending_confirmation" in result:
         del result["pending_confirmation"]
         write_json_file(result_file, result)
+        # 阶段已完成业务执行时，批准后结束 execution_status 的 waiting 状态。
+        # 旧版 P1 工具级 checkpoint 的 result.completed=False，仍由下方兼容分支恢复。
+        if result.get("completed"):
+            update_stage_status(job_id, stage, "completed")
 
     add_job_log(job_id, {
         "action": "stage_confirm",
@@ -1118,7 +1385,7 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     })
 
     stage_order = list(STAGE_EXECUTORS.keys())
-    current_idx = stage_order.index(stage.upper()) if stage.upper() in stage_order else 0
+    current_idx = stage_order.index(stage) if stage in stage_order else 0
 
     # 异步执行模式：立即返回，后台继续执行
     if async_execute:
@@ -1142,13 +1409,45 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     # 同步执行模式：等待执行完成
 
     # P1 阶段特殊处理：HITL 中断恢复
-    if stage.upper() == "P1" and is_agent_interrupted(job_id):
+    if stage.upper() == "P1" and not result.get("completed"):
         logger.info(f"[confirm_and_continue] P1 HITL 恢复执行")
         add_job_log(job_id, {
             "action": "p1_hitl_resume",
             "message": "P1 阶段 HITL 中断恢复执行"
         })
-        p1_result = execute_p1(job_id, resume=True)
+        try:
+            p1_result = execute_stage_with_retry(
+                job_id,
+                "P1",
+                lambda current_job_id: execute_p1(
+                    current_job_id,
+                    resume=True,
+                    decision=decision,
+                    notes=notes,
+                ),
+                STAGE_CONFIG["P1"],
+                continuation=True,
+            )
+        except Exception as e:
+            logger.exception(f"[confirm_and_continue] P1 恢复执行异常: job_id={job_id}")
+            update_workflow_status(job_id, {
+                "P1_status": "error",
+                "main_agent": {"status": "error", "current_stage": "P1", "error": str(e)}
+            })
+            _broadcast_state(job_id)
+            add_job_log(job_id, {
+                "action": "stage_error",
+                "stage": "P1",
+                "error": str(e),
+                "message": f"P1 恢复执行异常: {str(e)}"
+            })
+            return {
+                "job_id": job_id,
+                "current_stage": "P1",
+                "status": "error",
+                "error": str(e),
+                "confirmed_stages": [stage.upper()]
+            }
 
         if p1_result.get("pending_confirmation"):
             logger.info(f"[confirm_and_continue] P1 恢复后仍等待确认")
@@ -1158,6 +1457,22 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
                 "pending_confirmations": ["P1"],
                 "confirmed_stages": [],
                 "status": "waiting"
+            }
+
+        if not p1_result.get("completed"):
+            error = p1_result.get("error", "P1 恢复执行失败")
+            update_workflow_status(job_id, {
+                "P1_status": "failed",
+                "main_agent": {"status": "error", "current_stage": "P1", "error": error}
+            })
+            _broadcast_state(job_id)
+            return {
+                "job_id": job_id,
+                "current_stage": "P1",
+                "status": "error",
+                "error": error,
+                "can_retry": can_retry_stage(job_id, "P1"),
+                "confirmed_stages": [],
             }
 
         # P1 恢复执行后完成，继续后续阶段
@@ -1180,7 +1495,30 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         })
         _broadcast_state(job_id)
 
-        next_result = executor(job_id)
+        try:
+            next_result = execute_stage_with_retry(
+                job_id, next_stage, executor, STAGE_CONFIG.get(next_stage, {})
+            )
+        except Exception as e:
+            logger.exception(f"[confirm_and_continue] 阶段 {next_stage} 执行异常: job_id={job_id}")
+            update_workflow_status(job_id, {
+                f"{next_stage}_status": "error",
+                "main_agent": {"status": "error", "current_stage": next_stage, "error": str(e)}
+            })
+            _broadcast_state(job_id)
+            add_job_log(job_id, {
+                "action": "stage_error",
+                "stage": next_stage,
+                "error": str(e),
+                "message": f"{next_stage} 执行异常: {str(e)}"
+            })
+            return {
+                "job_id": job_id,
+                "current_stage": next_stage,
+                "status": "error",
+                "error": str(e),
+                "confirmed_stages": stage_order[:i]
+            }
 
         if next_result.get("pending_confirmation"):
             update_workflow_status(job_id, {
@@ -1196,11 +1534,30 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
                 "confirmed_stages": stage_order[:i],  # i 之前的是真正完成的，i 之后的是未执行的
                 "status": "waiting"
             }
+        elif not next_result.get("completed"):
+            error = next_result.get("error", "未知错误")
+            critical = is_stage_critical(next_stage)
+            update_workflow_status(job_id, {
+                f"{next_stage}_status": "failed",
+                "main_agent": {"status": "error", "current_stage": next_stage, "error": error}
+            })
+            _broadcast_state(job_id)
+            if critical:
+                return {
+                    "job_id": job_id,
+                    "current_stage": next_stage,
+                    "status": "error",
+                    "error": error,
+                    "can_retry": can_retry_stage(job_id, next_stage),
+                    "confirmed_stages": stage_order[:i],
+                }
+            logger.warning(f"[confirm_and_continue] 非关键阶段 {next_stage} 失败，继续执行")
         else:
             update_workflow_status(job_id, {f"{next_stage}_status": "completed"})
             _broadcast_state(job_id)
 
     logger.info(f"[confirm_and_continue] <<< 工作流全部完成")
+    finalize_execution_status(job_id)
     update_workflow_status(job_id, {
         "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
     })
@@ -1223,19 +1580,55 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
         logger.info(f"[_confirm_and_continue_async] >>> 后台执行开始: job_id={job_id}, stage={stage}")
 
         # P1 阶段特殊处理：HITL 中断恢复
-        if stage.upper() == "P1" and is_agent_interrupted(job_id):
+        p1_saved_result = read_json_file(get_stage_result_path(job_id, "p1"))
+        if stage.upper() == "P1" and not p1_saved_result.get("completed"):
             logger.info(f"[_confirm_and_continue_async] P1 HITL 恢复执行")
             add_job_log(job_id, {
                 "action": "p1_hitl_resume",
                 "message": "P1 阶段 HITL 中断恢复执行"
             })
-            p1_result = execute_p1(job_id, resume=True)
+            try:
+                p1_result = execute_stage_with_retry(
+                    job_id,
+                    "P1",
+                    lambda current_job_id: execute_p1(
+                        current_job_id,
+                        resume=True,
+                        decision=decision,
+                        notes=notes,
+                    ),
+                    STAGE_CONFIG["P1"],
+                    continuation=True,
+                )
+            except Exception as e:
+                logger.exception(f"[_confirm_and_continue_async] P1 恢复执行异常: job_id={job_id}")
+                update_workflow_status(job_id, {
+                    "P1_status": "error",
+                    "main_agent": {"status": "error", "current_stage": "P1", "error": str(e)}
+                })
+                _broadcast_state(job_id)
+                add_job_log(job_id, {
+                    "action": "stage_error",
+                    "stage": "P1",
+                    "error": str(e),
+                    "message": f"P1 恢复执行异常: {str(e)}"
+                })
+                return
 
             if p1_result.get("pending_confirmation"):
                 logger.info(f"[_confirm_and_continue_async] P1 恢复后仍等待确认")
                 update_workflow_status(job_id, {
                     "main_agent": {"status": "waiting", "current_stage": "P1", "pending_confirmations": ["P1"]},
                     "P1_status": "waiting"
+                })
+                _broadcast_state(job_id)
+                return
+
+            if not p1_result.get("completed"):
+                error = p1_result.get("error", "P1 恢复执行失败")
+                update_workflow_status(job_id, {
+                    "P1_status": "failed",
+                    "main_agent": {"status": "error", "current_stage": "P1", "error": error}
                 })
                 _broadcast_state(job_id)
                 return
@@ -1260,7 +1653,24 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
             })
             _broadcast_state(job_id)
 
-            next_result = executor(job_id)
+            try:
+                next_result = execute_stage_with_retry(
+                    job_id, next_stage, executor, STAGE_CONFIG.get(next_stage, {})
+                )
+            except Exception as e:
+                logger.exception(f"[_confirm_and_continue_async] 阶段 {next_stage} 执行异常: job_id={job_id}")
+                update_workflow_status(job_id, {
+                    f"{next_stage}_status": "error",
+                    "main_agent": {"status": "error", "current_stage": next_stage, "error": str(e)}
+                })
+                _broadcast_state(job_id)
+                add_job_log(job_id, {
+                    "action": "stage_error",
+                    "stage": next_stage,
+                    "error": str(e),
+                    "message": f"{next_stage} 执行异常: {str(e)}"
+                })
+                return
 
             if next_result.get("pending_confirmation"):
                 update_workflow_status(job_id, {
@@ -1270,11 +1680,23 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
                 _broadcast_state(job_id)
                 logger.info(f"[_confirm_and_continue_async] 下一阶段等待确认: {next_stage}")
                 return
+            elif not next_result.get("completed"):
+                error = next_result.get("error", "未知错误")
+                critical = is_stage_critical(next_stage)
+                update_workflow_status(job_id, {
+                    f"{next_stage}_status": "failed",
+                    "main_agent": {"status": "error", "current_stage": next_stage, "error": error}
+                })
+                _broadcast_state(job_id)
+                if critical:
+                    return
+                logger.warning(f"[_confirm_and_continue_async] 非关键阶段 {next_stage} 失败，继续执行")
             else:
                 update_workflow_status(job_id, {f"{next_stage}_status": "completed"})
                 _broadcast_state(job_id)
 
         logger.info(f"[_confirm_and_continue_async] <<< 工作流全部完成")
+        finalize_execution_status(job_id)
         update_workflow_status(job_id, {
             "main_agent": {"status": "completed", "current_stage": "completed", "pending_confirmations": []}
         })

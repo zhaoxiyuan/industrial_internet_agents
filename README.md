@@ -10,6 +10,8 @@
 - **WebSocket**: 实时日志推送
 - **MiniMax API**: 大语言模型后端（OpenAI 兼容接口）
 - **原生 HTML/JS**: 前端界面（无框架依赖）
+- **LangSmith**: 观测平台（链路追踪与性能分析）
+- **Gradio**: 辅助 Web UI（可选）
 
 ## 项目结构
 
@@ -116,9 +118,9 @@
       └────────┘└────────┘└────────┘└────────┘└────────┘
                               │
 ┌──────────────────────────────────────────────────────────────┐
-│              Human-in-the-Loop (HITL) 两层机制                │
+│                 Human-in-the-Loop (HITL)                      │
 │  Workflow 层: 阶段完成后检查 pending_confirmation 暂停等待     │
-│  Agent 层: HumanInTheLoopMiddleware 在工具调用前中断          │
+│  P1: JSA 与作业票草稿完成后统一审批一次                       │
 └──────────────────────────────────────────────────────────────┘
                               │
 ┌──────────────────────────────────────────────────────────────┐
@@ -156,27 +158,49 @@
 
 ## Human-in-the-Loop 机制
 
-系统采用**两层 HITL 机制**：
-
-1. **Workflow 层**：每个阶段执行完成后检查 `pending_confirmation`，暂停等待人工确认
-2. **Agent 层**：P1 等阶段使用 `HumanInTheLoopMiddleware`，在工具调用前中断等待审批
+系统在 Workflow 层检查 `pending_confirmation` 并暂停等待人工确认。P1 会先完成申请整理、
+JSA 分析和作业票草稿生成，然后统一审批一次，不再对每个工具分别弹窗。
 
 ```
 用户提交申请
       ↓
 run_workflow() 执行 P1
       ↓
-P1 Agent 执行，第一次工具调用前中断
+P1 Agent 自动完成申请整理、JSA 和草稿生成
       ↓
-返回 {pending_confirmation: {type: "hitl_tool_call"}}
+返回 {pending_confirmation: {type: "permit_final_approval"}}
       ↓
 前端弹出确认对话框
       ↓
 用户审批 → POST /api/workflow/confirm
       ↓
-confirm_and_continue() 恢复执行
+confirm_and_continue() 批准后进入 P2
       ↓
 P1 完成，继续 P2-P10
+```
+
+## 异常捕获与处理机制
+
+系统在工作流执行过程中实现了**完善的异常捕获与处理机制**：
+
+- **阶段级异常处理**：每个 P1-P10 阶段内部实现了 try-except 捕获，阶段失败后自动进入异常处理流程
+- **工作流级容错**：工作流整体设置了异常处理节点（`handle_workflow_exception`），确保单阶段失败不影响其他阶段
+- **LLM 调用保护**：使用 `tenacity` 库实现重试机制，应对临时性网络故障
+- **HumanInTheLoop 中断恢复**：Agent 层中断后可通过 `/api/workflow/confirm` 接口恢复执行
+
+异常处理流程：
+```
+阶段执行中发生异常
+      ↓
+捕获异常并记录日志
+      ↓
+更新阶段状态为 failed
+      ↓
+设置 workflow_error 信息
+      ↓
+前端显示异常提示
+      ↓
+用户可选择重试或取消
 ```
 
 ## 快速开始

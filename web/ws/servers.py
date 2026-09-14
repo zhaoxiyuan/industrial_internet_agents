@@ -6,7 +6,12 @@ import asyncio
 import logging
 import websockets
 
-from web.ws.handlers import status_websocket_handler, logs_websocket_handler
+from web.ws.handlers import (
+    status_websocket_handler,
+    logs_websocket_handler,
+    status_broadcast_dispatcher,
+    logs_broadcast_dispatcher,
+)
 from web.ws.manager import process_request, WS_STATUS_PORT, WS_LOGS_PORT
 
 logger = logging.getLogger("server")
@@ -31,7 +36,7 @@ async def _start_status_websocket_server():
         try:
             async with websockets.serve(status_websocket_handler, "127.0.0.1", WS_STATUS_PORT, process_request=process_request):
                 logger.info(f"[WS-STATUS] 状态 WebSocket 服务器已启动: ws://localhost:{WS_STATUS_PORT}")
-                await asyncio.Future()
+                await status_broadcast_dispatcher()
         except Exception as e:
             logger.error(f"[WS-STATUS] 服务器错误: {e}")
             await asyncio.sleep(1)
@@ -42,7 +47,7 @@ async def _start_logs_websocket_server():
         try:
             async with websockets.serve(logs_websocket_handler, "127.0.0.1", WS_LOGS_PORT, process_request=process_request):
                 logger.info(f"[WS-LOGS] 日志 WebSocket 服务器已启动: ws://localhost:{WS_LOGS_PORT}")
-                await asyncio.Future()
+                await logs_broadcast_dispatcher()
         except Exception as e:
             logger.error(f"[WS-LOGS] 服务器错误: {e}")
             await asyncio.sleep(1)

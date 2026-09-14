@@ -732,6 +732,37 @@
             padding-bottom: 5px;
             border-bottom: 1px solid #eee;
         }
+        .work-entry-tabs { display: flex; border-bottom: 1px solid #ddd; margin: -5px -5px 12px; }
+        .work-entry-tab { flex: 1; padding: 10px 8px; border: none; border-bottom: 2px solid transparent; background: transparent; color: #777; cursor: pointer; font-size: 13px; }
+        .work-entry-tab.active { color: #1976D2; border-bottom-color: #1976D2; font-weight: bold; }
+        .work-entry-panel { display: none; }
+        .work-entry-panel.active { display: block; }
+        .history-toolbar, .history-job-head, .history-job-actions, .history-view-banner.active { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .history-toolbar { margin-bottom: 10px; }
+        .history-list { display: flex; flex-direction: column; gap: 8px; }
+        .history-empty { color: #888; text-align: center; padding: 30px 10px; }
+        .history-job-card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff; }
+        .history-job-card.selected { border-color: #2196F3; background: #F4FAFF; }
+        .history-job-id { font-weight: bold; font-size: 12px; }
+        .history-job-status { font-size: 11px; color: #FF9800; text-align: right; }
+        .history-job-content { margin: 7px 0 4px; font-size: 12px; color: #333; line-height: 1.45; }
+        .history-job-meta { margin-bottom: 8px; font-size: 11px; color: #888; }
+        .history-job-actions { justify-content: flex-end; flex-wrap: wrap; }
+        .history-job-actions .btn { padding: 5px 10px; font-size: 11px; }
+        .history-view-banner { display: none; background: #E3F2FD; border: 1px solid #90CAF9; border-radius: 8px; padding: 9px 12px; color: #1565C0; font-size: 12px; margin-bottom: 8px; }
+        .input-source-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+        .input-source-option { padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; color: #555; }
+        .input-source-option.active { border-color: #2196F3; background: #F4FAFF; color: #1565C0; box-shadow: 0 0 0 1px #2196F3 inset; }
+        .input-source-title { display: block; font-weight: bold; font-size: 13px; margin-bottom: 2px; }
+        .input-source-desc { display: block; font-size: 11px; line-height: 1.4; color: #888; }
+        .source-mode-panel { display: none; margin-bottom: 12px; }
+        .source-mode-panel.active { display: block; }
+        .docx-upload { border: 1px dashed #90CAF9; border-radius: 8px; padding: 11px; background: #FAFDFF; }
+        .docx-upload input[type="file"] { width: 100%; font-size: 12px; }
+        .docx-status { margin-top: 8px; padding: 8px; border-radius: 6px; font-size: 11px; line-height: 1.5; background: #f5f5f5; color: #666; }
+        .docx-status.success { background: #E8F5E9; color: #2E7D32; }
+        .docx-status.warning { background: #FFF8E1; color: #8D6E00; }
+        .docx-status.error { background: #FFEBEE; color: #C62828; }
 
         /* 日志 */
         .log-container {
@@ -858,6 +889,7 @@
             overflow: hidden;
             box-shadow: 0 10px 40px rgba(0,0,0,0.3);
         }
+        .modal.p1-approval-modal { width: min(960px, 94vw); max-width: 960px; }
         .modal-header {
             background: linear-gradient(135deg, #FF9800, #FF5722);
             color: white;
@@ -892,6 +924,23 @@
             font-weight: bold;
             margin-bottom: 8px;
             color: #333;
+        }
+        .permit-approval-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #ddd; border-radius: 6px; overflow: hidden; margin-bottom: 14px; }
+        .permit-field { padding: 9px 10px; border-right: 1px solid #ddd; border-bottom: 1px solid #ddd; }
+        .permit-field.wide { grid-column: span 2; }
+        .permit-field.full { grid-column: 1 / -1; }
+        .permit-label { color: #888; font-size: 11px; margin-bottom: 3px; }
+        .permit-value { color: #222; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+        .permit-section { margin-top: 14px; }
+        .permit-section-title { font-weight: bold; color: #333; margin-bottom: 7px; }
+        .permit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .permit-table th, .permit-table td { border: 1px solid #ddd; padding: 7px 8px; text-align: left; vertical-align: top; }
+        .permit-table th { background: #f5f5f5; }
+        .permit-missing { margin-top: 12px; padding: 10px; background: #FFF8E1; border: 1px solid #FFD54F; border-radius: 6px; color: #8D6E00; }
+        .permit-ok { margin-top: 12px; padding: 10px; background: #E8F5E9; border: 1px solid #A5D6A7; border-radius: 6px; color: #2E7D32; }
+        @media (max-width: 760px) {
+            .permit-approval-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .permit-field.wide { grid-column: span 1; }
         }
         .modal-footer {
             padding: 15px 20px;
@@ -1044,135 +1093,6 @@
             overflow-y: auto;
         }
 
-        /* P1 步骤弹窗样式 */
-        .p1-steps-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 20px 0;
-            flex-wrap: wrap;
-        }
-        .p1-step {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            padding: 15px;
-            border-radius: 12px;
-            background: #f5f5f5;
-            min-width: 100px;
-            transition: all 0.3s ease;
-        }
-        .p1-step.pending {
-            background: #fff3e0;
-            border: 2px solid #ffcc80;
-        }
-        .p1-step.running {
-            background: #fff8e1;
-            border: 2px solid #ffc107;
-            box-shadow: 0 0 20px rgba(255, 193, 7, 0.4);
-        }
-        .p1-step.completed {
-            background: #e8f5e9;
-            border: 2px solid #4caf50;
-        }
-        .p1-step-icon {
-            position: relative;
-            width: 48px;
-            height: 48px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .step-icon-inner {
-            font-size: 28px;
-            z-index: 1;
-        }
-        .step-spinner {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            border: 3px solid #e0e0e0;
-            border-top-color: #ff9800;
-            border-radius: 50%;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .p1-step.running .step-spinner {
-            opacity: 1;
-            animation: step-spin 1s linear infinite;
-        }
-        @keyframes step-spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-        .p1-step-info {
-            text-align: center;
-        }
-        .p1-step-name {
-            font-size: 13px;
-            font-weight: bold;
-            color: #333;
-        }
-        .p1-step-status {
-            font-size: 11px;
-            color: #888;
-            margin-top: 2px;
-        }
-        .p1-step.running .p1-step-status {
-            color: #ff9800;
-        }
-        .p1-step.completed .p1-step-status {
-            color: #4caf50;
-        }
-        .p1-step-arrow {
-            font-size: 20px;
-            color: #bbb;
-        }
-        .p1-steps-progress {
-            margin-top: 15px;
-            padding: 0 20px;
-        }
-        .progress-bar {
-            height: 8px;
-            background: #e0e0e0;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4caf50, #8bc34a);
-            border-radius: 4px;
-            transition: width 0.5s ease;
-            width: 0%;
-        }
-        .progress-text {
-            text-align: center;
-            font-size: 12px;
-            color: #666;
-            margin-top: 8px;
-        }
-        .p1-current-log {
-            margin-top: 15px;
-            padding: 12px 15px;
-            background: #1e1e1e;
-            border-radius: 8px;
-        }
-        .p1-current-log .log-title {
-            font-size: 12px;
-            color: #888;
-            margin-bottom: 6px;
-        }
-        .p1-current-log .log-content {
-            font-size: 12px;
-            color: #4caf50;
-            font-family: "Consolas", monospace;
-            max-height: 60px;
-            overflow-y: auto;
-        }
     </style>
 </head>
 <body>
@@ -1440,28 +1360,39 @@
                     <!-- 左侧：作业申请 -->
                     <div class="execute-left">
                         <div class="application-form" style="margin-top: 0; padding: 15px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                <div class="section-title" style="margin: 0; padding: 0; border: none;">📋 作业申请</div>
-                                <button class="btn btn-secondary" onclick="fillMockData()" style="padding: 6px 12px; font-size: 12px;">🔄 生成mock数据</button>
+                            <div class="work-entry-tabs">
+                                <button class="work-entry-tab active" id="work-entry-new-tab" onclick="switchWorkEntry('new')">📝 新建作业</button>
+                                <button class="work-entry-tab" id="work-entry-history-tab" onclick="switchWorkEntry('history')">🕘 历史作业</button>
                             </div>
+                            <div class="work-entry-panel active" id="work-entry-new-panel">
+                            <div class="section-title" style="margin-top: 0;">数据来源</div>
+                            <div class="input-source-selector">
+                                <button class="input-source-option active" id="source-mock-option" onclick="selectInputSource('mock')">
+                                    <span class="input-source-title">🧪 Mock 测试数据</span>
+                                    <span class="input-source-desc">使用内置示例快速测试流程</span>
+                                </button>
+                                <button class="input-source-option" id="source-docx-option" onclick="selectInputSource('docx')">
+                                    <span class="input-source-title">📄 真实作业许可</span>
+                                    <span class="input-source-desc">上传 DOCX 并核对识别结果</span>
+                                </button>
+                            </div>
+                            <div class="source-mode-panel active" id="source-mock-panel">
+                                <button class="btn btn-secondary" onclick="fillMockData()" style="width: 100%; padding: 7px 12px; font-size: 12px;">🔄 更换一条 Mock 数据</button>
+                            </div>
+                            <div class="source-mode-panel" id="source-docx-panel">
+                                <div class="docx-upload">
+                                    <input type="file" id="permit-docx-file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onchange="handlePermitDocx(this.files[0])">
+                                    <div class="docx-status" id="permit-docx-status">请选择真实的 .docx 作业许可文件。解析后请核对并补充下方字段。</div>
+                                </div>
+                            </div>
+                            <div class="section-title">📋 作业申请识别结果</div>
                             <div class="form-group">
                                 <label class="form-label">作业内容</label>
                                 <textarea class="form-input" id="app-job-content" rows="3" placeholder="请输入作业内容" style="height: 60px !important; min-height: 60px !important;"></textarea>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">作业区域</label>
-                                <select class="form-input" id="app-region">
-                                    <option value="炼油厂区01">炼油厂区01</option>
-                                    <option value="炼油厂区02">炼油厂区02</option>
-                                    <option value="催化裂化装置">催化裂化装置</option>
-                                    <option value="加氢处理装置">加氢处理装置</option>
-                                    <option value="储罐区A">储罐区A</option>
-                                    <option value="储罐区B">储罐区B</option>
-                                    <option value="管廊架区域">管廊架区域</option>
-                                    <option value="火炬系统区">火炬系统区</option>
-                                    <option value="污水处理区">污水处理区</option>
-                                    <option value="中心控制室">中心控制室</option>
-                                </select>
+                                <input type="text" class="form-input" id="app-region" placeholder="请输入作业区域">
                             </div>
                             <div class="section-title">👤 作业人员</div>
                             <div class="form-row">
@@ -1489,11 +1420,23 @@
                                 <button class="btn btn-primary" onclick="startWorkflow()">🚀 启动</button>
                                 <button class="btn btn-secondary" onclick="resetWorkflow()">🗑️ 重置</button>
                             </div>
+                            </div>
+                            <div class="work-entry-panel" id="work-entry-history-panel">
+                                <div class="history-toolbar">
+                                    <div class="section-title" style="margin: 0; padding: 0; border: none;">历史作业单</div>
+                                    <button class="btn btn-secondary" onclick="loadHistoryJobs()" style="padding: 5px 10px; font-size: 11px;">🔄 刷新</button>
+                                </div>
+                                <div class="history-list" id="history-job-list"><div class="history-empty">正在加载...</div></div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- 右侧：控制面板 + 日志 -->
                     <div class="execute-right">
+                        <div class="history-view-banner" id="history-view-banner">
+                            <span id="history-view-text">正在查看历史作业</span>
+                            <button class="btn btn-secondary" onclick="exitHistoryView()" style="padding: 4px 9px; font-size: 11px;">返回当前作业</button>
+                        </div>
                         <div id="control-panel" style="background: white; border-radius: 8px; padding: 10px 15px; margin-bottom: 10px; flex: 0 0 auto;">
                             <span style="color: #999;">就绪</span>
                         </div>
@@ -1506,99 +1449,28 @@
         </div>
     </div>
 
-    <!-- P1 执行步骤弹窗 -->
-    <div class="modal-overlay" id="p1-steps-modal">
-        <div class="modal">
-            <div class="modal-header" style="background: linear-gradient(135deg, #4CAF50, #2E7D32);">
-                <span class="modal-icon">📋</span>
+    <!-- 历史作业单只读详情 -->
+    <div class="modal-overlay" id="history-permit-modal">
+        <div class="modal p1-approval-modal">
+            <div class="modal-header" style="background: linear-gradient(135deg, #1976D2, #0D47A1);">
+                <span class="modal-icon">📄</span>
                 <div>
-                    <div class="modal-title">P1 作业许可执行中</div>
-                    <div class="modal-subtitle">正在执行 JSA 分析与作业票生成</div>
+                    <div class="modal-title" id="history-permit-title">历史作业单详情</div>
+                    <div class="modal-subtitle">只读查看，不会修改或继续工作流</div>
                 </div>
             </div>
             <div class="modal-body">
-                <div class="p1-steps-container">
-                    <div class="p1-step" id="p1-step-1">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">📝</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">提交作业申请</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
-                    </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-2">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">🔍</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">JSA 安全分析</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
-                    </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-3">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">📄</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">生成作业票</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
-                    </div>
-                    <div class="p1-step-arrow">→</div>
-                    <div class="p1-step" id="p1-step-4">
-                        <div class="p1-step-icon">
-                            <span class="step-icon-inner">✔️</span>
-                            <span class="step-spinner"></span>
-                        </div>
-                        <div class="p1-step-info">
-                            <div class="p1-step-name">作业票查询</div>
-                            <div class="p1-step-status">待执行</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="p1-steps-progress">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="p1-progress-fill"></div>
-                    </div>
-                    <div class="progress-text" id="p1-progress-text">0 / 4 步骤完成</div>
-                </div>
-                <div class="p1-current-log" id="p1-current-log">
-                    <div class="log-title">📋 当前日志</div>
-                    <div class="log-content" id="p1-log-content">等待执行...</div>
-                </div>
+                <div id="history-permit-content">正在加载...</div>
             </div>
-        </div>
-    </div>
-
-    <!-- P1 完成提示弹窗 -->
-    <div class="modal-overlay" id="p1-complete-modal">
-        <div class="modal">
-            <div class="modal-header" style="background: linear-gradient(135deg, #4CAF50, #2E7D32);">
-                <span class="modal-icon">✅</span>
-                <div>
-                    <div class="modal-title">P1 阶段执行完成</div>
-                    <div class="modal-subtitle">作业许可、JSA分析与作业票生成</div>
-                </div>
-            </div>
-            <div class="modal-body" style="text-align: center;">
-                <div style="font-size: 48px; margin: 20px 0;">🎉</div>
-                <div style="font-size: 18px; color: #333; margin-bottom: 10px;">P1 作业许可阶段已执行完成</div>
-                <div style="font-size: 14px; color: #666; margin-bottom: 20px;">即将自动进入 P2 作业任务获取阶段</div>
-                <div style="font-size: 36px; font-weight: bold; color: #4CAF50; margin: 20px 0;" id="p1-complete-countdown">3</div>
-                <div style="font-size: 14px; color: #888;">秒后自动进入 P2</div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeHistoryPermit()">关闭</button>
             </div>
         </div>
     </div>
 
     <!-- HITL 弹窗 -->
     <div class="modal-overlay" id="hitl-modal">
-        <div class="modal">
+        <div class="modal" id="hitl-modal-card">
             <div class="modal-header">
                 <span class="modal-icon" id="modal-icon">⚠️</span>
                 <div>
@@ -1623,7 +1495,7 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal()">❌ 取消</button>
                 <button class="btn btn-reject" onclick="console.log('reject clicked');confirmDecision('reject')">❌ 否决</button>
-                <button class="btn btn-approve" onclick="console.log('approve clicked');confirmDecision('approve')">✅ 批准</button>
+                <button class="btn btn-approve" id="hitl-approve-button" onclick="console.log('approve clicked');confirmDecision('approve')">✅ 批准</button>
             </div>
         </div>
     </div>
