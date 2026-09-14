@@ -45,6 +45,9 @@ openclaw-channel-gateway-standalone/data/gateway-state.json
 # 本地 GitHub API 辅助脚本（读取本机 .env 凭据）
 /_github_helper.py
 
+# Claude/Codex 本机权限与偏好设置
+/.claude/settings.local.json
+
 # 各处备份文件
 *.bak
 **/*.bak
