@@ -716,6 +716,53 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
 # 兼容导出（main_agent.py 之外的旧引用）
 # ============================================================
 
+def execute_stage(job_id: str) -> dict:
+    """P7 阶段执行入口：将 P6 候选事件转换为风险研判结果。"""
+    from datetime import datetime, timezone
+    from .workflow import get_stage_result_path, read_json_file, write_json_file
+    from .utils import get_stage_logger, add_job_log
+
+    log = get_stage_logger("P7")
+    log.log_enter(job_id)
+    result = {
+        "job_id": job_id,
+        "stage": "P7",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+    try:
+        candidate_events = read_json_file(
+            get_stage_result_path(job_id, "p6")
+        ).get("candidate_events", [])
+        risk_events = []
+        for event in candidate_events:
+            event_id = event.get("event_id", "")
+            if not event_id:
+                continue
+            try:
+                analyzed = json.loads(risk_analyze.invoke({"event_id": event_id}))
+                log.log_tool_call("risk_analyze", {"event_id": event_id}, analyzed)
+                if "result" in analyzed:
+                    risk_events.append(analyzed["result"])
+            except Exception as exc:
+                logger.warning("[P7] risk_analyze failed for %s: %s", event_id, exc)
+        result.update({
+            "risk_events": risk_events,
+            "completed": True,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        log.log_error(job_id, exc)
+        result["error"] = str(exc)
+
+    write_json_file(get_stage_result_path(job_id, "p7"), result)
+    add_job_log(job_id, {
+        "action": "execute_p7",
+        "result": "success" if result["completed"] else "failed",
+    })
+    log.log_exit(job_id, result)
+    return result
+
 # 这些是早期占位符，P7 现在通过真实 A6Agent 调度，旧引用保留为 None
 create_risk_agent = None
 create_risk_agent_with_hitl = None

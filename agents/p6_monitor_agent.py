@@ -1636,7 +1636,7 @@ class MonitorStopRequest(BaseModel):
 
 
 @app.post("/api/monitor/start")
-async def monitor_start(req: MonitorStartRequest):
+async def api_monitor_start(req: MonitorStartRequest):
     """前端「开始监测」按钮：等价于「点击开始agent → 5秒后播放mock数据」"""
     print(f"[monitor_start] 进入: job_id={req.job_id}, scenario={req.scenario}, "
           f"play_delay_sec={req.play_delay_sec}")
@@ -2102,6 +2102,67 @@ def map_a5_events_to_p6(raw_events: list, job_id: str) -> list:
             "person": ev.get("person", {}),
         })
     return candidate_events
+
+
+# ============================================================
+# 阶段执行入口
+# ============================================================
+
+def execute_stage(job_id: str) -> dict:
+    """P6 阶段执行入口：启动监测会话并收集候选事件。"""
+    from agents.workflow import (
+        add_job_log,
+        get_stage_result_path,
+        read_json_file,
+        write_json_file,
+    )
+    from agents.utils import get_stage_logger
+
+    log = get_stage_logger("P6")
+    log.log_enter(job_id)
+    result = {
+        "job_id": job_id,
+        "stage": "P6",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": False,
+    }
+
+    try:
+        p5_result = read_json_file(get_stage_result_path(job_id, "p5"))
+        task_id = p5_result.get("task_id", "")
+
+        monitor_result = json.loads(monitor_start.invoke({"task_id": task_id}))
+        log.log_tool_call("monitor_start", {"task_id": task_id}, monitor_result)
+        if "result" in monitor_result:
+            result["session_id"] = monitor_result["result"].get("session_id", "")
+
+        events_str = monitor_events.invoke({"task_id": task_id})
+        events = []
+        for line in events_str.strip().splitlines():
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        log.log_tool_call(
+            "monitor_events", {"task_id": task_id}, {"events_count": len(events)}
+        )
+
+        result["candidate_events"] = events
+        result["completed"] = True
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception as exc:
+        log.log_error(job_id, exc)
+        result["error"] = str(exc)
+
+    write_json_file(get_stage_result_path(job_id, "p6"), result)
+    add_job_log(
+        job_id,
+        {"action": "execute_p6", "result": "success" if result["completed"] else "failed"},
+    )
+    log.log_exit(job_id, result)
+    return result
 
 
 # ============================================================
