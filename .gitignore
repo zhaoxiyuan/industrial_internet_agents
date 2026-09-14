@@ -39,6 +39,12 @@ openclaw-channel-gateway-standalone/data/gateway-state.json
 # 卡片回调审计日志（每次点击追加）
 /data/card_callbacks.jsonl
 
+# 飞书卡片运行时索引（本机自动生成，不跨环境同步）
+/data/feishu_card_index.json
+
+# 本地 GitHub API 辅助脚本（读取本机 .env 凭据）
+/_github_helper.py
+
 # 各处备份文件
 *.bak
 **/*.bak
