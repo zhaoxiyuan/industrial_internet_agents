@@ -416,6 +416,46 @@ def update_job(
         job["p8_job_id"], level_enum, job["channel"], job["status"], len(a6_event_ids),
     )
 
+    # 2026-08-20 修复：update_job 返回 Command 立刻 per-job 持久化
+    #
+    # 触发背景（飞书 chat_reply 场景）：
+    #   - 用户消息无 [job_id=...] 前缀 → chat_reply 调 run_disposition_agent(job_id=None)
+    #   - run_disposition_agent 的 flush_working_memory 跳过（job_id 为空）
+    #   - LLM 从上下文推断出 job_id 并传入 update_job
+    #   - P8_job 状态非终态（pending）→ P8ArchiveMiddleware.after_model 不触发 dump
+    #   → per-job working_memory.json 永远不落盘
+    #
+    # 修复：在 update_job 内直接 per-job 持久化（与 LangGraph reducer 同语义：按
+    # p8_job_id upsert；保留既有 entries，覆盖同 pid）。失败不抛（不阻断 LLM 主流程）。
+    #
+    # 兼容性：与 P8ArchiveMiddleware / run_disposition_agent.flush_working_memory 的
+    # 写入目标一致（同 job_id → 同文件）；portalocker 文件锁保证多进程安全。
+    if job.get("job_id"):
+        try:
+            from A7.storage.p8_working_memory_store import (
+                load_working_memory,
+                dump_working_memory,
+            )
+            existing = load_working_memory(job["job_id"])
+            # reducer: 按 p8_job_id upsert（保留既有 entries，覆盖同 pid）
+            merged = {
+                j["p8_job_id"]: j
+                for j in existing
+                if isinstance(j, dict) and isinstance(j.get("p8_job_id"), str)
+            }
+            merged[job["p8_job_id"]] = job
+            dump_working_memory(job["job_id"], list(merged.values()))
+            logger.info(
+                "update_job: per-job working_memory dump → job_id=%s pid=%s total=%d",
+                job["job_id"], job["p8_job_id"], len(merged),
+            )
+        except Exception as exc:
+            # 不阻断主流程；P8ArchiveMiddleware / run_disposition_agent 仍有兜底
+            logger.warning(
+                "update_job: per-job working_memory dump 失败（不阻断主流程）: %s",
+                exc,
+            )
+
     # LangGraph Command：reducer 自动按 p8_job_id upsert
     # 2026-08-19 修复：成功路径也必须返回 ToolMessage，否则 LangGraph 抛
     # "Every tool call MUST have a corresponding ToolMessage"。

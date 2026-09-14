@@ -11,6 +11,7 @@
 
 调用模式：
 - ``create_disposition_agent(job_id=...)`` → 启动时调 ``load_working_memory``
+- ``update_job`` 工具（2026-08-20 新增）→ 返回 Command 前直接 per-job dump（解决 chat_reply + LLM 推断 job_id 场景下不写盘的 bug）
 - ``P8ArchiveMiddleware.after_model`` → 终态归档后调 ``dump_working_memory``
 - ``run_disposition_agent`` invoke end → 调 ``flush_working_memory``
 """

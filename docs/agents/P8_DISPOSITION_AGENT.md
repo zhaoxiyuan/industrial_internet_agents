@@ -238,10 +238,23 @@ P8 采用 **三层职责分离**：
 
 ```
 1. create_disposition_agent(job_id=...)    → 启动时 lazy load working_memory.json 到 MemorySaver
-2. P8ArchiveMiddleware.after_model(终态)    → save_archived_job 全局+per-job 双写 + dump working_memory
-3. run_disposition_agent invoke end         → flush_working_memory 从 MemorySaver 实时 dump
-4. execute_p8 end                          → 写 P8/result.json + 保留 p8_result.json 1 cycle
+2. update_job 工具内部                       → per-job working_memory dump（reducer upsert by p8_job_id）
+3. P8ArchiveMiddleware.after_model(终态)    → save_archived_job 全局+per-job 双写 + dump working_memory
+4. run_disposition_agent invoke end         → flush_working_memory 从 MemorySaver 实时 dump
+5. execute_p8 end                          → 写 P8/result.json + 保留 p8_result.json 1 cycle
 ```
+
+> **2026-08-20 修复**：update_job 工具内部增加 per-job dump（路径 2），解决以下场景
+> 下 per-job `working_memory.json` 不写盘的 bug：
+> - chat_reply 解析 `[job_id=...]` → 无 → `job_id=None`
+> - `run_disposition_agent` 的 flush_working_memory 跳过（job_id 为空）
+> - LLM 从上下文推断出 job_id 并传给 update_job
+> - P8_job 状态非终态 → `P8ArchiveMiddleware.after_model` 不触发 dump
+> → per-job working_memory.json 永远不写
+>
+> 修复：在 `update_job` 工具内直接调 `dump_working_memory(job_id, merged_list)`，
+> 与 LangGraph reducer 同语义（按 `p8_job_id` upsert；保留既有 entries）。
+> 失败不抛（不阻断 LLM 主流程）；其他路径（3/4）作为兜底保留。
 
 ### 失败语义
 

@@ -306,6 +306,8 @@ input[disabled] { background:#1e293b !important; color:#94a3b8 !important; }
         <span style="color:#94a3b8;font-size:12px;">📋 per-job 监测（写入 data/jobs/&lt;job_id&gt;/P6 + P7）：</span>
         <label style="color:#94a3b8;font-size:12px;">作业 ID:</label>
         <input id="txtJobId" type="text" placeholder="例: 20260819154312029"
+               maxlength="17" pattern="[0-9]{17}" inputmode="numeric"
+               oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,17)"
                style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;width:180px;" />
         <label style="color:#94a3b8;font-size:12px;">场景:</label>
         <select id="selScenarioJob" style="padding:6px 10px;font-size:13px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;">
@@ -410,18 +412,29 @@ async function pollLog() {
   await Promise.all([fetchLogCounts(), fetchRawEvents()]);
 }
 
-// 读 job_id 文本框（首选）→ 兑底用 _monitorJobId（最后一次有效值）→ 都没有则空串走全局 A5/logs
-//   - 文本框为主：用户改文本框后轮询立即跟随
-//   - 兑底：文本框被清空时仍能查最后一次历史的 job_id
-//   - 空串：保持向后兼容（页面首次加载、还没填 job_id 时走 A5/logs）
+// 占位 job_id：5 类轮询 / 启动监测 / 清理日志 均统一走 17 位数字
+//   - 用户输入 17 位数字 → 原文传给后端
+//   - 文本框为空 / 非 17 位 → 全部替换为 17 个 0 传给后端
+//   原因：用户要求"不允许全局 A5/logs",所以 job_id 永远 17 位
+//   - 后端 6 处接口对非 17 位 job_id 会 400 拒绝
+//   - 占位 17 个 0 → 后端不会 400,但目录不存在 → 返空,不污染 A5/logs
+const JOB_ID_PLACEHOLDER = "00000000000000000";
+
+// 把任意输入归一化为 17 位 job_id（非 17 位 → 占位 17 个 0）
+function normalizeJobId(raw) {
+  if (raw && /^\d{17}$/.test(raw)) return raw;
+  return JOB_ID_PLACEHOLDER;
+}
+
+// 读文本框 → 归一化为 17 位（永远不为空 → 永远走 per-job dir → 禁用全局 A5/logs）
 function getActiveJobId() {
   const tb = document.getElementById("txtJobId");
   const txt = tb ? tb.value.trim() : "";
-  return txt || _monitorJobId || "";
+  return normalizeJobId(txt);
 }
 
 async function fetchLogCounts() {
-  // 读文本框 → 兑底 _monitorJobId → 默认 A5/logs
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
   const jobId = getActiveJobId();
   const url = jobId ? "/api/logs?job_id=" + encodeURIComponent(jobId) : "/api/logs";
   try {
@@ -439,7 +452,7 @@ async function fetchLogCounts() {
 
 async function pollScenario() {
   try {
-    // 跟随 per-job 模式：读 data/jobs/{job_id}/P6/ 进度
+    // 读文本框 → normalizeJobId 归一化为 17 位
     const jobId = getActiveJobId();
     const url = jobId ? "/api/scenario/status?job_id=" + encodeURIComponent(jobId) : "/api/scenario/status";
     const r = await fetch(url);
@@ -456,7 +469,7 @@ async function pollScenario() {
 }
 
 async function fetchLatestSnapshot() {
-  // 读文本框 → 兑底 _monitorJobId → 默认 A5/logs
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
   const jobId = getActiveJobId();
   const url = jobId ? "/api/logs?job_id=" + encodeURIComponent(jobId) : "/api/logs";
   try {
@@ -524,7 +537,7 @@ async function pollAgent() {
 
 async function fetchAgentStatus() {
   try {
-    // 跟随 per-job 模式：读 data/jobs/{job_id}/P6/ 处理队列
+    // 读文本框 → normalizeJobId 归一化为 17 位
     const jobId = getActiveJobId();
     const url = jobId ? "/api/agent/status?job_id=" + encodeURIComponent(jobId) : "/api/agent/status";
     const r = await fetch(url);
@@ -576,7 +589,7 @@ function renderQueue(pending) {
 }
 
 async function fetchRawEvents() {
-  // 读文本框 → 兑底 _monitorJobId → 默认 A5/logs
+  // 读文本框 → normalizeJobId 归一化为 17 位
   const jobId = getActiveJobId();
   const url = jobId ? "/api/agent/events?job_id=" + encodeURIComponent(jobId) : "/api/agent/events";
   try {
@@ -611,7 +624,7 @@ async function fetchRawEvents() {
 
 async function startScenario() {
   const scenario = document.getElementById("selScenario").value;
-  // 跟随 per-job 模式：读文本框优先 → 兑底 _monitorJobId → 都没有走全局 A5/logs
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空 → 永远走 per-job dir）
   const jobId = getActiveJobId();
   try {
     const r = await fetch("/api/scenario/start", {
@@ -642,8 +655,9 @@ async function stopScenario() {
 }
 
 async function clearLogs() {
-  // 优先读文本框（用户当前关注哪个 job_id 就清哪个），兑底用 _monitorJobId
+  // 读文本框 → normalizeJobId 归一化为 17 位（永不空）
   const jobId = getActiveJobId();
+  // 占位 00000000000000000 时不给 alert（用户故意没填 → 清理占位路径无害）
   if (!jobId) {
     alert("请先在「per-job 监测」面板启动一个 job（点击「🚀 开始监测」）");
     return;
@@ -665,7 +679,7 @@ async function clearLogs() {
 async function startAgent() {
   const interval = parseInt(document.getElementById("selInterval").value);
   const batch    = parseInt(document.getElementById("selBatch").value);
-  // 跟随 per-job 模式：读文本框优先 → 兑底 _monitorJobId → 都没有走全局 A5/logs
+  // 读文本框 → normalizeJobId 归一化为 17 位
   const jobId = getActiveJobId();
   try {
     const r = await fetch("/api/agent/start", {
@@ -708,16 +722,14 @@ let _monitorJobId = "";
 let _monitorPollTimer = null;
 
 async function startMonitor() {
-  const jobId = document.getElementById("txtJobId").value.trim();
+  const rawJobId = document.getElementById("txtJobId").value.trim();
   const scenario = document.getElementById("selScenarioJob").value;
   // 跟随 selInterval / selBatch（之前硬编码 2 / 10 → 前端下拉框失效）
   const interval = parseInt(document.getElementById("selInterval").value);
   const batch    = parseInt(document.getElementById("selBatch").value);
-  if (!jobId) { alert("请输入 job_id（17 位时间戳，例: 20260819154312029）"); return; }
-  if (!/^\d{17}$/.test(jobId)) {
-    alert("job_id 格式错误，应为 17 位数字（YYYYMMDDHHMMSS + 3位随机）");
-    return;
-  }
+  // 归一化为 17 位：用户输入 17 位 → 原文；非 17 位 / 空 → 17 个 0 占位
+  // 原因：用户要求"不允许全局 A5/logs" + 后端 6 处接口对非 17 位 job_id 400 拒绝
+  const jobId = normalizeJobId(rawJobId);
   _monitorJobId = jobId;
   try {
     const r = await fetch("/api/monitor/start", {
@@ -1147,7 +1159,8 @@ async def _run_data_play(scenario: str, log_dir: str):
 
 async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
                         agent: Optional[A5Agent] = None,
-                        running_predicate=None):
+                        running_predicate=None,
+                        job_id: str = ""):
     """Agent 轮询循环。
 
     Args:
@@ -1158,6 +1171,9 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
         running_predicate: callable() -> bool；返回 False 时退出循环。
             默认 lambda: state.agent_running（兼容旧 /api/agent/start）；
             per-job 模式传 lambda: True（只要 job 没 cancel 就持续跑）。
+        job_id: 当前 active job_id（per-job 模式由 _run_agent_loop_for_job 闭包传入）；
+                用于 trigger_a6_assessment 时透传，定位 per-job P7 目录。
+                不传（兼容旧路径）→ 走全局 A6Agent。
     """
     if agent is None:
         # 兼容旧调用：不传 agent 时 new 一个全局 A5Agent（raw_event 写到 LOG_DIR）
@@ -1298,8 +1314,9 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
                     # 🚨 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
                     #    P7 in-process 调用，跳过 HTTP — 详见上方注释块
                     if result.get("events"):
-                        # 透传当前 active job_id（per-job 模式）；无 active 时空串 → 回退到全局 A6Agent
-                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=_get_active_job_id()))
+                        # 透传当前 active job_id（per-job 模式由闭包 job_id 提供）；
+                        # 兼容旧 /api/agent/start 路径 → job_id="" → 回退全局 A6Agent
+                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=job_id))
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
@@ -1418,7 +1435,8 @@ async def _run_agent_loop_for_job(job_id: str, interval_sec: int = 10,
         return s is not None and s.get("status") not in ("cancelled", "error")
 
     await _run_agent_loop(p6_dir, interval_sec=interval_sec, batch_size=batch_size,
-                          agent=agent, running_predicate=_running)
+                          agent=agent, running_predicate=_running,
+                          job_id=job_id)
 
 
 async def _stop_one_job_active(job_id: str, state: Dict[str, Any]):

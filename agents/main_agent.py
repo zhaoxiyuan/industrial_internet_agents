@@ -49,7 +49,10 @@ from .p6_monitor_agent import monitor_start, monitor_events
 from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import run_disposition_agent
 from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
-from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
+# 2026-08-20 临时注释：p10_archive_agent 重构 in-flight；archive_* 调用仅在
+# execute_p10（P10 阶段）使用，不影响 P1-P9 / chat_reply / web。P10 重构完
+# 取消注释。
+# from .p10_archive_agent import archive_task, archive_cases, archive_performance, archive_suggestions
 
 
 # ============================================================

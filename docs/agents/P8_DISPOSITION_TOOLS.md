@@ -112,6 +112,10 @@ Command(update={
 
 - ✅ `working_memory` 写入（reducer 按 `p8_job_id` upsert）
 - ✅ `messages` 追加 ToolMessage
+- ✅ **per-job 立即落盘**（2026-08-20 新增）：当 `job_id` 非空时，工具内部直接调
+  [`A7.storage.dump_working_memory`](../../A7/storage/p8_working_memory_store.py)
+  把当前 P8_job 写到 `data/jobs/{job_id}/P8/working_memory.json`；
+  解决 chat_reply 无 `[job_id=...]` 前缀 + LLM 推断 job_id 时 per-job 文件不写盘的 bug。
 - 🔁 **终态监听**：[`P8ArchiveMiddleware`](../../A7/middleware/p8_archive_middleware.py) 在 after_model 检测
   `status ∈ {completed, rejected, escalated, resumed}` → 自动调用
   [`A7.storage.save_archived_job`](../../A7/storage/p8_long_term.py) 写入长期记忆 + 从 working_memory 删除

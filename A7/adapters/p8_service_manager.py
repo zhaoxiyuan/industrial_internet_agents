@@ -40,7 +40,7 @@ from typing import Optional
 # 常量 / 配置
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # repo 根（修复 2026-08-20：原 .parent.parent 指向 A7/，导致 .gateway.pid 路径偏移一层）
 RUNTIME_DIR = PROJECT_ROOT / "data" / "runtime"
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,6 +54,10 @@ GATEWAY_HEALTHCHECK = "http://127.0.0.1:8787/healthz"
 WEB_HEALTHCHECK = "http://127.0.0.1:8080/api/jobs/_smoke_/working-memory"   # 任意 job_id 都行，返 200 即通
 CHAT_REPLY_HEALTHCHECK = None  # 没 HTTP 端口，靠 PID + 日志尾部
 
+# 服务端口（端口预检用；仅 gateway/web 有）
+GATEWAY_HOST, GATEWAY_PORT = "127.0.0.1", 8787
+WEB_HOST, WEB_PORT = "127.0.0.1", 8080
+
 # 服务配置
 SERVICES: dict[str, dict] = {
     "gateway": {
@@ -66,6 +70,8 @@ SERVICES: dict[str, dict] = {
         "managed_externally": True,   # PID 文件由 feishu_gateway_cli 自己写
         "healthcheck_url": GATEWAY_HEALTHCHECK,
         "startup_wait": 30.0,         # 飞书配置首次加载可能慢
+        # 端口预检（2026-08-20 新增）：防止 .gateway.pid 是脏 PID 时 start_gateway 误报"端口已被占用"
+        "host": GATEWAY_HOST, "port": GATEWAY_PORT,
     },
     "chat_reply": {
         "label": "chat_reply daemon (P8 轮询)",
@@ -77,6 +83,7 @@ SERVICES: dict[str, dict] = {
         "managed_externally": False,
         "healthcheck_url": CHAT_REPLY_HEALTHCHECK,
         "startup_wait": 5.0,          # 仅检查 PID 存活
+        # chat_reply 无 HTTP 端口 → 不做端口预检
     },
     "web": {
         "label": "Web server (port 8080)",
@@ -87,6 +94,8 @@ SERVICES: dict[str, dict] = {
         "managed_externally": False,
         "healthcheck_url": WEB_HEALTHCHECK,
         "startup_wait": 10.0,
+        # 端口预检（2026-08-20 新增）：防止 .pid 文件指向已死进程但 8080 被孤儿占着
+        "host": WEB_HOST, "port": WEB_PORT,
     },
 }
 
@@ -194,6 +203,52 @@ def _wait_until_dead(pid: int, timeout: float) -> bool:
     return not _is_pid_alive(pid)
 
 
+def _port_in_use(host: str, port: int, *, timeout: float = 0.3) -> bool:
+    """TCP 探测端口是否被占（无需 admin，跨平台可用）。
+
+    返回 True = 端口被某进程占用（不论是"我们的"还是"孤儿"）。
+    用于服务启动前的孤儿探测（2026-08-20 新增）。
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port))
+            return True
+        except (OSError, socket.timeout):
+            return False
+
+
+def _port_holder_pid(host: str, port: int) -> Optional[int]:
+    """通过 netstat 查谁占了 host:port（仅 Windows + 调试/错误信息用）。
+
+    返回 PID；解析失败 / 没找到 → None。**不**用来做存活判断——只给错误日志看。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, timeout=3.0,
+        ).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    # 行示例：  TCP    127.0.0.1:8787    0.0.0.0:0    LISTENING    18848
+    needle = f"{host}:{port}"
+    for line in out.splitlines():
+        if "LISTENING" not in line:
+            continue
+        cols = line.split()
+        if len(cols) < 5:
+            continue
+        if cols[1] == needle or cols[1].endswith(f":{port}"):
+            try:
+                return int(cols[-1])
+            except ValueError:
+                continue
+    return None
+
+
 def _wait_health(url: str, timeout: float) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -219,6 +274,29 @@ def start_service(
 ) -> bool:
     """启动单个服务。返回是否成功。"""
     cfg = SERVICES[name]
+
+    # ===== 端口预检（2026-08-20 新增）=====
+    # 解决 .pid 文件脏值 / 孤儿进程占端口但 PID 文件不在的场景：
+    # 先用 TCP 探测端口；占着 + /healthz 通 → 视为"已在运行"；占着 + 不通 → 报错（不盲目启动覆盖）。
+    port = cfg.get("port")
+    if port is not None:
+        host = cfg.get("host", "127.0.0.1")
+        if _port_in_use(host, port):
+            holder = _port_holder_pid(host, port) or "?"
+            url = cfg.get("healthcheck_url")
+            if url and _wait_health(url, timeout=1.0):
+                _info(
+                    f"{cfg['label']} 已在运行 (port={port} held by PID={holder}, /healthz OK)"
+                )
+                return True
+            else:
+                _err(
+                    f"{cfg['label']} 端口 {port} 已被 PID={holder} 占用且 /healthz 不通 — "
+                    f"可能是孤儿进程占端口。请 `taskkill /F /PID {holder}` 后重试，"
+                    f"或清理 {cfg['pid_file']} 后再试。"
+                )
+                return False
+
     pid = _read_pid(cfg["pid_file"])
     if _is_pid_alive(pid):
         _info(f"{cfg['label']} 已在运行 (PID={pid})")

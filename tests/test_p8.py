@@ -1210,6 +1210,174 @@ class TestCardClickLoopE2E(unittest.TestCase):
         self.assertEqual(matching[0]["operator_open_id"], "ou_pa05_loop_test")
 
 
+# ============================================================
+# TestUpdateJobPersistenceRegression（无 LLM）
+# ============================================================
+class TestUpdateJobPersistenceRegression(unittest.TestCase):
+    """回归测试：update_job 返回 Command 后必须立即落盘 per-job working_memory.json。
+
+    背景（2026-08-20）：
+    - chat_reply 解析 [job_id=...] → 没有 → job_id=None
+    - run_disposition_agent 的 flush_working_memory 跳过
+    - LLM 从上下文推断出 job_id 并传给 update_job
+    - P8_job 状态非终态 → P8ArchiveMiddleware.after_model 不触发 dump
+    → per-job working_memory.json 永远不写盘
+
+    修复（2026-08-20）：update_job 内增加直接 per-job dump（reducer 语义 upsert by p8_job_id）。
+    本测试覆盖 3 个关键路径：
+      UP-01：首次 create → 文件被创建且含 1 条 P8_job
+      UP-02：同 p8_job_id 二次 update → upsert（仍是 1 条，max_level/status 更新）
+      UP-03：job_id=None 时跳过 dump（不抛异常，Command 仍返回）
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._archived_files_backup = _backup_archived_files()
+        from A7.storage import reset_archive
+        reset_archive()
+
+    @classmethod
+    def tearDownClass(cls):
+        from A7.storage import reset_archive
+        reset_archive()
+        _restore_archived_files(cls._archived_files_backup)
+
+    def setUp(self):
+        self._wm_path = P8_DIR / "working_memory.json"
+        self._wm_backup = self._wm_path.read_bytes() if self._wm_path.exists() else None
+        if self._wm_path.exists():
+            self._wm_path.unlink()
+
+    def tearDown(self):
+        if self._wm_backup is not None:
+            self._wm_path.write_bytes(self._wm_backup)
+        elif self._wm_path.exists():
+            self._wm_path.unlink()
+
+    # UP-01：首次 create → 文件被创建
+    def test_up01_create_writes_per_job_file(self):
+        from agents.p8_disposition_agent import update_job
+
+        result = update_job.invoke({
+            "name": "update_job",
+            "args": {
+                "a6_event_ids": [A6_ID_1, A6_ID_2],
+                "level": "MEDIUM",
+                "risk_basis": "回归测试：两个 A6 事件叠加",
+                "job_id": JOB_ID,
+                "status": "pending",
+                "channel": "PUSH",
+            },
+            "type": "tool_call",
+            "tool_call_id": "up01",
+            "id": "up01",
+        })
+
+        # 验证 Command 返回正常
+        from langchain_core.messages import BaseMessage
+        from langgraph.types import Command
+        self.assertIsInstance(result, Command, "update_job 必须返回 Command")
+        self.assertIn("working_memory", result.update)
+
+        # 验证 per-job 文件被创建（这是修复的核心）
+        self.assertTrue(
+            self._wm_path.exists(),
+            f"per-job working_memory.json 必须被创建，但不存在: {self._wm_path}",
+        )
+
+        data = json.loads(self._wm_path.read_text(encoding="utf-8"))
+        self.assertIsInstance(data, list, "文件顶层必须是 list")
+        self.assertEqual(len(data), 1, f"应有 1 条 P8_job，实际 {len(data)} 条")
+        job = data[0]
+        self.assertEqual(job["job_id"], JOB_ID)
+        self.assertEqual(job["max_level"], "MEDIUM")
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(job["channel"], "PUSH")
+        self.assertEqual(job["a6_event_ids"], [A6_ID_1, A6_ID_2])
+        self.assertTrue(job["p8_job_id"].startswith("P8J-"))
+
+    # UP-02：同 p8_job_id 二次 update → upsert（不新增第二条）
+    def test_up02_upsert_preserves_reducer_semantics(self):
+        from agents.p8_disposition_agent import update_job
+
+        # 第一次：创建
+        first = update_job.invoke({
+            "name": "update_job",
+            "args": {
+                "a6_event_ids": [A6_ID_1],
+                "level": "LOW",
+                "risk_basis": "首次：低风险",
+                "job_id": JOB_ID,
+                "status": "pending",
+                "channel": "PUSH",
+            },
+            "type": "tool_call",
+            "tool_call_id": "up02_a",
+            "id": "up02_a",
+        })
+        first_pid = first.update["working_memory"][0]["p8_job_id"]
+        self.assertTrue(self._wm_path.exists())
+
+        # 第二次：同 pid 更新（升级 + 状态变更）
+        update_job.invoke({
+            "name": "update_job",
+            "args": {
+                "a6_event_ids": [A6_ID_1, A6_ID_2],
+                "level": "HIGH",
+                "risk_basis": "二次：升级为高风险",
+                "job_id": JOB_ID,
+                "p8_job_id": first_pid,   # 复用同一 pid
+                "status": "notified",
+                "channel": "HITL",
+            },
+            "type": "tool_call",
+            "tool_call_id": "up02_b",
+            "id": "up02_b",
+        })
+
+        # 验证：仍是 1 条（reducer upsert 语义）
+        data = json.loads(self._wm_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 1, f"同 pid 二次 update 应 upsert，实际有 {len(data)} 条")
+        self.assertEqual(data[0]["p8_job_id"], first_pid)
+        self.assertEqual(data[0]["max_level"], "HIGH", "max_level 应被更新")
+        self.assertEqual(data[0]["status"], "notified", "status 应被更新")
+        self.assertEqual(data[0]["channel"], "HITL")
+        # 既有 risk_basis 应被覆盖
+        self.assertEqual(data[0]["risk_basis"], "二次：升级为高风险")
+
+    # UP-03：job_id=None 时跳过 dump（不抛异常）
+    def test_up03_no_job_id_skips_dump(self):
+        from agents.p8_disposition_agent import update_job
+
+        # job_id=None 走 Bot 临时会话场景；Command 仍返回，但文件不写
+        result = update_job.invoke({
+            "name": "update_job",
+            "args": {
+                "a6_event_ids": [A6_ID_1],
+                "level": "LOW",
+                "risk_basis": "Bot 临时会话：无可作业上下文",
+                "job_id": None,
+                "status": "pending",
+                "channel": "PUSH",
+            },
+            "type": "tool_call",
+            "tool_call_id": "up03",
+            "id": "up03",
+        })
+
+        from langgraph.types import Command
+        self.assertIsInstance(result, Command)
+        # P8_job dict 的 job_id 字段保留（值为 None），但不触发 per-job dump
+        self.assertIsNone(
+            result.update["working_memory"][0].get("job_id"),
+            "job_id=None 时 P8_job.job_id 应为 None",
+        )
+        self.assertFalse(
+            self._wm_path.exists(),
+            "job_id=None 时不应创建 per-job working_memory.json",
+        )
+
+
 if __name__ == "__main__":
     # 默认跑全部（含真实 LLM）；用 `-k "not llm"` 过滤仅无 LLM 部分
     unittest.main(verbosity=2)

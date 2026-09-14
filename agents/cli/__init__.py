@@ -22,7 +22,9 @@ from agents.p6_monitor_agent import run_a5_monitoring, map_a5_events_to_p6
 from agents.p7_risk_agent import run_risk_agent
 from agents.p8_disposition_agent import run_disposition_agent
 from agents.p9_closure_agent import run_closure_agent
-from agents.p10_archive_agent import run_archive_agent
+# 2026-08-20 临时注释：p10_archive_agent 重构 in-flight。CLI P10 命令暂不可用。
+# P10 重构完取消注释。
+# from agents.p10_archive_agent import run_archive_agent
 
 
 @click.group()
