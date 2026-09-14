@@ -207,15 +207,21 @@ P1 完成，继续 P2-P10
 
 ### 1. 配置环境变量
 
-创建 `.env` 文件：
+复制默认配置并填写你自己的 DeepSeek API Key：
+
+```bash
+cp .env.example .env
+```
 
 ```env
-OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://api.minimax.chat/v1
-OPENAI_MODEL=MiniMax-M3
+OPENAI_API_KEY=your_deepseek_api_key
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-chat
 OPENAI_TEMPERATURE=0.7
-OPENAI_MAX_TOKENS=2000
+OPENAI_MAX_TOKENS=8192
 ```
+
+项目不提供公共 API Key；未填写 `OPENAI_API_KEY` 时，大模型相关流程无法启动。
 
 ### 2. 安装依赖
 

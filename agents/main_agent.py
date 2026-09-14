@@ -29,7 +29,8 @@ from .workflow import (
 )
 # 导入 Execution Status 模块
 from .workflow import (
-    STAGE_CONFIG, classify_error, init_execution_status, get_execution_status,
+    STAGE_CONFIG, MAX_INTERRUPTED_RECOVERIES, classify_error,
+    init_execution_status, get_execution_status,
     update_stage_status, can_retry_stage, get_retry_delay, get_failed_stage,
     get_stage_execution_info, finalize_execution_status, is_stage_critical,
 )
@@ -1019,10 +1020,10 @@ def execute_stage_with_retry(
     max_attempts = stage_config.get("max_attempts", 3)
     retry_on_temporary = stage_config.get("retry_on_temporary", True)
 
-    previous_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
-    interrupted_recovery = bool(
-        get_stage_execution_info(job_id, stage_name).get("interrupted")
-    )
+    stage_execution_info = get_stage_execution_info(job_id, stage_name)
+    previous_attempts = stage_execution_info.get("attempts", 0)
+    interrupted_recovery = bool(stage_execution_info.get("interrupted"))
+    interrupted_recoveries = stage_execution_info.get("interrupted_recoveries", 0)
     remaining_attempts = max_attempts - previous_attempts
     # HITL 确认后的调用仍属于原来的那次阶段执行，不消耗新的 attempt。
     if continuation:
@@ -1030,6 +1031,31 @@ def execute_stage_with_retry(
     # force 只额外放行一次，避免一次强制恢复又连续产生 max_attempts 次副作用。
     if force and remaining_attempts <= 0:
         remaining_attempts = 1
+
+    # 中断恢复预算是与执行次数相互独立的约束，必须在**每一次**恢复前检查，
+    # 不能挂在「普通执行次数是否用完」的分支里。否则只要还剩有普通次数就直接
+    # 放行、完全不看预算，等于把预算是否生效交给 max_attempts 的取值决定：
+    # 一旦调大 max_attempts，预算就会被静默绕过。force 是管理员显式越权，不受此限。
+    if (
+        interrupted_recovery
+        and not force
+        and interrupted_recoveries >= MAX_INTERRUPTED_RECOVERIES
+    ):
+        logger.warning(
+            f"[execute_stage_with_retry] {stage_name} 已连续 "
+            f"{interrupted_recoveries} 次在执行中中断，停止自动恢复: job_id={job_id}"
+        )
+        return {
+            "job_id": job_id,
+            "stage": stage_name,
+            "completed": False,
+            "error": (
+                f"{stage_name} 已连续 {MAX_INTERRUPTED_RECOVERIES} 次在执行中中断，"
+                f"疑似确定性故障，已停止自动恢复，请人工检查后强制恢复"
+            ),
+            "interrupted_exhausted": True,
+        }
+
     # 服务异常退出的那一次可能已经记到次数上限，但它没有得到业务结果；
     # 用户点击继续时仍需允许重新进入一次当前阶段。
     if interrupted_recovery and remaining_attempts <= 0:

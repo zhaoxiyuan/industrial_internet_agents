@@ -13,13 +13,17 @@ from agents.p1_permit_agent import (
     run_permit_agent_with_hitl,
 )
 from agents.workflow.execution_status import (
+    MAX_INTERRUPTED_RECOVERIES,
+    RETRY_BLOCK_ATTEMPTS_EXHAUSTED,
+    RETRY_BLOCK_INTERRUPTED_EXHAUSTED,
     can_retry_stage,
     get_execution_status,
+    get_retry_block_reason,
     init_execution_status,
     mark_stage_interrupted,
     update_stage_status,
 )
-from agents.workflow.file_utils import get_stage_result_path, write_json_file
+from agents.workflow.file_utils import get_stage_result_path, read_json_file, write_json_file
 from agents.workflow.workflow_state import get_workflow_status, init_workflow_status
 
 
@@ -108,7 +112,110 @@ class ExecutionStatusTests(unittest.TestCase):
         executor.assert_called_once_with("job")
         stage = get_execution_status("job")["stages"]["P4"]
         self.assertEqual(stage["attempts"], 3)
+        # 放行一次服务中断恢复要消耗一次独立预算，预算与 attempts 分开记账。
+        self.assertEqual(stage["interrupted_recoveries"], 1)
         self.assertNotIn("interrupted", stage)
+
+    def _run_crash_loop(self, max_attempts):
+        """模拟「执行中断 → 继续 → 再次中断」，返回 (恢复成功次数, 最后一次结果)。
+
+        每次恢复都让阶段执行中途"服务退出"，因此循环只有靠中断恢复预算才能终止。
+        """
+        executor = Mock(return_value={"completed": True})
+        config = {"max_attempts": max_attempts, "retry_on_temporary": True}
+
+        update_stage_status("job", "P1", "running")
+        mark_stage_interrupted("job", "P1", "服务执行过程中退出")
+
+        grants = 0
+        for _ in range(MAX_INTERRUPTED_RECOVERIES + 8):
+            result = execute_stage_with_retry("job", "P1", executor, config)
+            if not result.get("completed"):
+                return grants, result
+            grants += 1
+            update_stage_status("job", "P1", "running")
+            mark_stage_interrupted("job", "P1", "服务执行过程中退出")
+
+        self.fail("恢复预算未生效：崩溃循环没有终止")
+
+    def test_interrupted_recovery_budget_stops_crash_loop(self):
+        """确定性崩溃下，恢复预算耗尽后必须停止自动放行，不能无限循环。"""
+        with patch("agents.main_agent.add_job_log"), patch("time.sleep"):
+            granted_runs, result = self._run_crash_loop(max_attempts=2)
+
+        stage = get_execution_status("job")["stages"]["P1"]
+        self.assertEqual(granted_runs, MAX_INTERRUPTED_RECOVERIES)
+        self.assertEqual(stage["interrupted_recoveries"], MAX_INTERRUPTED_RECOVERIES)
+        self.assertFalse(result["completed"])
+        self.assertTrue(result["interrupted_exhausted"])
+        self.assertFalse(can_retry_stage("job", "P1"))
+
+    def test_interrupted_recovery_budget_is_independent_of_attempt_limit(self):
+        """预算必须独立于 max_attempts。
+
+        回归防线：预算检查一旦被放进「普通执行次数用完了才检查」的分支，
+        调大 max_attempts 就会让预算静默失效，实际恢复次数超过预算上限。
+        """
+        with patch("agents.main_agent.add_job_log"), patch("time.sleep"):
+            for max_attempts in (1, 2, 3, 4, 6, 10):
+                init_execution_status("job")
+                granted_runs, result = self._run_crash_loop(max_attempts=max_attempts)
+
+                self.assertEqual(
+                    granted_runs,
+                    MAX_INTERRUPTED_RECOVERIES,
+                    f"max_attempts={max_attempts} 时实际恢复了 {granted_runs} 次，"
+                    f"超出预算 {MAX_INTERRUPTED_RECOVERIES}",
+                )
+                self.assertTrue(result["interrupted_exhausted"])
+                self.assertFalse(can_retry_stage("job", "P1"))
+
+    def test_force_recovery_bypasses_interrupted_budget(self):
+        """预算只约束自动恢复；管理员强制恢复（force）不受预算限制。"""
+        config = {"max_attempts": 2, "retry_on_temporary": True}
+
+        with patch("agents.main_agent.add_job_log"), patch("time.sleep"):
+            _, result = self._run_crash_loop(max_attempts=2)
+            self.assertTrue(result["interrupted_exhausted"])
+
+            # 预算已耗尽：自动路径拒绝
+            auto = execute_stage_with_retry(
+                "job", "P1", Mock(return_value={"completed": True}), config
+            )
+            self.assertFalse(auto["completed"])
+
+            # force 是管理员显式越权，仍放行
+            forced_executor = Mock(return_value={"completed": True})
+            forced = execute_stage_with_retry(
+                "job", "P1", forced_executor, config, force=True
+            )
+
+        self.assertTrue(forced["completed"])
+        forced_executor.assert_called_once_with("job")
+
+    def test_retry_block_reason_distinguishes_exhaustion(self):
+        # 普通执行次数用尽
+        update_stage_status("job", "P5", "running")
+        update_stage_status("job", "P5", "running")
+        update_stage_status("job", "P5", "failed", error="network timeout")
+        self.assertEqual(
+            get_retry_block_reason("job", "P5"), RETRY_BLOCK_ATTEMPTS_EXHAUSTED
+        )
+
+        # 中断恢复：预算内仍可恢复
+        update_stage_status("job", "P6", "running")
+        mark_stage_interrupted("job", "P6", "服务执行过程中退出")
+        self.assertIsNone(get_retry_block_reason("job", "P6"))
+        self.assertTrue(can_retry_stage("job", "P6"))
+
+        # 中断恢复：预算耗尽后不可恢复
+        for _ in range(MAX_INTERRUPTED_RECOVERIES + 1):
+            update_stage_status("job", "P6", "running")
+            mark_stage_interrupted("job", "P6", "服务执行过程中退出")
+        self.assertEqual(
+            get_retry_block_reason("job", "P6"), RETRY_BLOCK_INTERRUPTED_EXHAUSTED
+        )
+        self.assertFalse(can_retry_stage("job", "P6"))
 
 
 class ResumeWorkflowTests(unittest.TestCase):
@@ -340,17 +447,74 @@ class P1HitlTests(unittest.TestCase):
                     "interrupted": False,
                     "result": '{"task_id":"T-1","permit_draft_id":"PD-1","missing_fields":[]}',
                     "next": [],
-                }),
+                }) as run_agent,
                 patch("agents.p1_permit_agent.add_job_log"),
                 patch("agents.p1_permit_agent.push_websocket_log"),
             ):
                 result = execute_p1_stage("job")
 
         self.assertTrue(result["completed"])
+        run_agent.assert_called_once()
         self.assertEqual(
             result["pending_confirmation"]["type"],
             "permit_final_approval",
         )
+
+    def test_real_docx_p1_skips_fixed_mock_agent_on_first_run_and_retry(self):
+        application = {
+            "input_source": "docx",
+            "job_type": "动火作业",
+            "job_level": "二级",
+            "job_content": "空气预热器人孔法兰焊补",
+            "region": "延迟焦化装置区",
+            "work_location": "延迟焦化装置区",
+            "hot_work_location": "F-0102 人孔法兰",
+            "equipment": ["F-0102 空气预热器"],
+            "personnel": [{"name": "赵强", "qualifications": ["焊工证"]}],
+            "planned_start": "2026-09-12T08:30:00+08:00",
+            "planned_end": "2026-09-12T17:00:00+08:00",
+            "safety_measures": [{"sequence": 1, "description": "清除周边可燃物", "selected": True}],
+            "source_document": {"filename": "动火作业许可_已填写测试.docx"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "agents.workflow.file_utils.get_jobs_dir", return_value=temp_dir
+        ):
+            application_path = f"{temp_dir}/job/application.json"
+            write_json_file(application_path, {"application": application})
+            with (
+                patch("agents.p1_permit_agent.run_permit_agent_with_hitl") as run_agent,
+                patch("agents.p1_permit_agent.reset_permit_execution"),
+                patch("agents.p1_permit_agent.add_job_log"),
+                patch("agents.p1_permit_agent.push_websocket_log"),
+            ):
+                first_result = execute_p1_stage("job")
+                retry_result = execute_p1_stage("job", resume=True)
+
+            run_agent.assert_not_called()
+            for result in (first_result, retry_result):
+                self.assertTrue(result["completed"])
+                self.assertEqual(result["permit_content"]["job_type"], "动火作业")
+                self.assertEqual(result["permit_content"]["equipment"], ["F-0102 空气预热器"])
+                self.assertEqual(result["permit_content"]["input_source"], "docx")
+                self.assertEqual(result["data_origin"]["application"], "uploaded_docx")
+                self.assertTrue(any(
+                    item["description"] == "火灾、爆炸"
+                    for item in result["jsa_result"]["hazards"]
+                ))
+                self.assertFalse(any(
+                    item["description"] == "受限空间内存在有毒有害气体"
+                    for item in result["jsa_result"]["hazards"]
+                ))
+                self.assertEqual(
+                    result["pending_confirmation"]["type"],
+                    "permit_final_approval",
+                )
+
+            saved_permit = read_json_file(f"{temp_dir}/job/permit.json")
+            self.assertEqual(
+                saved_permit["data_origin"]["application"],
+                "uploaded_docx",
+            )
 
     def test_p1_agent_has_no_per_tool_approval_middleware(self):
         clear_agent_registry("single-approval")

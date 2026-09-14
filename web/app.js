@@ -152,7 +152,7 @@ function restoreActiveWorkflow() {
                 updateControlPanel();
                 addLog('🔄 已找回最近未完成作业: ' + data.job_id);
                 connectWebSocket(data.job_id);
-                showPendingConfirmation(data, '已找回的作业');
+                reconcilePendingConfirmation(data, '已找回的作业');
                 startResumeStatePolling(data.job_id);
             })
             .catch(err => console.warn('查找未完成作业失败:', err));
@@ -183,7 +183,7 @@ function restoreActiveWorkflow() {
             if (data.status !== 'completed') {
                 addLog('🔄 已恢复未完成作业: ' + saved.jobId);
                 connectWebSocket(saved.jobId);
-                showPendingConfirmation(data, '已恢复的作业');
+                reconcilePendingConfirmation(data, '已恢复的作业');
                 startResumeStatePolling(saved.jobId);
             }
         })
@@ -885,7 +885,7 @@ function continueHistoryJob(jobId) {
                 resumeWorkflow(jobId);
             } else {
                 connectWebSocket(jobId);
-                showPendingConfirmation(state.workflowState, '历史作业');
+                reconcilePendingConfirmation(state.workflowState, '历史作业');
                 startResumeStatePolling(jobId);
             }
             switchWorkEntry('new');
@@ -1084,12 +1084,29 @@ function resumeWorkflow(jobId) {
 
 let resumeStatePollGeneration = 0;
 
-function showPendingConfirmation(workflowState, sourceLabel) {
+function reconcilePendingConfirmation(workflowState, sourceLabel) {
     const pending = workflowState.pending || [];
-    if (pending.length === 0) return false;
-
-    const stage = pending[0];
+    const stage = pending[0] || '';
     const hitlModal = document.getElementById('hitl-modal');
+    const modalStage = hitlModal.classList.contains('active') ? (hitlModal.dataset.stage || '') : '';
+
+    // 另一个页面可能已经处理当前审批。只要服务端不再等待弹窗对应阶段，
+    // 当前窗口就是过期窗口，必须先关闭，避免用户提交错误的下一阶段状态。
+    if (modalStage && modalStage !== stage) {
+        closeModal();
+        if (stage) {
+            addLog(`ℹ️ ${modalStage} 已由其他页面处理，当前等待 ${stage} 确认`, 'warning');
+        } else if (workflowState.status === 'completed') {
+            addLog(`ℹ️ ${modalStage} 已由其他页面处理，工作流已完成`, 'success');
+        } else if (workflowState.status === 'error' || workflowState.status === 'failed') {
+            addLog(`ℹ️ ${modalStage} 审批状态已变化，当前工作流执行失败`, 'warning');
+        } else {
+            addLog(`ℹ️ ${modalStage} 已由其他页面处理，工作流正在继续`, 'info');
+        }
+    }
+
+    if (!stage) return false;
+
     if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== stage) {
         const pendingData = workflowState.pending_data || {};
         showHitlModal(stage, pendingData[stage]);
@@ -1122,7 +1139,7 @@ function startResumeStatePolling(jobId) {
                 renderWorkflowDiagram();
                 updateControlPanel();
 
-                if (showPendingConfirmation(data, '恢复执行')) return;
+                if (reconcilePendingConfirmation(data, '恢复执行')) return;
 
                 if (data.status === 'running' || data.status === 'executing' || data.status === 'starting') {
                     observedRunning = true;
@@ -1187,16 +1204,9 @@ function connectWebSocket(jobId) {
 
                     // 更新日志
                     const currentStage = data.current_stage || '';
-                    const pending = data.pending || [];
 
-                    if (pending.length > 0) {
-                        // 有待确认项时按阶段展示。即使旧窗口仍打开，下一阶段也要替换它。
-                        const hitlModal = document.getElementById('hitl-modal');
-                        if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== pending[0]) {
-                            addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
-                            const pendingData = data.pending_data || {};
-                            showHitlModal(pending[0], pendingData[pending[0]]);
-                        }
+                    if (reconcilePendingConfirmation(data, '工作流')) {
+                        // 人工审批窗口已与服务端最新状态同步。
                     } else if (data.status === 'completed') {
                         // 工作流完成
                         addLog('✅ 工作流执行完成', 'success');
@@ -1793,10 +1803,17 @@ function confirmDecision(decision) {
     }
 
     const pending = state.workflowState.pending || [];
-    const stage = pending[0];
+    const stage = pending[0] || '';
+    const hitlModal = document.getElementById('hitl-modal');
+    const modalStage = hitlModal.dataset.stage || '';
     console.log('stage:', stage);
-    if (!stage) {
-        addLog('❌ 错误: 没有待确认的阶段', 'error');
+    if (!stage || (modalStage && modalStage !== stage)) {
+        closeModal();
+        addLog(`ℹ️ ${modalStage || '当前'}审批已失效，可能已由其他页面处理`, 'warning');
+        if (stage) {
+            const pendingData = state.workflowState.pending_data || {};
+            showHitlModal(stage, pendingData[stage]);
+        }
         return;
     }
 

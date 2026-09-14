@@ -82,6 +82,31 @@ def _valid_job_id(job_id):
     return bool(re.fullmatch(r"\d{17}", str(job_id or "")))
 
 
+def _retry_block_message(stage, reason):
+    """把阶段不可恢复的原因翻译成面向操作员的提示。"""
+    from agents.workflow import (
+        MAX_INTERRUPTED_RECOVERIES,
+        RETRY_BLOCK_ATTEMPTS_EXHAUSTED,
+        RETRY_BLOCK_INTERRUPTED_EXHAUSTED,
+        RETRY_BLOCK_NOT_FAILED,
+    )
+
+    if reason == RETRY_BLOCK_INTERRUPTED_EXHAUSTED:
+        return (
+            f"阶段 {stage} 已连续 {MAX_INTERRUPTED_RECOVERIES} 次在执行中中断，"
+            f"疑似该阶段存在确定性故障，已停止自动恢复。"
+            f"请先检查服务日志与该阶段的输入数据，确认原因后再由管理员强制恢复。"
+        )
+    if reason == RETRY_BLOCK_ATTEMPTS_EXHAUSTED:
+        return (
+            f"阶段 {stage} 已达到允许的最大执行次数。"
+            f"请人工确认失败原因后由管理员强制恢复，或重新创建作业。"
+        )
+    if reason == RETRY_BLOCK_NOT_FAILED:
+        return f"阶段 {stage} 当前不处于可恢复的失败状态，无需继续执行。"
+    return f"阶段 {stage} 当前不可恢复，请刷新作业状态后重试。"
+
+
 def _read_job_files(job_id):
     """读取历史作业的持久化数据，不修改工作流状态。"""
     from agents.workflow import get_job_lock
@@ -469,7 +494,7 @@ def handle_workflow_resume(handler, data):
     try:
         from agents.workflow import (
             claim_job_execution,
-            get_execution_status, get_failed_stage, can_retry_stage,
+            get_execution_status, get_failed_stage, get_retry_block_reason,
             read_json_file, get_job_dir, release_job_execution,
         )
         from agents.main_agent import run_workflow, STAGE_EXECUTORS
@@ -502,13 +527,22 @@ def handle_workflow_resume(handler, data):
             }, status=400)
             return
 
-        # 检查是否可以重试
-        if not force and not can_retry_stage(job_id, stage):
-            handler.send_json({
-                "status": "error",
-                "error": f"阶段 {stage} 当前不可重试；如需重新执行请使用 force=true"
-            }, status=400)
-            return
+        # 检查是否可以重试。区分「执行次数用尽」与「连续中断恢复用尽」，
+        # 给操作员可执行的提示，而不是暴露 force 这类开发期开关。
+        if not force:
+            block_reason = get_retry_block_reason(job_id, stage)
+            if block_reason:
+                error_message = _retry_block_message(stage, block_reason)
+                logger.info(
+                    f"[POST] /api/workflow/resume 拦截: job_id={job_id}, "
+                    f"stage={stage}, reason={block_reason}"
+                )
+                handler.send_json({
+                    "status": "error",
+                    "reason": block_reason,
+                    "error": error_message,
+                }, status=400)
+                return
 
         # 读取作业申请
         app_file = job_dir + "/application.json"
