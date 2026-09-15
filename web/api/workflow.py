@@ -360,6 +360,10 @@ def handle_workflow_confirm(handler, data):
         }, status=400)
         return
 
+    # 审批属于写操作：请求页面必须确实持有当前有效租约。
+    if not _require_job_lease(handler, thread_id, data.get("holder_id")):
+        return
+
     try:
         result = confirm_and_continue(
             thread_id, stage, decision, notes=notes, async_execute=async_execute
@@ -432,10 +436,10 @@ def handle_workflow_state_get(handler, thread_id):
         handler.send_json({"status": "idle", "pending": [], "confirmed": [], "current_stage": ""})
 
 
-def handle_latest_incomplete_workflow(handler):
+def handle_latest_incomplete_workflow(handler, holder_id=None):
     """GET /api/workflow/latest-incomplete - 找回最近一条未完成作业。"""
     from agents.main_agent import get_workflow_state, list_pending_confirmations
-    from agents.workflow import get_jobs_dir
+    from agents.workflow import get_jobs_dir, get_occupant
 
     jobs_dir = get_jobs_dir()
     if not os.path.isdir(jobs_dir):
@@ -448,6 +452,11 @@ def handle_latest_incomplete_workflow(handler):
         result = get_workflow_state(job_id)
         workflow_status = result.get("status", "unknown")
         if workflow_status in {"completed", "idle", "unknown"}:
+            continue
+        # 正被其他页面操作的工单不自动接管：新页面应当保持独立，需要查看该工单时
+        # 走「历史作业」显式进入。这里只跳过被**他人**占用的，自己的工单照常找回。
+        if holder_id and get_occupant(job_id, holder_id):
+            logger.info(f"[POST] /api/workflow/latest-incomplete 跳过被占用工单: job_id={job_id}")
             continue
         pending = list_pending_confirmations(job_id)
         handler.send_json({
@@ -463,6 +472,152 @@ def handle_latest_incomplete_workflow(handler):
         return
 
     handler.send_json({"status": "none", "job_id": None})
+
+
+# ============ 工单页面占用（租约） ============
+
+OCCUPIED_ERROR = "运行失败：作业单占用中（该工单正由另一个页面操作）"
+LEASE_REQUIRED_ERROR = "当前页面没有该工单的有效操作权，请重新取得工单占用后再操作"
+
+
+def _require_job_lease(handler, job_id, holder_id):
+    """严格要求请求页面持有工单租约；失败时直接发送响应。"""
+    from agents.workflow import get_job_lease
+
+    job_id = str(job_id or "")
+    holder_id = str(holder_id or "")
+    lease = get_job_lease(job_id)
+    if lease and holder_id and str(lease.get("holder_id")) == holder_id:
+        return True
+    if lease:
+        _send_occupied(handler, job_id, lease)
+        return False
+    if not lease or not holder_id:
+        logger.warning(
+            f"[LEASE] 页面没有有效操作权，拒绝操作: job_id={job_id}, "
+            f"holder_id={holder_id!r}"
+        )
+        handler.send_json({
+            "status": "lease_required",
+            "error": LEASE_REQUIRED_ERROR,
+            "job_id": job_id,
+            "occupant": None,
+            "read_only": True,
+        }, status=409)
+        return False
+    return False
+
+
+def _send_occupied(handler, job_id, occupant):
+    occupant = occupant or {}
+    logger.warning(
+        f"[LEASE] 工单被占用，拒绝操作: job_id={job_id}, "
+        f"holder={occupant.get('holder_id')!r}, label={occupant.get('holder_label')!r}"
+    )
+    handler.send_json({
+        "status": "occupied",
+        "error": OCCUPIED_ERROR,
+        "job_id": job_id,
+        "occupant": occupant,
+        "read_only": True,
+    }, status=409)
+
+
+def _validate_lease_request(handler, data):
+    """校验 job_id/holder_id；不合法时直接回响应并返回 None。"""
+    job_id = str(data.get("job_id") or "")
+    holder_id = str(data.get("holder_id") or "")
+    if not _valid_job_id(job_id):
+        handler.send_json({"status": "error", "error": "job_id 必须是 17 位数字"}, status=400)
+        return None
+    if not holder_id:
+        handler.send_json({"status": "error", "error": "holder_id 不能为空"}, status=400)
+        return None
+    return job_id, holder_id
+
+
+def handle_workflow_claim(handler, data):
+    """POST /api/workflow/claim - 取得或续期工单占用（页面级租约）"""
+    from agents.workflow import claim_job_lease, get_occupant
+
+    job_id = str(data.get("job_id") or "")
+    holder_id = str(data.get("holder_id") or "")
+    holder_label = data.get("holder_label") or None
+    logger.info(
+        f"[POST] /api/workflow/claim 进入: job_id={job_id}, "
+        f"holder_id={holder_id}"
+    )
+
+    validated = _validate_lease_request(handler, data)
+    if not validated:
+        return
+    job_id, holder_id = validated
+
+    lease = claim_job_lease(job_id, holder_id, holder_label=holder_label)
+    if lease is None:
+        _send_occupied(handler, job_id, get_occupant(job_id, holder_id))
+        return
+
+    response_data = {
+        "status": "ok",
+        "job_id": job_id,
+        "holder_id": holder_id,
+        "holder_label": lease.get("holder_label"),
+        "read_only": False,
+        "ttl_seconds": lease.get("ttl_seconds"),
+        "heartbeat_interval_seconds": lease.get("heartbeat_interval_seconds"),
+    }
+    logger.info(
+        f"[POST] /api/workflow/claim 响应: job_id={job_id}"
+    )
+    handler.send_json(response_data)
+
+
+def handle_workflow_heartbeat(handler, data):
+    """POST /api/workflow/heartbeat - 续期工单占用"""
+    from agents.workflow import heartbeat_job_lease, get_job_lease
+
+    job_id = str(data.get("job_id") or "")
+    holder_id = str(data.get("holder_id") or "")
+
+    validated = _validate_lease_request(handler, data)
+    if not validated:
+        return
+    job_id, holder_id = validated
+
+    if heartbeat_job_lease(job_id, holder_id):
+        handler.send_json({"status": "ok", "job_id": job_id, "read_only": False})
+        return
+
+    # 租约已失效或被其他页面接管：通知该页面转为只读。
+    occupant = get_job_lease(job_id)
+    taken_over = occupant is not None
+    logger.warning(
+        f"[POST] /api/workflow/heartbeat 失去占用: job_id={job_id}, "
+        f"holder_id={holder_id}, 已被接管={taken_over}"
+    )
+    handler.send_json({
+        "status": "lost",
+        "job_id": job_id,
+        "read_only": True,
+        "error": "该工单已被另一个页面接管" if taken_over else "该工单占用已失效",
+        "occupant": occupant,
+    })
+
+
+def handle_workflow_release(handler, data):
+    """POST /api/workflow/release - 主动释放工单占用"""
+    from agents.workflow import release_job_lease
+
+    validated = _validate_lease_request(handler, data)
+    if not validated:
+        return
+    job_id, holder_id = validated
+
+    released = release_job_lease(job_id, holder_id)
+    logger.info(f"[POST] /api/workflow/release: job_id={job_id}, released={released}")
+    handler.send_json({"status": "ok", "job_id": job_id, "released": released})
+
 
 def handle_workflow_resume(handler, data):
     """POST /api/workflow/resume - 从失败阶段恢复执行
@@ -486,6 +641,11 @@ def handle_workflow_resume(handler, data):
     if not re.fullmatch(r"\d{17}", job_id):
         handler.send_json({"status": "error", "error": "job_id 必须是 17 位数字"}, status=400)
         return
+
+    # 恢复属于写操作：请求页面必须确实持有当前有效租约。
+    if not _require_job_lease(handler, job_id, data.get("holder_id")):
+        return
+
     running = _running_workflows.get(job_id)
     if running and running.is_alive():
         handler.send_json({"status": "error", "error": "该作业正在执行，请勿重复恢复"}, status=409)

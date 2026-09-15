@@ -13,6 +13,8 @@ const state = {
     historyJobs: [],
     historyViewJobId: null,
     liveWorkflowState: null,
+    // 工单页面占用（租约）：readOnly 表示本页只能看，不能操作
+    lease: { jobId: null, holding: false, readOnly: false, heartbeatTimer: null, occupant: null },
     mockApplication: null,
     realApplication: null,
     inputSource: 'mock',
@@ -114,18 +116,164 @@ const STAGE_INFO = {
 
 const ALL_STAGES = ['MAIN', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
 const ACTIVE_WORKFLOW_STORAGE_KEY = 'industrialInternetActiveWorkflow';
+const HOLDER_STORAGE_KEY = 'industrialInternetHolderId';
+
+// 「本页正在操作哪张工单」必须按标签页隔离：用 localStorage 会让新标签页继承
+// 另一个页面的工单并自动跟随。sessionStorage 按标签页独立，且刷新（F5）不丢，
+// 因此既能保持页面之间各干各的，也不影响刷新后恢复当前作业。
+const activeWorkflowStore = window.sessionStorage;
+
+function getHolderId() {
+    // 每个标签页一个稳定标识：刷新不变，不同标签页不同。
+    let holderId = null;
+    try { holderId = sessionStorage.getItem(HOLDER_STORAGE_KEY); } catch (e) { holderId = null; }
+    if (!holderId) {
+        holderId = 'page-' + Math.random().toString(36).slice(2, 8) + '-' + Date.now().toString(36);
+        try { sessionStorage.setItem(HOLDER_STORAGE_KEY, holderId); } catch (e) { /* 忽略 */ }
+    }
+    return holderId;
+}
+
+function holderLabel() {
+    const holderId = getHolderId();
+    return '页面#' + holderId.slice(-6);
+}
+
+// ========== 工单页面占用（租约） ==========
+
+function renderLeaseBanner() {
+    const banner = document.getElementById('lease-banner');
+    if (!banner) return;
+    const text = document.getElementById('lease-banner-text');
+    if (state.lease.readOnly) {
+        const who = (state.lease.occupant && state.lease.occupant.holder_label)
+            ? state.lease.occupant.holder_label : '另一个页面';
+        text.textContent = '🔒 运行失败：作业单占用中（该工单正由 ' + who + ' 操作），本页只读';
+        banner.classList.add('active');
+    } else {
+        banner.classList.remove('active');
+    }
+}
+
+function setLeaseReadOnly(occupant, message) {
+    state.lease.readOnly = true;
+    state.lease.holding = false;
+    state.lease.occupant = occupant || null;
+    stopLeaseHeartbeat();
+    if (message) addLog('🔒 ' + message, 'warning');
+    renderLeaseBanner();
+}
+
+function clearLeaseReadOnly() {
+    state.lease.readOnly = false;
+    state.lease.occupant = null;
+    renderLeaseBanner();
+}
+
+function stopLeaseHeartbeat() {
+    if (state.lease.heartbeatTimer) {
+        clearInterval(state.lease.heartbeatTimer);
+        state.lease.heartbeatTimer = null;
+    }
+}
+
+function startLeaseHeartbeat(jobId) {
+    stopLeaseHeartbeat();
+    state.lease.heartbeatTimer = setInterval(() => {
+        if (state.lease.jobId !== jobId || state.lease.readOnly) return;
+        fetch('/api/workflow/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId, holder_id: getHolderId() })
+        }).then(r => r.json())
+          .then(data => {
+              if (!data) return;
+              if (data.status === 'ok') return;
+              // 租约丢失（被其他页面接管，或心跳超时）：本页转为只读。
+              setLeaseReadOnly(data.occupant, data.error || '本页已失去该工单的操作权');
+          })
+          .catch(() => { /* 网络抖动交给下一次心跳 */ });
+    }, 10000);
+}
+
+function claimJobLease(jobId) {
+    if (!jobId) return Promise.resolve({ ok: false });
+    return fetch('/api/workflow/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            job_id: jobId,
+            holder_id: getHolderId(),
+            holder_label: holderLabel()
+        })
+    }).then(r => r.json())
+      .then(data => {
+          if (!data) return { ok: false };
+          if (data.status === 'ok') {
+              state.lease.jobId = jobId;
+              state.lease.holding = true;
+              state.lease.readOnly = false;
+              state.lease.occupant = null;
+              clearLeaseReadOnly();
+              startLeaseHeartbeat(jobId);
+              return { ok: true };
+          }
+          if (data.status === 'occupied') {
+              // 记下当前只读工单，避免只读状态误拦其他工单。
+              state.lease.jobId = jobId;
+              setLeaseReadOnly(data.occupant, data.error || '作业单占用中');
+              return { ok: false, occupied: true, data: data };
+          }
+          addLog('❌ 取得工单操作权失败: ' + (data.error || data.status), 'error');
+          return { ok: false, data: data };
+      })
+      .catch(err => {
+          addLog('❌ 取得工单操作权请求失败: ' + err.message, 'error');
+          return { ok: false };
+      });
+}
+
+function releaseJobLease(jobId, useBeacon) {
+    const target = jobId || state.lease.jobId;
+    if (!target || !state.lease.holding) return;
+    state.lease.holding = false;
+    state.lease.jobId = null;
+    stopLeaseHeartbeat();
+    const body = JSON.stringify({ job_id: target, holder_id: getHolderId() });
+    try {
+        fetch('/api/workflow/release', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body,
+            keepalive: useBeacon === true
+        }).catch(() => { /* 尽力而为，超时机制兜底 */ });
+    } catch (e) { /* 忽略 */ }
+}
+
+// 只读时拦截操作类按钮：给出明确原因，而不是让请求发出去再失败。
+// jobId 可选：只读状态绑定在具体工单上，操作其他工单时不应被误拦。
+function blockIfReadOnly(jobId) {
+    if (!state.lease.readOnly) return false;
+    const lockedJob = state.lease.jobId;
+    if (jobId && lockedJob && String(lockedJob) !== String(jobId)) return false;
+    const who = (state.lease.occupant && state.lease.occupant.holder_label) || '另一个页面';
+    addLog('🔒 运行失败：作业单占用中（该工单正由 ' + who + ' 操作）', 'warning');
+    addLog('ℹ️ 请等待对方页面释放操作权，或等待其租约超时后再试。', 'warning');
+    renderLeaseBanner();
+    return true;
+}
 
 function rememberActiveWorkflow(workflowState) {
     const jobId = workflowState && (workflowState.thread_id || workflowState.jobId || workflowState.threadId);
     try {
         if (jobId && workflowState.status !== 'completed' && workflowState.status !== 'idle') {
-            localStorage.setItem(ACTIVE_WORKFLOW_STORAGE_KEY, JSON.stringify({
+            activeWorkflowStore.setItem(ACTIVE_WORKFLOW_STORAGE_KEY, JSON.stringify({
                 jobId: jobId,
                 status: workflowState.status,
                 currentStage: workflowState.current_stage || workflowState.currentStage || ''
             }));
         } else if (workflowState && (workflowState.status === 'completed' || workflowState.status === 'idle')) {
-            localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+            activeWorkflowStore.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
         }
     } catch (e) {
         console.warn('保存当前作业失败:', e);
@@ -135,25 +283,30 @@ function rememberActiveWorkflow(workflowState) {
 function restoreActiveWorkflow() {
     let saved;
     try {
-        saved = JSON.parse(localStorage.getItem(ACTIVE_WORKFLOW_STORAGE_KEY) || 'null');
+        saved = JSON.parse(activeWorkflowStore.getItem(ACTIVE_WORKFLOW_STORAGE_KEY) || 'null');
     } catch (e) {
-        localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+        activeWorkflowStore.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
         return;
     }
     if (!saved || !/^\d{17}$/.test(saved.jobId || '')) {
         // 兼容更新前未写入浏览器缓存、或后端重启后的情况。
-        fetch('/api/workflow/latest-incomplete')
+        // 带上 holder_id：服务端会跳过正被其他页面操作的工单，保证新页面保持独立。
+        fetch('/api/workflow/latest-incomplete?holder_id=' + encodeURIComponent(getHolderId()))
             .then(r => r.json())
             .then(data => {
                 if (!data || !data.job_id || data.status === 'none') return;
                 state.workflowState = data;
-                rememberActiveWorkflow(data);
+                state.lease.jobId = data.job_id;
                 renderWorkflowDiagram();
                 updateControlPanel();
-                addLog('🔄 已找回最近未完成作业: ' + data.job_id);
-                connectWebSocket(data.job_id);
-                reconcilePendingConfirmation(data, '已找回的作业');
-                startResumeStatePolling(data.job_id);
+                return claimJobLease(data.job_id).then(() => {
+                    if (state.lease.readOnly) return;
+                    rememberActiveWorkflow(data);
+                    addLog('🔄 已找回最近未完成作业: ' + data.job_id);
+                    connectWebSocket(data.job_id);
+                    reconcilePendingConfirmation(data, '已找回的作业');
+                    startResumeStatePolling(data.job_id);
+                });
             })
             .catch(err => console.warn('查找未完成作业失败:', err));
         return;
@@ -173,19 +326,22 @@ function restoreActiveWorkflow() {
         .then(r => r.json())
         .then(data => {
             if (!data || data.status === 'idle' || data.status === 'unknown') {
-                localStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+                activeWorkflowStore.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
                 return;
             }
             state.workflowState = data;
+            state.lease.jobId = saved.jobId;
             rememberActiveWorkflow(data);
             renderWorkflowDiagram();
             updateControlPanel();
-            if (data.status !== 'completed') {
+            // 无论是否取得操作权都继续展示；能否操作由租约决定。
+            return claimJobLease(saved.jobId).then(() => {
+                if (data.status === 'completed') return;
                 addLog('🔄 已恢复未完成作业: ' + saved.jobId);
                 connectWebSocket(saved.jobId);
                 reconcilePendingConfirmation(data, '已恢复的作业');
                 startResumeStatePolling(saved.jobId);
-            }
+            });
         })
         .catch(err => console.warn('恢复当前作业失败:', err));
 }
@@ -200,6 +356,11 @@ document.addEventListener('DOMContentLoaded', function() {
     selectInputSource('mock');
     loadHistoryJobs();
     restoreActiveWorkflow();
+});
+
+// 关闭/刷新页面时尽力交还工单占用；失败也没关系，服务端靠心跳超时兜底。
+window.addEventListener('beforeunload', function() {
+    releaseJobLease(null, true);
 });
 
 // ========== 标签页切换 ==========
@@ -877,18 +1038,22 @@ function continueHistoryJob(jobId) {
             state.historyViewJobId = null;
             state.liveWorkflowState = null;
             state.workflowState = workflowStateFromDetail(detail);
+            state.lease.jobId = jobId;
             document.getElementById('history-view-banner').classList.remove('active');
             rememberActiveWorkflow(state.workflowState);
             renderWorkflowDiagram();
             updateControlPanel();
-            if (detail.status === 'error' || detail.status === 'failed') {
-                resumeWorkflow(jobId);
-            } else {
-                connectWebSocket(jobId);
-                reconcilePendingConfirmation(state.workflowState, '历史作业');
-                startResumeStatePolling(jobId);
-            }
-            switchWorkEntry('new');
+            // 先取得该工单的操作权：被其他页面占用时保持只读，不抢别人的工单。
+            claimJobLease(jobId).then(() => {
+                if (detail.status === 'error' || detail.status === 'failed') {
+                    resumeWorkflow(jobId);
+                } else {
+                    connectWebSocket(jobId);
+                    reconcilePendingConfirmation(state.workflowState, '历史作业');
+                    startResumeStatePolling(jobId);
+                }
+                switchWorkEntry('new');
+            });
         })
         .catch(err => addLog('❌ 继续历史作业失败: ' + err.message, 'error'));
 }
@@ -1005,20 +1170,26 @@ function startWorkflow() {
                         `• 点击"取消"创建新作业`;
 
         if (confirm(message)) {
-            // 失败状态才触发断点恢复；running/waiting 只重新连接现有作业。
-            if (status === 'error' || status === 'failed') {
-                resumeWorkflow(jobId);
-            } else {
-                addLog('🔄 重新连接作业: ' + jobId);
-                connectWebSocket(jobId);
-                startResumeStatePolling(jobId);
-            }
+            if (blockIfReadOnly(jobId)) return;
+            // 先取得该工单的操作权；被其他页面占用时保持只读并提示接管。
+            claimJobLease(jobId).then(res => {
+                if (!res.ok) return;
+                // 失败状态才触发断点恢复；running/waiting 只重新连接现有作业。
+                if (status === 'error' || status === 'failed') {
+                    resumeWorkflow(jobId);
+                } else {
+                    addLog('🔄 重新连接作业: ' + jobId);
+                    connectWebSocket(jobId);
+                    startResumeStatePolling(jobId);
+                }
+            });
             return;
         }
     }
 
     // 创建新作业
     resumeStatePollGeneration++;
+    releaseJobLease();
     const app = buildApplicationJson();
     const missing = validateNewApplication(app);
     if (missing.length) {
@@ -1041,10 +1212,11 @@ function startWorkflow() {
               state.workflowState.status = 'starting';
               rememberActiveWorkflow(state.workflowState);
               addLog('📋 作业单号: ' + data.job_id, 'success');
-              addLog('⏳ 工作流启动中，建立 WebSocket 连接...');
-
-              // 建立 WebSocket 连接
-              connectWebSocket(data.job_id);
+              // 新工单必然空闲，取得操作权后再建立操作通道。
+              claimJobLease(data.job_id).then(() => {
+                  addLog('⏳ 工作流启动中，建立 WebSocket 连接...');
+                  connectWebSocket(data.job_id);
+              });
           }
       })
       .catch(err => {
@@ -1053,42 +1225,57 @@ function startWorkflow() {
 }
 
 function resumeWorkflow(jobId) {
+    if (blockIfReadOnly(jobId)) return;
     addLog('🔄 继续执行作业: ' + jobId);
 
-    fetch('/api/workflow/resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            job_id: jobId,
-            force: false
-        })
-    }).then(r => r.json())
-      .then(data => {
-          if (data.status === 'resuming') {
-              addLog('✅ 作业恢复执行中...', 'success');
-              addLog('📋 作业单号: ' + data.job_id);
-              addLog('📍 从阶段: ' + data.stage);
+    // 先确保本页持有操作权，再请求恢复执行；被占用时保持只读。
+    claimJobLease(jobId).then(res => {
+        if (!res.ok) return;
+        fetch('/api/workflow/resume', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                job_id: jobId,
+                force: false,
+                holder_id: getHolderId()
+            })
+        }).then(r => r.json())
+          .then(data => {
+              if (data.status === 'resuming') {
+                  addLog('✅ 作业恢复执行中...', 'success');
+                  addLog('📋 作业单号: ' + data.job_id);
+                  addLog('📍 从阶段: ' + data.stage);
 
-              // 建立 WebSocket 连接
-              connectWebSocket(data.job_id);
-              startResumeStatePolling(data.job_id);
-          } else if (data.status === 'error') {
-              addLog('❌ 恢复失败: ' + data.error, 'error');
-              addLog('当前作业已保留。请处理失败原因后再次恢复；如需新作业，请明确点击“重置”。', 'warning');
-          }
-      })
-      .catch(err => {
-          addLog('❌ 错误: ' + err.message, 'error');
-      });
+                  // 建立 WebSocket 连接
+                  connectWebSocket(data.job_id);
+                  startResumeStatePolling(data.job_id);
+              } else if (data.status === 'occupied' || data.status === 'lease_required') {
+                  setLeaseReadOnly(data.occupant, data.error);
+              } else if (data.status === 'error') {
+                  addLog('❌ 恢复失败: ' + data.error, 'error');
+                  addLog('当前作业已保留。请处理失败原因后再次恢复；如需新作业，请明确点击“重置”。', 'warning');
+              }
+          })
+          .catch(err => {
+              addLog('❌ 错误: ' + err.message, 'error');
+          });
+    });
 }
 
 let resumeStatePollGeneration = 0;
 
-function reconcilePendingConfirmation(workflowState, sourceLabel) {
+function reconcilePendingConfirmation(workflowState, sourceLabel, suppressStage) {
     const pending = workflowState.pending || [];
     const stage = pending[0] || '';
     const hitlModal = document.getElementById('hitl-modal');
     const modalStage = hitlModal.classList.contains('active') ? (hitlModal.dataset.stage || '') : '';
+
+    // 本次审批已被并发保护拦下时，不能用服务端状态把同一个阶段再弹回来：
+    // 该阶段要么已被处理、要么已由另一个后台任务接管，重新弹出等于窗口关不掉。
+    if (suppressStage && stage === suppressStage) {
+        if (hitlModal.classList.contains('active')) closeModal();
+        return true;
+    }
 
     // 另一个页面可能已经处理当前审批。只要服务端不再等待弹窗对应阶段，
     // 当前窗口就是过期窗口，必须先关闭，避免用户提交错误的下一阶段状态。
@@ -1131,6 +1318,11 @@ function startResumeStatePolling(jobId) {
                 if (state.historyViewJobId) {
                     state.liveWorkflowState = data;
                     rememberActiveWorkflow(data);
+                    // 与 WebSocket 通道保持一致：只读查看历史作业时不刷新当前作业视图，
+                    // 但已打开的审批窗口必须按最新状态同步，否则会残留过期窗口。
+                    if (document.getElementById('hitl-modal').classList.contains('active')) {
+                        reconcilePendingConfirmation(data, '恢复执行');
+                    }
                     if (data.status !== 'completed' && attempts < 1200) setTimeout(poll, 500);
                     return;
                 }
@@ -1195,6 +1387,13 @@ function connectWebSocket(jobId) {
                     if (state.historyViewJobId) {
                         state.liveWorkflowState = data;
                         rememberActiveWorkflow(data);
+                        // 只读查看历史作业时不刷新当前作业视图，但**已经打开的**审批窗口
+                        // 仍必须按当前作业的最新状态同步：服务端可能已由另一个页面处理
+                        // 或整个工作流已完成，不同步的话窗口会一直残留在屏幕上。
+                        // 这里只在窗口已经打开时才同步，避免在只读浏览时突然弹出审批窗。
+                        if (document.getElementById('hitl-modal').classList.contains('active')) {
+                            reconcilePendingConfirmation(data, '工作流');
+                        }
                         return;
                     }
                     state.workflowState = data;
@@ -1344,6 +1543,11 @@ function resetWorkflow() {
     resumeStatePollGeneration++;
     disconnectWebSocket();
     disconnectLogsWebSocket();
+    // 重置后本页不再操作该工单，主动交还占用，让其他页面可以立即接手。
+    releaseJobLease();
+    state.lease.readOnly = false;
+    state.lease.occupant = null;
+    renderLeaseBanner();
     state.workflowState = {
         status: 'idle',
         pending: [],
@@ -1770,7 +1974,11 @@ function showHitlModal(stage, data) {
     hitlModal.classList.add('active');
 
     if (baseStage === 'P1') {
-        const jobId = state.workflowState.thread_id || state.workflowState.jobId || state.workflowState.threadId;
+        // 与 confirmDecision 一致：只读查看历史作业时，审批窗口仍属于当前作业。
+        const liveState = state.historyViewJobId
+            ? (state.liveWorkflowState || state.workflowState)
+            : state.workflowState;
+        const jobId = liveState.thread_id || liveState.jobId || liveState.threadId;
         infoContent.textContent = '正在加载作业票内容...';
         fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
             .then(r => r.json())
@@ -1792,17 +2000,51 @@ function closeModal() {
     delete hitlModal.dataset.stage;
 }
 
+function resyncWorkflowState(jobId, sourceLabel, suppressStage) {
+    // 审批请求的结果不可用（已被其他页面处理、工单已有后台任务、服务端报错或
+    // 请求本身失败）时，必须向服务端重新取一次真实状态再决定窗口去留。
+    // 不能沿用本地旧状态，否则会把已经过期的审批窗口重新弹出来。
+    // suppressStage：本次刚失败的那个阶段不再弹回，避免窗口关不掉。
+    if (!jobId) return;
+    fetch('/api/workflow/state?thread_id=' + encodeURIComponent(jobId))
+        .then(r => r.json())
+        .then(data => {
+            if (!data) return;
+            if (state.historyViewJobId) {
+                state.liveWorkflowState = data;
+            } else {
+                state.workflowState = data;
+                renderWorkflowDiagram();
+                updateControlPanel();
+            }
+            rememberActiveWorkflow(data);
+            reconcilePendingConfirmation(data, sourceLabel || '状态同步', suppressStage);
+        })
+        .catch(err => {
+            console.warn('重新获取工作流状态失败:', err);
+        });
+}
+
 function confirmDecision(decision) {
     console.log('confirmDecision called:', decision);
     console.log('state.workflowState:', JSON.stringify(state.workflowState));
-    const jobId = state.workflowState.thread_id || state.workflowState.jobId || state.workflowState.threadId;
+    // 只读查看历史作业时，state.workflowState 是历史作业的数据，但屏幕上的审批
+    // 窗口属于当前作业；必须用当前作业的状态来取 jobId 和阶段，否则审批会发到
+    // 另一张工单上，被服务端判为“该阶段未被等待”而无法生效。
+    const confirmState = state.historyViewJobId
+        ? (state.liveWorkflowState || state.workflowState)
+        : state.workflowState;
+    const jobId = confirmState.thread_id || confirmState.jobId || confirmState.threadId;
     console.log('jobId:', jobId);
     if (!jobId) {
         addLog('❌ 错误: 没有进行中的工作流，请先启动工作流', 'error');
         return;
     }
 
-    const pending = state.workflowState.pending || [];
+    // 本页只读（工单被另一个页面占用）时直接拒绝，并说明原因。
+    if (blockIfReadOnly(jobId)) return;
+
+    const pending = confirmState.pending || [];
     const stage = pending[0] || '';
     const hitlModal = document.getElementById('hitl-modal');
     const modalStage = hitlModal.dataset.stage || '';
@@ -1810,10 +2052,9 @@ function confirmDecision(decision) {
     if (!stage || (modalStage && modalStage !== stage)) {
         closeModal();
         addLog(`ℹ️ ${modalStage || '当前'}审批已失效，可能已由其他页面处理`, 'warning');
-        if (stage) {
-            const pendingData = state.workflowState.pending_data || {};
-            showHitlModal(stage, pendingData[stage]);
-        }
+        // 本地状态可能已经过期，改成向服务端取一次真实状态再决定窗口去留：
+        // 服务端仍在等待本阶段就重新弹出，已经继续/完成/失败就保持关闭。
+        resyncWorkflowState(jobId, '审批失效后状态同步');
         return;
     }
 
@@ -1831,6 +2072,7 @@ function confirmDecision(decision) {
             thread_id: jobId,
             stage: stage,
             decision: decision,
+            holder_id: getHolderId(),
             async_execute: true  // 异步执行，点击确认后立即返回
         })
     }).then(r => {
@@ -1839,8 +2081,29 @@ function confirmDecision(decision) {
     }).then(data => {
         addLog(`📋 响应数据: ${JSON.stringify(data)}`);
 
+        if (data.status === 'occupied' || data.status === 'lease_required') {
+            // 工单被另一个页面占用（服务端兜底，正常情况下已被 blockIfReadOnly 拦下）。
+            setLeaseReadOnly(data.occupant, data.error);
+            return;
+        }
         if (data.rejected) {
             addLog(`⛔ ${stage} 已否决，工作流停止；点击“启动”可从 ${stage} 重新执行`, 'warning');
+        } else if (data.duplicate === true || data.status === 'already_processed' || data.status === 'already_executing') {
+            // 并发保护生效的结果，不是失败：该阶段已被本页或另一个页面处理过，
+            // 或者该工单已经有后台执行任务在跑。向操作员说明原因，并关闭窗口；
+            // 关闭后不再把这个阶段弹回来（它已经不处于可审批状态），
+            // 后续状态由 WebSocket 推送和轮询继续同步。
+            const why = data.status === 'already_executing'
+                ? '该工单已有后台执行任务在执行'
+                : '该阶段已由其他页面或上一次请求处理';
+            addLog(`ℹ️ ${stage} 本次审批未生效：${why}，本页审批窗口已关闭`, 'warning');
+            if (data.message) addLog(`ℹ️ ${data.message}`);
+            closeModal();
+            resyncWorkflowState(jobId, '审批未生效', stage);
+        } else if (data.status === 'error') {
+            addLog(`❌ ${stage} 审批失败：${data.error || '服务端返回错误'}`, 'error');
+            closeModal();
+            resyncWorkflowState(jobId, '审批失败');
         } else if (data.status === 'executing') {
             // 异步执行中，等待 WebSocket 状态更新
             addLog(`⏳ ${stage} 已确认，异步执行中...`, 'info');
@@ -1857,12 +2120,8 @@ function confirmDecision(decision) {
         }
       }).catch(err => {
         addLog(`❌ 请求失败: ${err.message}`, 'error');
-        // 请求未成功时重新显示服务端最后推送的待确认阶段，避免按钮丢失。
-        const currentPending = state.workflowState.pending || [];
-        if (currentPending.length > 0) {
-            const pendingData = state.workflowState.pending_data || {};
-            showHitlModal(currentPending[0], pendingData[currentPending[0]]);
-        }
+        // 请求结果未知，向服务端重新取状态，而不是用本地旧状态把窗口重新弹出来。
+        resyncWorkflowState(jobId, '请求失败后状态同步');
       });
 }
 

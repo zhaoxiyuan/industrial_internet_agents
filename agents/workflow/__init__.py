@@ -54,6 +54,18 @@ from .execution_guard import (
     clear_execution_registry,
 )
 
+from .job_lease import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    LEASE_TTL_SECONDS,
+    claim_job_lease,
+    heartbeat_job_lease,
+    release_job_lease,
+    get_job_lease,
+    get_occupant,
+    is_job_lease_holder,
+    clear_job_leases,
+)
+
 __all__ = [
     # file_utils
     "get_jobs_dir",
@@ -98,4 +110,14 @@ __all__ = [
     "release_job_execution",
     "get_job_execution_owner",
     "clear_execution_registry",
+    # job lease（页面级占用）
+    "HEARTBEAT_INTERVAL_SECONDS",
+    "LEASE_TTL_SECONDS",
+    "claim_job_lease",
+    "heartbeat_job_lease",
+    "release_job_lease",
+    "get_job_lease",
+    "get_occupant",
+    "is_job_lease_holder",
+    "clear_job_leases",
 ]
