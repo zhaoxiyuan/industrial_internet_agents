@@ -72,6 +72,18 @@ class Handler(SimpleHTTPRequestHandler):
             data = self._read_json()
             workflow_api.handle_workflow_resume(self, data)
 
+        elif path == "/api/workflow/claim":
+            data = self._read_json()
+            workflow_api.handle_workflow_claim(self, data)
+
+        elif path == "/api/workflow/heartbeat":
+            data = self._read_json()
+            workflow_api.handle_workflow_heartbeat(self, data)
+
+        elif path == "/api/workflow/release":
+            data = self._read_json()
+            workflow_api.handle_workflow_release(self, data)
+
         elif path == "/api/workflow/parse-docx":
             data = self._read_json()
             docx_permit_api.handle_parse_docx(self, data)
@@ -131,7 +143,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_error(404)
 
         elif path == "/api/workflow/latest-incomplete":
-            workflow_api.handle_latest_incomplete_workflow(self)
+            holder_id = parse_qs(parsed.query).get("holder_id", [None])[0]
+            workflow_api.handle_latest_incomplete_workflow(self, holder_id)
 
         elif path == "/api/workflow/history":
             limit = parse_qs(parsed.query).get("limit", [50])[0]

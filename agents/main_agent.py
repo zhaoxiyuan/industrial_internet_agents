@@ -22,14 +22,16 @@ from .utils.logging_handler import get_agent_config
 # 导入 Workflow 模块
 from .workflow import (
     get_job_dir, ensure_job_dir, get_stage_result_path,
-    read_json_file, write_json_file,
+    get_job_lock, read_json_file, write_json_file,
     init_workflow_status, update_workflow_status, get_workflow_status,
     ALL_STAGES,
     save_job_application, add_job_log, save_confirmation, get_job_status,
+    claim_job_execution, release_job_execution,
 )
 # 导入 Execution Status 模块
 from .workflow import (
-    STAGE_CONFIG, classify_error, init_execution_status, get_execution_status,
+    STAGE_CONFIG, MAX_INTERRUPTED_RECOVERIES, classify_error,
+    init_execution_status, get_execution_status,
     update_stage_status, can_retry_stage, get_retry_delay, get_failed_stage,
     get_stage_execution_info, finalize_execution_status, is_stage_critical,
 )
@@ -1034,10 +1036,10 @@ def execute_stage_with_retry(
     max_attempts = stage_config.get("max_attempts", 3)
     retry_on_temporary = stage_config.get("retry_on_temporary", True)
 
-    previous_attempts = get_stage_execution_info(job_id, stage_name).get("attempts", 0)
-    interrupted_recovery = bool(
-        get_stage_execution_info(job_id, stage_name).get("interrupted")
-    )
+    stage_execution_info = get_stage_execution_info(job_id, stage_name)
+    previous_attempts = stage_execution_info.get("attempts", 0)
+    interrupted_recovery = bool(stage_execution_info.get("interrupted"))
+    interrupted_recoveries = stage_execution_info.get("interrupted_recoveries", 0)
     remaining_attempts = max_attempts - previous_attempts
     # HITL 确认后的调用仍属于原来的那次阶段执行，不消耗新的 attempt。
     if continuation:
@@ -1045,6 +1047,30 @@ def execute_stage_with_retry(
     # force 只额外放行一次，避免一次强制恢复又连续产生 max_attempts 次副作用。
     if force and remaining_attempts <= 0:
         remaining_attempts = 1
+    # 中断恢复预算是与执行次数相互独立的约束，必须在**每一次**恢复前检查，
+    # 不能挂在「普通执行次数是否用完」的分支里。否则只要还剩有普通次数就直接
+    # 放行、完全不看预算，等于把预算是否生效交给 max_attempts 的取值决定：
+    # 一旦调大 max_attempts，预算就会被静默绕过。force 是管理员显式越权，不受此限。
+    if (
+        interrupted_recovery
+        and not force
+        and interrupted_recoveries >= MAX_INTERRUPTED_RECOVERIES
+    ):
+        logger.warning(
+            f"[execute_stage_with_retry] {stage_name} 已连续 "
+            f"{interrupted_recoveries} 次在执行中中断，停止自动恢复: job_id={job_id}"
+        )
+        return {
+            "job_id": job_id,
+            "stage": stage_name,
+            "completed": False,
+            "error": (
+                f"{stage_name} 已连续 {MAX_INTERRUPTED_RECOVERIES} 次在执行中中断，"
+                f"疑似确定性故障，已停止自动恢复，请人工检查后强制恢复"
+            ),
+            "interrupted_exhausted": True,
+        }
+
     # 服务异常退出的那一次可能已经记到次数上限，但它没有得到业务结果；
     # 用户点击继续时仍需允许重新进入一次当前阶段。
     if interrupted_recovery and remaining_attempts <= 0:
@@ -1309,11 +1335,104 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         raise ValueError("decision 必须是 approve 或 reject")
 
     job_id = thread_id
+    if stage not in STAGE_EXECUTORS:
+        raise ValueError(f"无效阶段: {stage}")
 
+    execution_token = None
     result_file = get_stage_result_path(job_id, stage.lower())
-    result = read_json_file(result_file)
+    # 状态校验、占用执行权和标记 confirming 必须处于同一把工单锁内，
+    # 否则两个页面可能同时通过 waiting 检查并各自启动后续流程。
+    with get_job_lock(job_id):
+        result = read_json_file(result_file)
+        workflow_status = get_workflow_status(job_id)
+        stage_status = workflow_status.get("agents", {}).get(stage, {}).get("status")
+        # result 文件仅用于兼容没有统一状态文件的旧工单；新状态存在时必须
+        # 以 agents.<stage>.status 为准，confirming 不能再次被当作 waiting。
+        is_waiting = stage_status == "waiting" or (
+            stage_status in {None, "pending"} and bool(result.get("pending_confirmation"))
+        )
+        if not is_waiting:
+            return {
+                "job_id": job_id,
+                "current_stage": workflow_status.get("main_agent", {}).get("current_stage", stage),
+                "pending_confirmations": [],
+                "confirmed_stages": [],
+                "status": "already_processed",
+                "duplicate": True,
+                "message": f"{stage} 当前不在等待审批状态，本次请求未重复执行",
+            }
 
-    save_confirmation(job_id, stage, decision, notes)
+        if async_execute and decision == "approve":
+            execution_token = claim_job_execution(job_id, f"confirm:{stage}")
+            if execution_token is None:
+                return {
+                    "job_id": job_id,
+                    "current_stage": stage,
+                    "pending_confirmations": [stage],
+                    "confirmed_stages": [],
+                    "status": "already_executing",
+                    "duplicate": True,
+                    "message": "该工单已有后台执行任务，本次审批未重复启动",
+                }
+
+        update_workflow_status(job_id, {
+            f"{stage}_status": "confirming",
+            "main_agent": {
+                "status": "running",
+                "current_stage": stage,
+                "pending_confirmations": [],
+            },
+        })
+        save_confirmation(job_id, stage, decision, notes)
+
+    # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
+    # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
+    if decision == "reject":
+        rejection_reason = notes.strip() if notes and notes.strip() else f"{stage} 人工否决"
+        result = result or {"job_id": job_id, "stage": stage}
+        result.update({
+            "completed": False,
+            "rejected": True,
+            "decision": "reject",
+            "error": rejection_reason,
+        })
+        result.pop("pending_confirmation", None)
+        write_json_file(result_file, result)
+
+        # P1 的 checkpoint 还停在工具调用之前；否决后清除它，下一次从 P1
+        # 重试时重新生成并再次等待人工确认，而不是默认批准旧工具调用。
+        if stage == "P1":
+            reset_permit_execution(job_id)
+
+        update_stage_status(job_id, stage, "failed", error=rejection_reason)
+        update_workflow_status(job_id, {
+            f"{stage}_status": "failed",
+            "main_agent": {
+                "status": "error",
+                "current_stage": stage,
+                "pending_confirmations": [],
+                "error": rejection_reason,
+            },
+        })
+        add_job_log(job_id, {
+            "action": "stage_rejected",
+            "stage": stage,
+            "decision": decision,
+            "notes": notes,
+            "error": rejection_reason,
+            "message": f"{stage} 被人工否决，工作流已停止",
+        })
+        _broadcast_state(job_id)
+        return {
+            "job_id": job_id,
+            "current_stage": stage,
+            "pending_confirmations": [],
+            "confirmed_stages": [],
+            "status": "error",
+            "rejected": True,
+            "error": rejection_reason,
+            "can_retry": can_retry_stage(job_id, stage),
+        }
 
     # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
     # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
@@ -1393,10 +1512,15 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         # 启动后台线程执行
         thread = threading.Thread(
             target=_confirm_and_continue_async,
-            args=(job_id, stage, decision, notes, current_idx, stage_order)
+            args=(job_id, stage, decision, notes, current_idx, stage_order, execution_token)
         )
         thread.daemon = True
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            if execution_token is not None:
+                release_job_execution(job_id, execution_token)
+            raise
         return {
             "job_id": job_id,
             "current_stage": stage.upper(),
@@ -1571,7 +1695,15 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
     }
 
 
-def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: str, current_idx: int, stage_order: list):
+def _confirm_and_continue_async(
+    job_id: str,
+    stage: str,
+    decision: str,
+    notes: str,
+    current_idx: int,
+    stage_order: list,
+    execution_token=None,
+):
     """后台执行工作流（供异步模式调用）
 
     注意：这是后台线程执行，不能直接返回结果到前端，只能通过 WebSocket 推送状态更新
@@ -1708,6 +1840,9 @@ def _confirm_and_continue_async(job_id: str, stage: str, decision: str, notes: s
             "main_agent": {"status": "error", "current_stage": stage, "pending_confirmations": []}
         })
         _broadcast_state(job_id)
+    finally:
+        if execution_token is not None:
+            release_job_execution(job_id, execution_token)
 
 
 def get_workflow_state(thread_id: str) -> dict:

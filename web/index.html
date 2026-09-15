@@ -750,6 +750,8 @@
         .history-job-actions { justify-content: flex-end; flex-wrap: wrap; }
         .history-job-actions .btn { padding: 5px 10px; font-size: 11px; }
         .history-view-banner { display: none; background: #E3F2FD; border: 1px solid #90CAF9; border-radius: 8px; padding: 9px 12px; color: #1565C0; font-size: 12px; margin-bottom: 8px; }
+        .lease-banner { display: none; align-items: center; justify-content: space-between; gap: 8px; background: #FFF4E5; border: 1px solid #FFB74D; border-radius: 8px; padding: 9px 12px; color: #B26A00; font-size: 12px; margin-bottom: 8px; }
+        .lease-banner.active { display: flex; }
         .input-source-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
         .input-source-option { padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; color: #555; }
         .input-source-option.active { border-color: #2196F3; background: #F4FAFF; color: #1565C0; box-shadow: 0 0 0 1px #2196F3 inset; }
@@ -1436,6 +1438,9 @@
                         <div class="history-view-banner" id="history-view-banner">
                             <span id="history-view-text">正在查看历史作业</span>
                             <button class="btn btn-secondary" onclick="exitHistoryView()" style="padding: 4px 9px; font-size: 11px;">返回当前作业</button>
+                        </div>
+                        <div class="lease-banner" id="lease-banner">
+                            <span id="lease-banner-text">该工单正由另一个页面操作</span>
                         </div>
                         <div id="control-panel" style="background: white; border-radius: 8px; padding: 10px 15px; margin-bottom: 10px; flex: 0 0 auto;">
                             <span style="color: #999;">就绪</span>

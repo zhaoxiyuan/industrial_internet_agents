@@ -5,7 +5,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-from .file_utils import get_job_dir, read_json_file, write_json_file
+from .file_utils import get_job_dir, get_job_lock, read_json_file, write_json_file
 
 
 # 错误类型定义
@@ -61,6 +61,20 @@ STAGE_CONFIG = {
 
 ALL_STAGES = list(STAGE_CONFIG.keys())
 
+# 服务中断恢复的独立预算。
+#
+# 中断恢复会绕开 attempts 上限（崩溃的那一次没有业务结果，不该记账），但如果
+# 某阶段会让服务确定性退出，每轮「崩溃 → 重启 → 继续」都会重新打上 interrupted
+# 标记并再次绕开上限，形成无上界的循环。因此单独记账并设上限：
+# 预算内允许自动恢复，耗尽后停止自动放行，改由人工判断后强制恢复。
+MAX_INTERRUPTED_RECOVERIES = 2
+
+# 阶段不可恢复的原因，供接口层给出面向操作员的提示
+RETRY_BLOCK_STAGE_NOT_FOUND = "stage_not_found"
+RETRY_BLOCK_NOT_FAILED = "not_failed"
+RETRY_BLOCK_ATTEMPTS_EXHAUSTED = "attempts_exhausted"
+RETRY_BLOCK_INTERRUPTED_EXHAUSTED = "interrupted_exhausted"
+
 
 def classify_error(error_message: str) -> str:
     """根据错误信息分类错误类型"""
@@ -84,6 +98,11 @@ def get_execution_status_path(job_id: str) -> str:
 
 def init_execution_status(job_id: str) -> Dict[str, Any]:
     """初始化执行状态"""
+    with get_job_lock(job_id):
+        return _init_execution_status_unlocked(job_id)
+
+
+def _init_execution_status_unlocked(job_id: str) -> Dict[str, Any]:
     status = {
         "job_id": job_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -100,6 +119,8 @@ def init_execution_status(job_id: str) -> Dict[str, Any]:
             "completed_at": None,
             "last_error": None,
             "last_error_type": None,
+            # 该阶段历史上消耗掉的服务中断恢复次数，与 attempts 分开记账
+            "interrupted_recoveries": 0,
             "history": []
         }
 
@@ -110,13 +131,14 @@ def init_execution_status(job_id: str) -> Dict[str, Any]:
 
 def get_execution_status(job_id: str) -> Dict[str, Any]:
     """获取执行状态"""
-    status_file = get_execution_status_path(job_id)
-    status = read_json_file(status_file)
+    with get_job_lock(job_id):
+        status_file = get_execution_status_path(job_id)
+        status = read_json_file(status_file)
 
-    if not status:
-        status = init_execution_status(job_id)
+        if not status:
+            status = _init_execution_status_unlocked(job_id)
 
-    return status
+        return status
 
 
 def update_stage_status(
@@ -140,6 +162,20 @@ def update_stage_status(
     Returns:
         更新后的执行状态
     """
+    with get_job_lock(job_id):
+        return _update_stage_status_unlocked(
+            job_id, stage, status, error, duration_ms, new_attempt
+        )
+
+
+def _update_stage_status_unlocked(
+    job_id: str,
+    stage: str,
+    status: str,
+    error: Optional[str],
+    duration_ms: Optional[int],
+    new_attempt: bool,
+) -> Dict[str, Any]:
     execution_status = get_execution_status(job_id)
     stage_info = execution_status["stages"].get(stage)
 
@@ -153,6 +189,13 @@ def update_stage_status(
         # 每次真正调用 executor 前即持久化次数；进程中途退出也不会丢失本次尝试。
         if new_attempt or stage_info["attempts"] == 0:
             stage_info["attempts"] += 1
+        # 进入 executor 前 interrupted 仍为真，说明本次是「服务中断恢复」，
+        # 在此消耗一次独立预算。记账时机与 attempts 完全一致、且在同一把
+        # 工单锁内，因此并发或重复恢复不会把预算多扣或少扣。
+        if stage_info.get("interrupted"):
+            stage_info["interrupted_recoveries"] = (
+                stage_info.get("interrupted_recoveries", 0) + 1
+            )
         stage_info["last_attempt_at"] = now
         # 一旦真正重新进入 executor，就不再属于上一次服务异常中断。
         stage_info.pop("interrupted", None)
@@ -206,6 +249,11 @@ def update_stage_status(
 
 def mark_stage_interrupted(job_id: str, stage: str, error: str) -> Dict[str, Any]:
     """把服务退出时遗留的 running 阶段转换为可人工恢复的失败状态。"""
+    with get_job_lock(job_id):
+        return _mark_stage_interrupted_unlocked(job_id, stage, error)
+
+
+def _mark_stage_interrupted_unlocked(job_id: str, stage: str, error: str) -> Dict[str, Any]:
     execution_status = get_execution_status(job_id)
     stage_info = execution_status["stages"].get(stage)
     if not stage_info:
@@ -242,28 +290,44 @@ def mark_stage_interrupted(job_id: str, stage: str, error: str) -> Dict[str, Any
     return execution_status
 
 
+def get_retry_block_reason(job_id: str, stage: str) -> Optional[str]:
+    """返回阶段不可恢复的原因；可恢复时返回 None。
+
+    供接口层区分「执行次数用尽」与「连续中断恢复用尽」，给出面向操作员的
+    提示，而不是笼统地回一句“当前不可重试”。
+    """
+    execution_status = get_execution_status(job_id)
+    stage_info = execution_status["stages"].get(stage)
+
+    if not stage_info:
+        return RETRY_BLOCK_STAGE_NOT_FOUND
+
+    # 服务异常退出不应把工单永久锁死，但恢复次数必须有独立预算：
+    # 耗尽后停止自动放行，改由人工判断后强制恢复。
+    if stage_info.get("interrupted"):
+        if stage_info.get("interrupted_recoveries", 0) >= MAX_INTERRUPTED_RECOVERIES:
+            return RETRY_BLOCK_INTERRUPTED_EXHAUSTED
+        if stage_info.get("status") != "failed":
+            return RETRY_BLOCK_NOT_FAILED
+        return None
+
+    # 检查是否已达到最大重试次数
+    max_attempts = STAGE_CONFIG.get(stage, {}).get("max_attempts", 3)
+    if stage_info.get("attempts", 0) >= max_attempts:
+        return RETRY_BLOCK_ATTEMPTS_EXHAUSTED
+
+    if stage_info.get("status") != "failed":
+        return RETRY_BLOCK_NOT_FAILED
+
+    return None
+
+
 def can_retry_stage(job_id: str, stage: str) -> bool:
     """检查失败阶段是否还允许人工重试。
 
     错误类型只决定是否自动重试；配置或业务错误修复后仍应允许人工恢复。
     """
-    execution_status = get_execution_status(job_id)
-    stage_info = execution_status["stages"].get(stage)
-    config = STAGE_CONFIG.get(stage, {})
-
-    if not stage_info:
-        return False
-
-    # 服务异常退出不应把工单永久锁死；即使此前已到次数上限，也放行一次恢复。
-    if stage_info.get("interrupted"):
-        return stage_info.get("status") == "failed"
-
-    # 检查是否已达到最大重试次数
-    max_attempts = config.get("max_attempts", 3)
-    if stage_info["attempts"] >= max_attempts:
-        return False
-
-    return stage_info.get("status") == "failed"
+    return get_retry_block_reason(job_id, stage) is None
 
 
 def get_retry_delay(attempt: int) -> int:
@@ -291,11 +355,12 @@ def get_stage_execution_info(job_id: str, stage: str) -> Dict[str, Any]:
 
 def finalize_execution_status(job_id: str) -> Dict[str, Any]:
     """标记阶段序列已经走到末尾，同时保留各阶段的失败状态。"""
-    execution_status = get_execution_status(job_id)
-    execution_status["current_stage"] = "completed"
-    execution_status["updated_at"] = datetime.now(timezone.utc).isoformat()
-    write_json_file(get_execution_status_path(job_id), execution_status)
-    return execution_status
+    with get_job_lock(job_id):
+        execution_status = get_execution_status(job_id)
+        execution_status["current_stage"] = "completed"
+        execution_status["updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_json_file(get_execution_status_path(job_id), execution_status)
+        return execution_status
 
 
 def is_stage_critical(stage: str) -> bool:
@@ -309,12 +374,18 @@ __all__ = [
     "STAGE_CONFIG",
     "ALL_STAGES",
     "ERROR_TYPES",
+    "MAX_INTERRUPTED_RECOVERIES",
+    "RETRY_BLOCK_STAGE_NOT_FOUND",
+    "RETRY_BLOCK_NOT_FAILED",
+    "RETRY_BLOCK_ATTEMPTS_EXHAUSTED",
+    "RETRY_BLOCK_INTERRUPTED_EXHAUSTED",
     "classify_error",
     "init_execution_status",
     "get_execution_status",
     "update_stage_status",
     "mark_stage_interrupted",
     "can_retry_stage",
+    "get_retry_block_reason",
     "get_retry_delay",
     "get_failed_stage",
     "get_stage_execution_info",

@@ -1637,7 +1637,7 @@ class MonitorStopRequest(BaseModel):
 
 @app.post("/api/monitor/start")
 async def api_monitor_start(req: MonitorStartRequest):
-    """前端「开始监测」按钮：等价于「点击开始agent → 5秒后播放mock数据」"""
+    """前端启动监测，并避免覆盖主工作流调用的 ``monitor_start`` 工具。"""
     print(f"[monitor_start] 进入: job_id={req.job_id}, scenario={req.scenario}, "
           f"play_delay_sec={req.play_delay_sec}")
 

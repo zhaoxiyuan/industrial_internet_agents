@@ -1161,7 +1161,7 @@ def execute_stage(job_id: str) -> dict:
             )
         except (OSError, json.JSONDecodeError):
             pass
-
+    logger.info(f"[P8] execute_stage: job_id={job_id}, risk_events_count={len(risk_events)}")
     result = {
         "job_id": job_id,
         "stage": "P8",

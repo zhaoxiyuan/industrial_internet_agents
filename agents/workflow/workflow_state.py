@@ -5,7 +5,13 @@ Workflow 状态管理
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from .file_utils import get_workflow_status_path, read_json_file, write_json_file, ensure_job_dir
+from .file_utils import (
+    ensure_job_dir,
+    get_job_lock,
+    get_workflow_status_path,
+    read_json_file,
+    write_json_file,
+)
 from agents.utils.response_utils import SCHEMA_VERSION
 
 # 所有阶段列表
@@ -14,25 +20,26 @@ ALL_STAGES = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]
 
 def init_workflow_status(job_id: str) -> dict:
     """初始化工作流状态文件"""
-    ensure_job_dir(job_id)
-    status = {
-        "job_id": job_id,
-        "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "main_agent": {
-            "status": "pending",  # pending, running, waiting, completed
-            "current_stage": "",
-            "pending_confirmations": []
-        },
-        "agents": {
-            stage: {"status": "pending", "updated_at": None}
-            for stage in ALL_STAGES
+    with get_job_lock(job_id):
+        ensure_job_dir(job_id)
+        status = {
+            "job_id": job_id,
+            "schema_version": SCHEMA_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "main_agent": {
+                "status": "pending",  # pending, running, waiting, completed
+                "current_stage": "",
+                "pending_confirmations": []
+            },
+            "agents": {
+                stage: {"status": "pending", "updated_at": None}
+                for stage in ALL_STAGES
+            }
         }
-    }
-    status_file = get_workflow_status_path(job_id)
-    write_json_file(status_file, status)
-    return status
+        status_file = get_workflow_status_path(job_id)
+        write_json_file(status_file, status)
+        return status
 
 
 def update_workflow_status(job_id: str, updates: dict) -> dict:
@@ -48,6 +55,16 @@ def update_workflow_status(job_id: str, updates: dict) -> dict:
     Returns:
         更新后的完整状态
     """
+    with get_job_lock(job_id):
+        return _update_workflow_status_unlocked(job_id, updates)
+
+
+def _update_workflow_status_unlocked(job_id: str, updates: dict) -> dict:
+    # 不修改调用方传入的字典，避免同一更新对象被重复使用时字段已经 pop。
+    updates = {
+        key: (dict(value) if isinstance(value, dict) else value)
+        for key, value in updates.items()
+    }
     status_file = get_workflow_status_path(job_id)
     status = read_json_file(status_file)
 
@@ -92,5 +109,6 @@ def update_workflow_status(job_id: str, updates: dict) -> dict:
 
 def get_workflow_status(job_id: str) -> dict:
     """获取工作流状态"""
-    status_file = get_workflow_status_path(job_id)
-    return read_json_file(status_file)
+    with get_job_lock(job_id):
+        status_file = get_workflow_status_path(job_id)
+        return read_json_file(status_file)

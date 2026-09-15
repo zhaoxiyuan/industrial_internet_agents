@@ -6,6 +6,7 @@ from .file_utils import (
     get_job_dir,
     ensure_job_dir,
     get_stage_result_path,
+    get_job_lock,
     read_json_file,
     write_json_file,
     get_workflow_status_path,
@@ -27,17 +28,42 @@ from .job_persistence import (
 
 from .execution_status import (
     STAGE_CONFIG,
+    MAX_INTERRUPTED_RECOVERIES,
+    RETRY_BLOCK_STAGE_NOT_FOUND,
+    RETRY_BLOCK_NOT_FAILED,
+    RETRY_BLOCK_ATTEMPTS_EXHAUSTED,
+    RETRY_BLOCK_INTERRUPTED_EXHAUSTED,
     classify_error,
     init_execution_status,
     get_execution_status,
     update_stage_status,
     mark_stage_interrupted,
     can_retry_stage,
+    get_retry_block_reason,
     get_retry_delay,
     get_failed_stage,
     get_stage_execution_info,
     finalize_execution_status,
     is_stage_critical,
+)
+
+from .execution_guard import (
+    claim_job_execution,
+    release_job_execution,
+    get_job_execution_owner,
+    clear_execution_registry,
+)
+
+from .job_lease import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    LEASE_TTL_SECONDS,
+    claim_job_lease,
+    heartbeat_job_lease,
+    release_job_lease,
+    get_job_lease,
+    get_occupant,
+    is_job_lease_holder,
+    clear_job_leases,
 )
 
 __all__ = [
@@ -46,6 +72,7 @@ __all__ = [
     "get_job_dir",
     "ensure_job_dir",
     "get_stage_result_path",
+    "get_job_lock",
     "read_json_file",
     "write_json_file",
     "get_workflow_status_path",
@@ -61,15 +88,36 @@ __all__ = [
     "get_job_status",
     # execution_status
     "STAGE_CONFIG",
+    "MAX_INTERRUPTED_RECOVERIES",
+    "RETRY_BLOCK_STAGE_NOT_FOUND",
+    "RETRY_BLOCK_NOT_FAILED",
+    "RETRY_BLOCK_ATTEMPTS_EXHAUSTED",
+    "RETRY_BLOCK_INTERRUPTED_EXHAUSTED",
     "classify_error",
     "init_execution_status",
     "get_execution_status",
     "update_stage_status",
     "mark_stage_interrupted",
     "can_retry_stage",
+    "get_retry_block_reason",
     "get_retry_delay",
     "get_failed_stage",
     "get_stage_execution_info",
     "finalize_execution_status",
     "is_stage_critical",
+    # execution guard
+    "claim_job_execution",
+    "release_job_execution",
+    "get_job_execution_owner",
+    "clear_execution_registry",
+    # job lease（页面级占用）
+    "HEARTBEAT_INTERVAL_SECONDS",
+    "LEASE_TTL_SECONDS",
+    "claim_job_lease",
+    "heartbeat_job_lease",
+    "release_job_lease",
+    "get_job_lease",
+    "get_occupant",
+    "is_job_lease_holder",
+    "clear_job_leases",
 ]

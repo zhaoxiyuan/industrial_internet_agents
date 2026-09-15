@@ -93,7 +93,7 @@ LLM 从对话上下文中识别用户提及的 `job_id`，写入 chat 级焦点�
 按优先级链解析 `effective_job_id`，再合成 `thread_id`：
 
 ```
-effective_job_id = 
+effective_job_id =
   P1. 飞书 event.metadata.job_id  ← 卡片回调 / 系统推送自带
   P2. 消息正文 [job_id=XXX] 前缀   ← 用户显式声明（兜底）
   P3. 当前 chat 焦点缓存          ← LLM 从上下文识别

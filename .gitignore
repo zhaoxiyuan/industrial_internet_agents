@@ -29,10 +29,7 @@ agents/data
 model_profiles.json
 frontend/saved_configs.json
 openclaw-channel-gateway-standalone/data/gateway-state.json
-openclaw-channel-gateway-standalone/data/gateway-state.json
-openclaw-channel-gateway-standalone/data/gateway-state.json
 openclaw-channel-gateway-standalone/.gateway.pid
-openclaw-channel-gateway-standalone/data/gateway-state.json
 
 # 2026-08-17：运行时数据 / 备份 / 误存文件不入仓
 
@@ -63,6 +60,8 @@ A6/log_test/
 A5/logs/
 A6/logs/
 
+#我的更新
+docs/update/
 # A7 运行时日志（chat_reply daemon / web server）
 A7/data/
 
@@ -71,3 +70,9 @@ A7/data/
 cc connect/
 
 
+# 助手本地记忆目录（非项目代码，仅本机使用）
+.workbuddy/
+
+# macOS 目录元数据
+.DS_Store
+**/.DS_Store

@@ -126,6 +126,42 @@ def _build_fallback_permit(application: dict, job_id: str) -> tuple:
     return jsa_result, permit_content, missing
 
 
+def _build_docx_permit_result(application: dict, job_id: str) -> dict:
+    """基于真实 DOCX 的已解析字段生成 P1 结果，禁止混入工具中的固定 Mock 内容。"""
+    jsa_result, permit_content, missing = _build_fallback_permit(application, job_id)
+    selected_measures = application.get("safety_measures") or []
+    measure_catalog = application.get("safety_measures_catalog") or []
+
+    permit_content.update({
+        "input_source": "docx",
+        "source_document": application.get("source_document", {}),
+        "hot_work_location": application.get("hot_work_location", ""),
+        "document_safety_measures": selected_measures,
+        "safety_measures_catalog": measure_catalog,
+    })
+    document_measure_text = [
+        item.get("description", "") if isinstance(item, dict) else str(item)
+        for item in selected_measures
+    ]
+    permit_content["measures"] = list(dict.fromkeys(
+        [*permit_content.get("measures", []), *filter(None, document_measure_text)]
+    ))
+
+    jsa_result.update({
+        "source": "docx_application_rule_analysis",
+        "document_safety_measures": selected_measures,
+    })
+    return {
+        "task_id": f"TASK-{job_id}",
+        "permit_draft_id": f"PD-{job_id}",
+        "jsa_result": jsa_result,
+        "permit_content": permit_content,
+        "missing_fields": missing,
+        "data_origin": {
+            "application": "uploaded_docx",
+            "jsa_result": "job_type_rule_analysis",
+        },
+    }
 def _push_p1_tool_log(level: str, message: str, data: dict = None):
     """将 P1 工具日志绑定到当前作业，避免通配日志串到其他作业窗口。"""
     push_websocket_log(_p1_job_context.get(), level, "TOOL", message, data)
@@ -596,6 +632,39 @@ def execute_stage(
         "completed": False,
     }
 
+    app_file = get_job_dir(job_id) + "/application.json"
+    application = read_json_file(app_file).get("application", {})
+
+    if not application:
+        logger.warning(f"[P1] !!! 作业申请为空: job_id={job_id}")
+        result = {"error": "No application found", "completed": False}
+        log.log_exit(job_id, result)
+        return result
+
+    # 真实 DOCX 使用独立的数据驱动路径。固定示例工具仅供 Mock 模式测试，
+    # 不允许其“受限空间、反应器 R-101”等内容进入真实作业票。
+    if application.get("input_source") == "docx":
+        try:
+            reset_permit_execution(job_id)
+            push_websocket_log(job_id, "INFO", "AGENT", "[P1] 根据真实 DOCX 识别结果生成作业票")
+            add_job_log(job_id, {
+                "action": "execute_p1_docx",
+                "message": "P1 使用真实 DOCX 数据生成作业票，已跳过固定 Mock 工具",
+            })
+            result = _process_p1_result(
+                job_id,
+                _build_docx_permit_result(application, job_id),
+                result,
+            )
+            log.log_exit(job_id, result)
+            return result
+        except Exception as e:
+            log.log_error(job_id, e)
+            result["error"] = str(e)
+            write_json_file(result_file, result)
+            log.log_exit(job_id, result)
+            return result
+
     # 检查是否需要恢复执行
     if resume or is_agent_interrupted(job_id):
         log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
@@ -624,16 +693,6 @@ def execute_stage(
         except:
             result_data = {"result": result_text}
         result = _process_p1_result(job_id, result_data, existing_result)
-        log.log_exit(job_id, result)
-        return result
-
-    # 首次执行
-    app_file = get_job_dir(job_id) + "/application.json"
-    application = read_json_file(app_file).get("application", {})
-
-    if not application:
-        logger.warning(f"[P1] !!! 作业申请为空: job_id={job_id}")
-        result = {"error": "No application found", "completed": False}
         log.log_exit(job_id, result)
         return result
 
@@ -727,6 +786,7 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
             result["jsa_result"] = submit_data.get("jsa_result", {})
             result["permit_content"] = submit_data.get("permit_content", {})
             result["missing_fields"] = submit_data.get("missing_fields", [])
+            result["data_origin"] = submit_data.get("data_origin", {})
             logger.info(f"[_process_p1_result] 成功提取数据: task_id={result.get('task_id')}, permit_draft_id={result.get('permit_draft_id')}")
         else:
             logger.warning(f"[_process_p1_result] 无法提取 submit 数据，result_data={result_data}")
@@ -746,6 +806,7 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
             "application": application,
             "jsa_result": result.get("jsa_result"),
             "permit_content": result.get("permit_content"),
+            "data_origin": result.get("data_origin", {}),
             "saved_at": datetime.now(timezone.utc).isoformat()
         }
         output_path = get_job_dir(job_id) + "/permit.json"
