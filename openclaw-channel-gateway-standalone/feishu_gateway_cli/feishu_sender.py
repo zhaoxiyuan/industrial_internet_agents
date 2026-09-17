@@ -857,13 +857,19 @@ def send_to_group_card(
 
     # 发送成功后补全 message_id。callback 只需要按 alert_id 反查 card_id，
     # 即可 PUT 原位更新同一条消息，无需撤回和重发。
+    # 2026-09-17：删掉 sequence=0。register_card 实现是
+    #   "sequence": int(sequence) if sequence is not None else int(existing.get("sequence", 0))
+    # 传 sequence=0 会强制覆盖 existing 的 sequence。send 之前的 _send_event_card
+    # 已 register_card(sequence=1)，被这里覆盖成 0 后，update_job_card lookup
+    # 拿到 sequence=0 → +1=1 → update_card_entity(sequence=1) 飞书 CardKit
+    # 因 sequence 不严格递增而不更新卡片。不传 sequence 让 register_card 走
+    # "保留 existing" 分支，sequence 仍是 1。
     if alert_id:
         feishu_card_api.register_card(
             str(alert_id),
             card_id,
             account_id=effective_account_id,
             message_id=result.platform_message_id,
-            sequence=0,
             card_json=card,
         )
 

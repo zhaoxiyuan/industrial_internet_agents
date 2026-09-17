@@ -18,6 +18,7 @@ P6: 作业过程动态监测 - 基于 A5 实现（完整 Web 服务）
 """
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -51,7 +52,7 @@ from A5.stream_players.async_collector import AsyncCollector
 
 # P7 提供 A6 Agent + A6 路由（共享端口 5002，P6 启动时通过 register_a6_routes 挂载）
 # 使用绝对导入以兼容 `python agents/p6_monitor_agent.py` 直接调用（__main__ 模式下相对导入会失败）
-from agents.p7_risk_agent import trigger_a6_assessment, register_a6_routes
+from agents.p7_risk_agent import trigger_a6_assessment, trigger_p7_assessment_batch, register_a6_routes
 
 # ── FastAPI 应用 ─────────────────────────────────────────────────────────────
 app = FastAPI(title="A5 作业过程监测 - P6 Monitor")
@@ -1127,6 +1128,180 @@ def _count_log_files(log_dir: str) -> dict:
 
 
 # ============================================================
+# P7 批量调度状态（每 10 秒一次：收 N 条未处理事件 → 串行等上次返回 → 调 P7）
+# ============================================================
+
+# 调度参数（可被环境变量覆盖）
+P7_DISPATCH_INTERVAL_SEC = float(os.environ.get("P7_DISPATCH_INTERVAL_SEC", "10"))
+P7_DISPATCH_BATCH_SIZE = int(os.environ.get("P7_DISPATCH_BATCH_SIZE", "10"))
+
+
+def _p7_dispatch_state_path(log_dir: str) -> Path:
+    """P7 调度状态文件路径：<log_dir>/_p7_dispatch_state.json
+
+    与 raw_event / snapshot 等运行时文件同目录，便于 per-job 隔离。
+    """
+    return Path(log_dir) / "_p7_dispatch_state.json"
+
+
+def _load_p7_dispatch_state(log_dir: str) -> Dict[str, Any]:
+    """读取 P7 调度状态；文件不存在则返回空结构。"""
+    path = _p7_dispatch_state_path(log_dir)
+    if not path.exists():
+        return {"processed_event_ids": [], "last_dispatch_at": None, "last_batch_size": 0, "last_status": "init"}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError):
+        return {"processed_event_ids": [], "last_dispatch_at": None, "last_batch_size": 0, "last_status": "corrupt"}
+
+
+def _save_p7_dispatch_state(log_dir: str, state: Dict[str, Any]) -> None:
+    """原子写 P7 调度状态（tempfile + os.replace + fsync）。"""
+    import os as _os
+    import tempfile
+    path = _p7_dispatch_state_path(log_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix="_p7_dispatch_state_", suffix=".json", dir=str(path.parent),
+    )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump(state, fp, ensure_ascii=False, indent=2)
+            fp.flush()
+            _os.fsync(fp.fileno())
+        _os.replace(tmp_path, path)
+    except Exception:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _collect_unprocessed_p6_events(log_dir: str, processed_ids: set, batch_size: int) -> List[Dict[str, Any]]:
+    """收集最近 N 个未送 P7 的 P6 事件（按 wall_time 倒序、按文件 mtime 倒序）。
+
+    返回的每项是一个**单事件 dict**（含 event_id），便于 P7 process_event 直接处理。
+    """
+    p6_dir = Path(log_dir)
+    if not p6_dir.exists():
+        return []
+    raw_files = sorted(p6_dir.glob("raw_event_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    collected: List[Dict[str, Any]] = []
+    for rf in raw_files:
+        try:
+            data = json.loads(rf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, IOError):
+            continue
+        events = data.get("events") or []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            ev_id = ev.get("event_id")
+            if not ev_id or ev_id in processed_ids:
+                continue
+            collected.append(ev)
+            if len(collected) >= batch_size:
+                return collected
+    return collected
+
+
+async def _run_p7_dispatch_loop(
+    log_dir: str,
+    job_id: str,
+    running_predicate,
+    interval_sec: float = P7_DISPATCH_INTERVAL_SEC,
+    batch_size: int = P7_DISPATCH_BATCH_SIZE,
+):
+    """P7 批量调度循环。
+
+    行为契约（按用户最新需求）：
+      1. 每隔 `interval_sec` 秒触发一次（默认 10s；可被环境变量覆盖）。
+      2. 每次触发时**先 await 上次的 is_processed_marker**，
+         确保"上一批有返回结果再发下一批"的串行约束。
+      3. 维护 <log_dir>/_p7_dispatch_state.json 状态文件：
+            - processed_event_ids: 已送 P7 的 event_id 集合（去重）
+            - last_dispatch_at / last_batch_size / last_status: 调度观察
+      4. 每次取"最近 N 个未处理"的 P6 事件（按 raw_event 文件 mtime 倒序），
+         **不是** A5 生成一个事件就立刻送 P7，避免频繁小批量 + 竞态。
+      5. 把这一批交给 `trigger_p7_assessment_batch`；A6Agent 内部
+         (a) 用 LLM 决定聚合 vs 新建 vs 移动到新表（agent 判断，非硬编码规则）
+         (b) per-instance asyncio.Lock 保证同 job 串行
+         (c) 返回每条事件的 decision 摘要；调用方据此更新 processed_event_ids。
+      6. running_predicate() 返回 False 时退出循环。
+    """
+    state = _load_p7_dispatch_state(log_dir)
+    processed_ids: set = set(state.get("processed_event_ids") or [])
+
+    # 当前批次的"完成标记"——下一轮会 await 它
+    current_marker: Optional[asyncio.Event] = None
+    current_dispatch_task: Optional[asyncio.Task] = None
+
+    while running_predicate():
+        # ── (1) 等待上一批真正返回（marker 被 set） ──
+        if current_marker is not None:
+            try:
+                await asyncio.wait_for(current_marker.wait(), timeout=None)
+            except Exception:
+                # 防御性：marker wait 异常 → 视作上一批已结束，不阻塞下一轮
+                pass
+
+        # ── (2) 收集最近的未处理 P6 事件 ──
+        events = _collect_unprocessed_p6_events(log_dir, processed_ids, batch_size)
+        if not events:
+            # 静默 sleep 整个 interval；下次轮询再扫
+            await asyncio.sleep(interval_sec)
+            continue
+
+        # ── (3) 发起新的 dispatch（fire-and-forget），并把 marker 接管过来 ──
+        # 注：trigger_p7_assessment_batch 在入口 clear()，结束 set()，所以这里保持未 set 即可
+        new_marker = asyncio.Event()
+
+        async def _run_one_batch(_events, _marker):
+            try:
+                results = await trigger_p7_assessment_batch(
+                    _events, job_id=job_id, is_processed_marker=_marker,
+                )
+                # 把成功的 event_id 写入持久化状态
+                for r in results:
+                    eid = r.get("event_id")
+                    if eid and r.get("status") != "error":
+                        processed_ids.add(eid)
+                _save_p7_dispatch_state(log_dir, {
+                    "processed_event_ids": sorted(processed_ids),
+                    "last_dispatch_at": datetime.now().isoformat(timespec="seconds"),
+                    "last_batch_size": len(_events),
+                    "last_status": "ok",
+                })
+            except Exception as exc:
+                import traceback
+                print(f"[P7 dispatch] 异常: {type(exc).__name__}: {exc}")
+                traceback.print_exc()
+                try:
+                    _save_p7_dispatch_state(log_dir, {
+                        "processed_event_ids": sorted(processed_ids),
+                        "last_dispatch_at": datetime.now().isoformat(timespec="seconds"),
+                        "last_batch_size": len(_events),
+                        "last_status": f"error:{type(exc).__name__}",
+                    })
+                except Exception:
+                    pass
+
+        current_marker = new_marker
+        current_dispatch_task = asyncio.create_task(_run_one_batch(events, new_marker))
+
+        # ── (4) sleep interval 后再做下一轮（期间上一批在后台跑） ──
+        await asyncio.sleep(interval_sec)
+
+    # 退出前收尾：等待最后一个 dispatch 完成
+    if current_dispatch_task is not None:
+        try:
+            await asyncio.wait_for(current_dispatch_task, timeout=30)
+        except Exception:
+            pass
+
+
+# ============================================================
 # 内部协程：数据播放（循环1）
 # ============================================================
 
@@ -1183,6 +1358,16 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
     log_path = Path(log_dir)
     pending_tasks: list = []
     inflight_wts: set = set()
+
+    # ── 启动 P7 批量调度协程（每 10s 扫一次最近未处理的 P6 事件 → 串行送 P7） ──
+    # P6 主循环不再 fire-and-forget 单事件；事件由 _run_p7_dispatch_loop 主动收集。
+    p7_dispatch_task = asyncio.create_task(
+        _run_p7_dispatch_loop(
+            log_dir=log_dir,
+            job_id=job_id,
+            running_predicate=running_predicate,
+        )
+    )
 
     def _load_inflight():
         inflight_wts.clear()
@@ -1311,12 +1496,10 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
                     inflight_wts.discard(wt)
                     result = results.get(wt, {"wall_time": wt, "events": []})
                     await _on_success(log_path, wt, result)
-                    # 🚨 有告警事件时触发 A6 研判（每个 batch 调用一次，与 A5 批量输出对齐）
-                    #    P7 in-process 调用，跳过 HTTP — 详见上方注释块
-                    if result.get("events"):
-                        # 透传当前 active job_id（per-job 模式由闭包 job_id 提供）；
-                        # 兼容旧 /api/agent/start 路径 → job_id="" → 回退全局 A6Agent
-                        asyncio.create_task(trigger_a6_assessment(wt, result, job_id=job_id))
+                    # ⚠️ 不再在此处 fire-and-forget 触发 A6 研判。
+                    # P6 → P7 调度由 _run_p7_dispatch_loop 接管（每 10s 收集最近 N 条未处理事件，
+                    # 串行等上次结果 → 整批送 P7，由 A6Agent 内部 LLM 决定聚合 / 新建 / 移动到新表）。
+                    # 历史注释见上方代码块保留。
             except Exception as e:
                 _remove_batch(log_path, bk)
                 for wt in wts:
@@ -1328,6 +1511,12 @@ async def _run_agent_loop(log_dir: str, interval_sec: int, batch_size: int,
 
     if pending_tasks:
         await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+    # 收尾：等待 P7 批量调度协程结束（_run_p7_dispatch_loop 在 running_predicate=False 后会退出）
+    try:
+        await asyncio.wait_for(p7_dispatch_task, timeout=30)
+    except Exception:
+        pass
 
     state.agent_running = False
 

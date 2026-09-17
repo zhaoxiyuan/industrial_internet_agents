@@ -133,37 +133,44 @@ def feishu_card_callback():
             "toast": {"type": "success", "content": "已记录您的处置"},
         }
         if isinstance(result, dict) and result.get("_card_json"):
+            # 2026-09-17 修复：default=str 兜底循环引用；某些 state 含 callable /
+            # # 闭包 / Enum 等不可 JSON 化对象时，json.dumps 会 raise。
             response_body["card"] = {
                 "type": "card_json",
-                "data": json.dumps(result["_card_json"], ensure_ascii=False),
+                "data": json.dumps(result["_card_json"], ensure_ascii=False, default=str),
+            }
+        elif isinstance(result, dict) and isinstance(result.get("state"), dict) \
+                and result["state"].get("_card_json"):
+            # 兜底：_trigger_card_update 路径偶尔把 card_json 嵌在 result["state"] 下
+            response_body["card"] = {
+                "type": "card_json",
+                "data": json.dumps(result["state"]["_card_json"], ensure_ascii=False, default=str),
             }
         return jsonify(response_body), 200
     except InvalidAction as e:
         msg = str(e)
         logger.warning(f"callback invalid_action: {msg}")
+        # 2026-09-17 修复：飞书 Card 2.0 callback 响应只允许 toast + card 两个顶层 key。
+        # 多余字段（status/error）会被飞书 reject 并报 200672「响应体格式错误」。
         return jsonify({
             "toast": {"type": "error", "content": msg},
-            "status": "error", "error": "invalid_action",
         }), 200
     except InvalidOperator as e:
         msg = str(e)
         logger.warning(f"callback invalid_operator: {msg}")
         return jsonify({
             "toast": {"type": "error", "content": msg},
-            "status": "error", "error": "invalid_operator",
         }), 200
     except CallbackError as e:
         msg = str(e)
         logger.warning(f"callback business error: {msg}")
         return jsonify({
             "toast": {"type": "warning", "content": msg},
-            "status": "error", "error": "callback_error",
         }), 200
     except Exception as e:
         logger.exception(f"feishu callback 未捕获异常：{e}")
         return jsonify({
             "toast": {"type": "error", "content": f"服务异常：{e}"},
-            "status": "error", "error": "internal",
         }), 200
 
 

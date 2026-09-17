@@ -21,12 +21,30 @@
 
 from __future__ import annotations
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .state_machine import ClosureService, StateNotFound
 
 
 logger = logging.getLogger("P8P9.agent_interface")
+
+
+# 2026-09-17：P8P9 状态机 job_id 必须 = ERP 17 位数字工单号（如 20260917000000003），
+# 与主流程 data/jobs/{17位}/{p5|p7}_result.json 目录一一对应。
+# 禁止 P8 agent 自行生成 P8P9-YYYYMMDD-HHMMSS-NNN 形式的 ID。
+_ERP_JOB_ID_PATTERN = re.compile(r"^\d{17}$")
+
+
+def _validate_erp_job_id(job_id: str) -> None:
+    """验证 job_id 必须是 17 位数字 ERP 工单号；否则抛 InputValidationError。"""
+    if not job_id or not isinstance(job_id, str) or not _ERP_JOB_ID_PATTERN.match(job_id):
+        raise ValueError(
+            f"job_id 必须是 17 位数字 ERP 工单号（如 '20260917000000003'），"
+            f"实际={job_id!r}。P8P9 状态机与主流程作业同目录一一对应，"
+            f"严禁使用 P8P9-... 命名空间。"
+        )
 
 
 # ─── 接口 1：initialize_job_for_agent ────────────────────────────────────────
@@ -37,7 +55,8 @@ def initialize_job_for_agent(
     """agent 调：创建 job + 同步 P7 events（mock 数据）。
 
     Args:
-        job_id: 业务方传入的作业 ID
+        job_id: 17 位 ERP 数字工单号（如 '20260917000000003'）；必须与
+                 data/jobs/{job_id}/{p5|p7}_result.json 同名。
         actor: 标识（通常是 "P8-DispositionAgent" / "scheduler" / "admin"）
         events: P7 同步过来的风险事件列表（mock 数据从 fixtures 读）
 
@@ -50,12 +69,34 @@ def initialize_job_for_agent(
         }
 
     Raises:
-        InputValidationError: job_id 含非法字符 / events 字段不全
+        ValueError: job_id 不是 17 位数字格式
+        InputValidationError: events 字段不全
         StateNotFound: 已经初始化过（idempotent：返回已存在的 state）
     """
+    _validate_erp_job_id(job_id)
     svc = ClosureService()
     try:
         existing = svc.get_state(job_id)
+        # 2026-09-17 修复：idempotent 命中但 state.events=[] 且新 events 非空时，
+        # 自动 sync（首次创建时 LLM 传的 events 被吞，job 处于"events=空 但 bound"的尴尬状态）。
+        # 仅在 state.events 为空时补救；已存在 events 时不覆盖（避免覆盖手工修改）。
+        existing_events = existing.get("events") or []
+        new_events = events or []
+        if not existing_events and new_events:
+            logger.info(
+                f"job_id={job_id} idempotent 命中但 events 为空，"
+                f"自动 sync 新 events ({len(new_events)} 条)"
+            )
+            with svc._lock_for(job_id):
+                cur = svc.get_state(job_id)
+                cur["events"] = new_events
+                cur["display_risk_level"] = max(
+                    [int(e.get("risk_level", 0)) for e in new_events] + [0]
+                )
+                cur["version"] = cur.get("version", 0) + 1
+                cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+                svc._atomic_write(job_id, cur)
+            existing = svc.get_state(job_id)
         logger.info(f"job_id={job_id} 已初始化；返回现有 state")
         return _state_to_agent_view(existing)
     except StateNotFound:

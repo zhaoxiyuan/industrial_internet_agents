@@ -167,6 +167,7 @@ def send_all_open_closure_cards(
     job_id: str, *, actor: str, chat_id: str,
     group_name: Optional[str] = None,
     account_id: Optional[str] = None,
+    is_resend: bool = False,
 ) -> Dict[str, Any]:
     """§6.3.3：初始化发送（或批量重发）。
 
@@ -188,7 +189,8 @@ def send_all_open_closure_cards(
         if not rid:
             continue
         r = _send_event_card(job_id, rid, actor=actor, chat_id=chat_id,
-                              group_name=group_name, account_id=account_id)
+                              group_name=group_name, account_id=account_id,
+                              is_resend=is_resend)
         results.append({"event_id": rid, **r})
 
     # 写 card_binding（取首个成功的 card_id）
@@ -222,6 +224,7 @@ def _send_event_card(
     chat_id: Optional[str] = None,
     group_name: Optional[str] = None,
     account_id: Optional[str] = None,
+    is_resend: bool = False,
 ) -> Dict[str, Any]:
     """发送单 event 卡片。
 
@@ -266,12 +269,21 @@ def _send_event_card(
         logger.warning(f"register_card 失败（非致命）：{e}")
 
     # send
+    # 2026-09-17 修复：init 和 resend 路径都加时间戳盐值，避免 Gateway 409。
+    # 原问题：idempotency_key 用 `init:{job}:{event}:{version}`，
+    # 当 state.idempotent 命中时 version 不变，重复 send 时 key 撞了 →
+    # OpenClaw Gateway 报 IDEMPOTENCY_CONFLICT（即使 message content 相同）。
+    # 加 timestamp 盐值后每次都唯一，Gateway 直接 replay 旧 intent，不会 409。
+    if is_resend:
+        idempotency_key = f"resend:{job_id}:{risk_event_id}:{version}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    else:
+        idempotency_key = f"init:{job_id}:{risk_event_id}:{version}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
     try:
         send_result = feishu_sender.send_to_group_card(
             card_json,
             chat_id=chat_id, group_name=group_name, account_id=account_id,
             alert_id=alert_id,
-            idempotency_key=f"init:{job_id}:{risk_event_id}:{version}",
+            idempotency_key=idempotency_key,
         )
     except Exception as e:
         logger.exception(f"send_to_group_card 失败：job_id={job_id} err={e}")

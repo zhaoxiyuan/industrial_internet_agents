@@ -82,7 +82,8 @@ class ClosureLinkService:
     def __init__(self, base_dir: str = None) -> None:
         if base_dir is None:
             import os
-            base_dir = os.environ.get("P8P9_BASE_DIR", "data/p8p9_jobs")
+            # 2026-09-17：与 ClosureService 同目录（data/jobs/），保持一致
+            base_dir = os.environ.get("P8P9_BASE_DIR", "data/jobs")
         self.base_dir = Path(base_dir)
 
     def _svc(self) -> ClosureService:

@@ -12,12 +12,12 @@
 1. **`open_work_ticket`** — 创建 P8P9 job（job_status=open）+ 群内发飞书 Card 2.0 卡片
    - 必填：`events`（≥1；每个含 `risk_event_id` / `risk_level`）
    - 必填（互斥）：`chat_id` 或 `group_name`（仅支持群发；DM 不支持卡片）
-   - 可选：`risk_basis` / `job_id`（None 自动生成 `P8P9-YYYYMMDD-HHMMSS-NNN`）/ `account_id`
+   - 必填：`job_id`（★ 17 位数字 ERP 工单号，如 `20260917000000003`；与 `data/jobs/{job_id}/` 主流程目录同名；禁止 `P8P9-` 前缀）/ `risk_basis` / `account_id`
    - 行为：调 `P8P9/agent_interface.initialize_job_for_agent` + `bind_card_for_agent` + `P8P9/services/card_render.send_all_open_closure_cards`，每 event 发一张 open 态卡片（含「接取任务」按钮）
    - ★ 这是 P8 唯一允许"创建 P8P9 作业 + 发卡片"的入口
 
 2. **`resend_current_card`** — 重发当前 P8P9 job 的飞书卡片到原绑定群
-   - 必填：`job_id`（必须 `P8P9-` 前缀）
+   - 必填：`job_id`（★ 17 位数字 ERP 工单号，如 `20260917000000003`；与 `data/jobs/{job_id}/` 主流程目录同名）
    - 行为：读 `state.card_binding.chat_id` → 调 `send_all_open_closure_cards` 重发
    - ★ 不修改 `job_status` / `version` / 业务字段；纯展示修复
    - 触发场景：用户报"卡片没显示 / 按钮没渲染 / 模板错乱"
@@ -60,7 +60,7 @@
   - `escalate_risk` / `downgrade_risk` / `record_closure_review`
   - `notify_feishu`（旧版已废弃，**v2.1 不再存在**）
   - 任何状态机转换工具
-- **严禁**编造 `P8P9-YYYYMMDD-HHMMSS-NNN` 格式的 job_id；不传 `job_id` 由系统自动生成
+- **严禁**编造任何格式的 job_id；job_id 必须是用户提供的 17 位 ERP 工单号（与 `data/jobs/{job_id}/` 主流程目录同名）
 - **严禁**猜测 `chat_id` → 必须由用户在消息中明确告知群名 / 群 ID
 
 ---
@@ -70,7 +70,7 @@
 | 旧版（notify_feishu） | v2.1（open_work_ticket） |
 |---|---|
 | 调 `feishu_sender.send_to_group_card` 直推卡片 JSON | 走 P8P9 状态机 → `agent_interface` → `card_render` 全链路 |
-| 写 P8_job 表（per-job working_memory） | 写 `data/jobs/_p8p9/{job_id}/closure_state.json` |
+| 写 P8_job 表（per-job working_memory） | 写 `data/jobs/{17位 ERP job_id}/closure_state.json`（与主流程同目录） |
 | 状态机分散在 P8 + 业务层 | 统一在 `P8P9/state_machine.ClosureService` |
 | 失败重试手工 | `resend_current_card` 一键幂等重发 |
 
@@ -83,13 +83,19 @@
 
 ## 触发场景（典型对话模式）
 
-### 场景 A：用户说"开启作业票" / "把这条风险推送到群里"
-→ LLM 先从 P7 输入（用户消息上下文 / `read_p7_events`）拿到 events 列表
-→ 调 `open_work_ticket(events=[...], risk_basis="...", chat_id="oc_xxx" 或 group_name="...")`
-→ 返回成功后，告知用户"作业票已开启，job_id=P8P9-...，已发送 X 张飞书卡片到群 Y"
+### 场景 A0（最常见）：用户说"为 [17 位 ERP job_id] 创建推送 / 创建处置"
+→ ★ 直接把用户给的 17 位 ID 当作 job_id 用，**不要**让 P8 自行生成 P8P9-... 形式 ID
+→ 步骤 1：调 `read_p7_events(job_id="20260917000000003")` 读 `data/jobs/{job_id}/p7_result.json`，拿到 events 列表（含 risk_event_id / risk_level / event_type / risk_basis）
+→ 步骤 2：调 `open_work_ticket(job_id="20260917000000003", events=[...], risk_basis=events[*].risk_basis 之一, chat_id=...)`
+→ 返回成功后，告知用户"作业票已开启，job_id=20260917000000003，已发送 X 张飞书卡片到群 Y"
+
+### 场景 A：用户说"开启作业票" / "把这条风险推送到群里"（无 17 位 ID）
+→ 先反问用户 17 位 ERP 工单号（因为 P8P9 状态机必须用 17 位 ID 与主流程同目录）
+→ 用户提供后再走场景 A0 流程
+→ 严禁 P8 自行生成 P8P9-YYYYMMDD-HHMMSS-NNN 形式 ID
 
 ### 场景 B：用户说"卡片没显示 / 按钮按了没反应 / 重发一下那张卡"
-→ 调 `resend_current_card(job_id="P8P9-...")`
+→ 调 `resend_current_card(job_id="20260917000000003")`（17 位 ERP 工单号）
 → 告知用户"已重发 X 张卡片到原群"
 
 ### 场景 C：用户说"记录一下：作业人员已通知到位 / 当前进度是 X"
@@ -118,7 +124,7 @@
 open_work_ticket(
     events: list[dict],          # 必填；≥1；每个含 risk_event_id / risk_level
     risk_basis: str = "",
-    job_id: Optional[str] = None,  # None → 自动生成
+    job_id: str,  # ★ 必填 17 位数字 ERP 工单号（与 data/jobs/{job_id}/ 主流程目录同名）
     chat_id: Optional[str] = None,
     group_name: Optional[str] = None,
     account_id: Optional[str] = None,

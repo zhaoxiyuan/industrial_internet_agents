@@ -77,20 +77,37 @@ class Handler(SimpleHTTPRequestHandler):
             docx_permit_api.handle_parse_docx(self, data)
 
         elif path == "/api/feishu/card-callback":
-            # 2026-08-18：飞书客户端"显示出错"+ 卡不换的根因之一——
-            # do_POST 在 _read_json 或 handle_card_callback 抛异常时，
-            # BaseHTTPRequestHandler 默认走 handle_error → 关连接不发响应
-            # → Gateway 兜底返回 toast.error → 飞书侧报错 + 无 card 字段。
-            # 这里加 try/except + send_json 兜底，保证飞书侧永远收到 200 + JSON 响应。
+            # 2026-09-17：转 P8P9 6 态状态机。原 feishu_card_api.handle_card_callback
+            # 走老 P8 CardActionAgent + LLM 异步线程，从未接 P8P9 状态机
+            # (grep "P8P9|business_actions|callback_router" feishu_card.py → No matches)。
+            # 改为：直接 HTTP POST 到 P8P9 web_server.py
+            #   (http://127.0.0.1:8089/feishu/card/callback)
+            # 由 P8P9 内部 route_card_callback 解析 action 路由表 + 写状态机 +
+            # 刷新飞书卡片。Gateway feishu.js 的 path 不用改（仍是
+            # /api/feishu/card-callback），飞书侧 URI 也不用改。
+            #
+            # 安全性：P8P9 端 route_card_callback 自身有 action 路由表 +
+            # operator.open_id 校验。
+            # 失败兜底：业务端挂了也要回 200 + toast（飞书会重试轰炸 4xx/5xx）。
             try:
                 data = self._read_json()
-                feishu_card_api.handle_card_callback(self, data)
+                business_reply = _proxy_to_p8p9_card_callback(data, logger)
+                reply_summary = (
+                    list(business_reply.keys())[:6]
+                    if isinstance(business_reply, dict)
+                    else type(business_reply).__name__
+                )
+                logger.info(
+                    f"[POST] /api/feishu/card-callback 响应: keys={reply_summary}"
+                )
+                self.send_json(business_reply)
             except Exception as exc:
                 logger.exception("[POST] /api/feishu/card-callback 异常")
                 try:
+                    # 飞书会重试轰炸 4xx/5xx，统一回 200 + toast
                     self.send_json(
-                        {"status": "error", "error": f"internal: {exc}"[:200]},
-                        status=500,
+                        {"toast": {"type": "error", "content": "服务暂时不可用，请稍后重试"}},
+                        status=200,
                     )
                 except Exception:
                     logger.exception("[POST] send_json 兜底失败")
@@ -240,6 +257,34 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+
+# ─── 飞书 Card 按钮回调 → P8P9 业务端转发 helper ───────────────────────────
+
+def _proxy_to_p8p9_card_callback(payload, logger) -> dict:
+    """POST /api/feishu/card/callback → 转发到 P8P9 web_server (127.0.0.1:8089)。
+
+    流程：
+        1. json.dumps(payload, ensure_ascii=False) 编码（保持中文）
+        2. urllib POST http://127.0.0.1:8089/feishu/card/callback（5s 超时）
+        3. 业务端返回 dict（由 P8P9 web_server.feishu_card_callback 封装）
+
+    P8P9 端 route_card_callback 自身有 action 路由表 + operator.open_id 校验；
+    本函数不做业务校验，仅透传。失败抛异常 → 外层 try/except 兜底回 200 + toast
+    （飞书对 4xx/5xx 会重试轰炸，业务端暂不可用也要回 200）。
+    """
+    import urllib.request
+
+    body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url="http://127.0.0.1:8089/feishu/card/callback",
+        data=body_bytes,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        resp_body = resp.read().decode("utf-8")
+        return json.loads(resp_body)
 
 
 def main():

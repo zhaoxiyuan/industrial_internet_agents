@@ -36,9 +36,9 @@ if _env_file.exists():
 from langchain_core.tools import tool
 
 # A6 核心组件
-from A6.agent.a6_agent import A6Agent
-from A6.agent.tools import A5DataTools, OutputTools
-from A6.agent.prompt_manager import PromptManager
+from A6_A7.a6_runtime.agent.a6_agent import A6Agent
+from A6_A7.a6_runtime.agent.tools import A5DataTools, OutputTools
+from A6_A7.a6_runtime.agent.prompt_manager import PromptManager
 
 
 # ── A6 前端 HTML ────────────────────────────────────────────────────────────
@@ -355,13 +355,106 @@ async def trigger_a6_assessment(event_id: str, event_data: dict, *, job_id: str 
         return None
 
 
+async def trigger_p7_assessment_batch(
+    events: List[Dict],
+    job_id: str = "",
+    is_processed_marker: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    """
+    批量触发 P7 A6 风险研判（聚合决策由 A6Agent 内部的 LLM agent 做出）。
+
+    与 trigger_a6_assessment 的区别：
+    - 输入是事件列表（每项须含 event_id + 其余事件字段；可整体打包为 {"events": [...]}）
+    - **串行处理**：同一 job 的 A6Agent 实例锁保证一次只跑一个事件（防 active_violations.json 竞态）
+    - 返回每条事件的决策摘要（含 aggregation_decision / aggregate_to），调用方据此标记已处理
+    - is_processed_marker 是 awaitable（如 asyncio.Event），本函数在返回前会 set，
+      便于上游"等上次结果再发起下一次"的串行约束；传 None 则跳过。
+
+    Args:
+        events: List[Dict]，每项必须有 event_id。
+                支持两种形态：
+                  (a) 单事件 dict（含 event_id / type / first_seen / last_seen / ...）
+                  (b) wall_time 批量 dict（含 wall_time + events[]），函数会拍平
+        job_id: per-job 模式必传，定位 A6Agent 实例。
+        is_processed_marker: 可选 asyncio.Event，函数返回前 set。
+
+    Returns:
+        List[Dict]，每项形如
+          {"event_id": "...", "status": "success/updated/error",
+           "aggregation_decision": "new"|"aggregate", "aggregate_to": "A6-..."|None,
+           "risk_level": int, "error": "..."(失败时)}
+    """
+    if is_processed_marker is not None:
+        try:
+            is_processed_marker.clear()
+        except Exception:
+            pass
+    if not events:
+        if is_processed_marker is not None:
+            try:
+                is_processed_marker.set()
+            except Exception:
+                pass
+        return []
+
+    agent = get_a6_agent(job_id) if job_id else get_a6_agent_global()
+    results: List[Dict[str, Any]] = []
+
+    # 拍平输入：若元素是 {"events": [...]}, 拆成单事件逐个送 process_event；
+    # 若元素本身就是单事件，直接送。
+    flat: List[Dict[str, Any]] = []
+    for ev in events:
+        if isinstance(ev, dict) and "events" in ev and isinstance(ev["events"], list):
+            for sub in ev["events"]:
+                if isinstance(sub, dict) and sub.get("event_id"):
+                    flat.append(sub)
+        elif isinstance(ev, dict) and ev.get("event_id"):
+            flat.append(ev)
+
+    try:
+        for ev in flat:
+            ev_id = ev.get("event_id")
+            # A6Agent.process_event 接受单事件或 wall_time 批量；这里传单事件 + 必要外层字段
+            payload = dict(ev)  # 复制
+            payload.setdefault("wall_time", ev.get("wall_time") or ev.get("first_seen") or "")
+            try:
+                inner = await agent.process_event(ev_id, event_data=payload)
+                assessment = inner.get("assessment") or {}
+                results.append({
+                    "event_id": ev_id,
+                    "status": inner.get("status", "error"),
+                    "aggregation_decision": assessment.get("aggregation_decision", "new"),
+                    "aggregate_to": assessment.get("a6_event_id"),
+                    "risk_level": assessment.get("risk_level"),
+                    "a6_event_id": assessment.get("a6_event_id"),
+                })
+            except Exception as exc:
+                import traceback
+                print(f"[A5→A6 batch] 事件 {ev_id} 异常: {type(exc).__name__}: {exc}")
+                traceback.print_exc()
+                results.append({
+                    "event_id": ev_id,
+                    "status": "error",
+                    "aggregation_decision": "new",
+                    "aggregate_to": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+        return results
+    finally:
+        if is_processed_marker is not None:
+            try:
+                is_processed_marker.set()
+            except Exception:
+                pass
+
+
 def get_a6_agent_global() -> A6Agent:
     """回退入口：job_id 缺失时使用全局 A6Agent（向后兼容旧调用方）。"""
     if "_global" in _a6_agents:
         return _a6_agents["_global"]
     agent = A6Agent(
         a5_log_dir="A5/logs",
-        a6_output_dir="A6/logs",
+        a6_output_dir="A6_A7/a6_runtime/logs",
     )
     _a6_agents["_global"] = agent
     return agent

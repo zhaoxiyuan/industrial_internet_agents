@@ -254,6 +254,71 @@ def route_card_callback(event: Dict[str, Any]) -> Dict[str, Any]:
 
 # ─── 辅助：payload 解析 ──────────────────────────────────────────────────────
 
+def _normalize_flat_to_nested(event: Dict[str, Any]) -> Dict[str, Any]:
+    """2026-09-17 修复：把飞书真实平铺格式 callback 转成内部统一嵌套格式。
+
+    飞书 card.action.trigger 实际发来的是**平铺格式**（见
+    data/card_callbacks.jsonl 历史样本）：event_type / action / operator_open_id
+    / operator_name / open_chat_id / job_id / alert_id 等都在顶层。
+
+    P8P9 内部统一按**嵌套格式**处理（event.event.action.value 等）。
+    已有 event 嵌套时直接 return（agent 自己调的格式不动）。
+
+    平铺→嵌套映射：
+        平铺字段            → 嵌套路径
+        event_type          → event.type
+        action / button_text → event.action.name + event.action.value.action
+        operator_open_id     → event.operator.open_id
+        operator_name        → event.operator.user_name
+        open_chat_id         → event.context.open_chat_id
+        message_id           → event.context.open_message_id
+        job_id               → event.action.value.job_id
+        alert_id             → event.action.value.alert_id
+        expected_version     → event.action.value.expected_version
+        decision             → event.action.value.decision
+        event_id             → event.action.value.event_id
+        new_level            → event.action.value.new_level
+        reason/comment/review_text/submissions/event_ids → event.action.form_value
+    """
+    if "event" in event:
+        return event  # 已是嵌套格式（agent 路径），不动
+    action_name = event.get("action") or event.get("button_text") or ""
+    value_dict = {
+        "action": action_name,
+        "job_id": event.get("job_id", ""),
+        "alert_id": event.get("alert_id"),
+        "expected_version": event.get("expected_version"),
+        "decision": event.get("decision"),
+        "event_id": event.get("event_id"),
+        "new_level": event.get("new_level"),
+    }
+    form_value: Dict[str, Any] = {}
+    for k in ("reason", "comment", "review_text", "submissions", "event_ids",
+              "evidence_id", "evidence_ids"):
+        v = event.get(k)
+        if v not in (None, "", [], {}):
+            form_value[k] = v
+    return {
+        "event": {
+            "type": event.get("event_type", "card.action.trigger"),
+            "action": {
+                "name": action_name,
+                "value": json.dumps(value_dict, ensure_ascii=False),
+                "form_value": form_value,
+                "tag": "button",
+            },
+            "operator": {
+                "open_id": event.get("operator_open_id", ""),
+                "user_name": event.get("operator_name", ""),
+            },
+            "context": {
+                "open_chat_id": event.get("open_chat_id", ""),
+                "open_message_id": event.get("message_id", ""),
+            },
+        }
+    }
+
+
 def _parse_payload(event: Dict[str, Any]) -> Dict[str, Any]:
     """从飞书 callback event 中提取 action / value / form_value / operator。
 
@@ -262,12 +327,19 @@ def _parse_payload(event: Dict[str, Any]) -> Dict[str, Any]:
       - 双层 JSON string: '"{\\"action\\": \\"...\\", ...}"'（飞书有时包一层）
       - dict（已解析）
 
+    兼容两种 payload 形式：
+      - 嵌套格式：{event: {action: {...}, operator: {...}, ...}}（agent 自己调）
+      - 平铺格式：{event_type, action, operator_open_id, ...}（飞书真实发来）
+        → 顶部 _normalize_flat_to_nested 自动转嵌套
+
     2026-09-17 兼容 Card 2.0 form_submit 模式：
       - event.action.tag = "input"（form 容器内 input 元素）
       - event.action.input_value = 用户输入的文本
       - event.action.value = behaviors.value（含 action/job_id/expected_version）
       - event.action.name = 按钮名（业务 action 名）
     """
+    # 2026-09-17：先把平铺格式（飞书真实）转嵌套；嵌套格式不动
+    event = _normalize_flat_to_nested(event)
     ev_event = event.get("event") or {}
     raw_action = ev_event.get("action") or {}
     operator = ev_event.get("operator") or {}

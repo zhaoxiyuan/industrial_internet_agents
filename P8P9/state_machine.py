@@ -101,9 +101,11 @@ class ClosureService:
     def __init__(self, base_dir: str = None) -> None:
         if base_dir is None:
             import os
-            # 2026-09-17：切到 data/jobs/_p8p9/，与主流程（17 位时间戳 job_id）隔离；
-            # 前缀 `_` 让目录排在 data/jobs/ 最前面，方便人眼区分。
-            base_dir = os.environ.get("P8P9_BASE_DIR", "data/jobs/_p8p9")
+            # 2026-09-17：与主流程作业同目录（data/jobs/{17位}/closure_state.json），
+            # P8P9 状态机不再有独立子目录。job_id 必须使用 17 位 ERP 工单号
+            # （如 20260917000000003），保证 P8P9 与主流程（p5/p7_result.json）
+            # 作业目录一一对应、绝不重名。
+            base_dir = os.environ.get("P8P9_BASE_DIR", "data/jobs")
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 

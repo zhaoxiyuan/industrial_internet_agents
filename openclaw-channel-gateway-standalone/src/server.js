@@ -119,6 +119,27 @@ export class GatewayHttpServer {
         return;
       }
 
+      // 2026-09-17：飞书侧回调 URL 已固定为 /feishu/card/callback（不走 feishu adapter
+      // 的 /webhooks/feishu/P8 路径）。这里做路径直通：读 body → 同步 proxy 到 P8P9
+      // 业务端 (127.0.0.1:8089/feishu/card/callback)，原样回给飞书。
+      // 安全性：P8P9 端 route_card_callback 自身有 action 路由表 + operator.open_id 校验。
+      // 失败兜底：业务端挂了也要回 200 + toast（飞书会重试轰炸 4xx/5xx）。
+      if (request.method === "POST" && url.pathname === "/feishu/card/callback") {
+        const { rawBody } = await this.jsonRequest(request);
+        try {
+          const businessReply = await proxyToP8P9Callback(rawBody, this.logger);
+          sendJson(response, 200, businessReply);
+        } catch (err) {
+          this.logger.error("p8p9 card callback proxy failed", {
+            error: err.message,
+          });
+          sendJson(response, 200, {
+            toast: { type: "error", content: "服务暂时不可用，请稍后重试" },
+          });
+        }
+        return;
+      }
+
       const webhook = url.pathname.match(/^\/webhooks\/([^/]+)(?:\/([^/]+))?$/);
       if (request.method === "POST" && webhook) {
         const channelId = decodeURIComponent(webhook[1]);
@@ -347,4 +368,50 @@ export class GatewayHttpServer {
 
   // 2026-08-17：proxyToBusiness 已废弃——Card 回调走标准 webhook 入口
   // /webhooks/feishu/P8，在 adapters/feishu.js 的 receive() 里同步代理到业务端。
+
+  // 2026-09-17：飞书侧回调 URL 已固定为 /feishu/card/callback（不在 webhooks/ 路径下），
+  // 不能走 feishu adapter 的 webhook 入口。这里直接 proxy 到 P8P9 业务端 (8089)。
+  // 失败抛错（外层 handle() 兜底回 200 + toast）。
+}
+
+// 2026-09-17：P8P9 业务端代理。参数化：host/port/path 写死 127.0.0.1:8089/feishu/card/callback。
+// 与 feishu.js::proxyCardActionToBusiness 思路一致，但 feishu.js 那个是给
+// /webhooks/feishu/P8 路径（adapter 入口）用的；本函数是给 /feishu/card/callback
+// 直通路径（绕过 adapter 鉴权）用的，两条路径并存互不冲突。
+async function proxyToP8P9Callback(rawBody, logger) {
+  return new Promise((resolve, reject) => {
+    // rawBody 来自 readRequestBody（util/http.js:41），实际类型是 Buffer；
+    // 必须 .toString("utf8")，否则 JSON.stringify(buffer) 会输出
+    // {"type":"Buffer","data":[...]} 这种序列化对象，P8P9 解析不到原始 JSON。
+    const body = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: 8089,
+        method: "POST",
+        path: "/feishu/card/callback",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body, "utf8"),
+        },
+        timeout: 5_000,
+      },
+      (res) => {
+        let chunks = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { chunks += chunk; });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(chunks));
+          } catch (err) {
+            reject(new Error(`p8p9 returned non-JSON (status=${res.statusCode}): ${chunks.slice(0, 200)}`));
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("p8p9 proxy timeout")));
+    req.write(body);
+    req.end();
+  });
 }

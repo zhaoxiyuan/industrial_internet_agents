@@ -12,7 +12,8 @@
 - 2026-09-17 重构：notify_feishu → open_work_ticket + resend_current_card
     旧版 notify_feishu 调 feishu_gateway_cli 直推卡片（写 P8_job 表）
     v2 走 P8P9 状态机新管线（state_machine + cards + business_actions），
-    状态写入 data/jobs/_p8p9/{job_id}/closure_state.json，卡片由 card_render 渲染。
+    状态写入 data/jobs/{17位 ERP job_id}/closure_state.json（与主流程 p5/p7_result.json 同目录），
+    卡片由 card_render 渲染。
 - state_schema=P8State（含 working_memory / long_term_memory）
 - checkpointer 单例（_p8_checkpointer）供 A7/api/p8_working_memory_ctrl 读取
 - 中间件：HumanInTheLoopMiddleware（开卡 confirm；重发放行）+ P8ArchiveMiddleware
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Dict, Optional
@@ -763,7 +765,7 @@ def read_p7_events(job_id: str) -> str:
 # - 旧版 notify_feishu 调 feishu_gateway_cli.feishu_sender.send_to_group_card，
 #   把卡片 JSON 推给 Gateway；写的是 P8_job 表（per-job working_memory）。
 # - P8P9 模块（state_machine + cards + business_actions）落地后，
-#   作业票的状态机改走 data/jobs/_p8p9/{job_id}/closure_state.json。
+#   作业票的状态机改走 data/jobs/{17位}/closure_state.json（与主流程同目录）。
 # - v2：本工具通过 P8P9 agent_interface 创建 P8P9 job（job_status=open）
 #   + 绑 card + 调 P8P9/services/card_render 真实发飞书 Card 2.0 卡片
 #   （每 event 一张，含「接取任务」按钮）。
@@ -771,6 +773,9 @@ def read_p7_events(job_id: str) -> str:
 # 边界：
 # - P8 唯一允许"创建 P8P9 job + 发飞书卡片"的入口；后续状态转换必须走卡片按钮 / Web 端。
 # - events 必填且 ≥1；chat_id 或 group_name 必填其一（仅支持群发）。
+# - job_id 必填且必须是 17 位数字 ERP 工单号（如 '20260917000000003'），
+#   必须与 data/jobs/{job_id}/{p5|p7}_result.json 目录同名。
+#   P8 严禁自行生成 P8P9-... 形式 ID。
 # ============================================================
 @tool(description=(
     "开启 P8P9 作业票（创建 job + 群内发飞书 Card 2.0 卡片）。"
@@ -780,7 +785,8 @@ def read_p7_events(job_id: str) -> str:
     "参数：\n"
     "  events:      P7 风险事件列表（≥1 个；每个含 risk_event_id / risk_level / event_type）。\n"
     "  risk_basis:  风险依据（可空）。\n"
-    "  job_id:      None → 自动生成 P8P9-YYYYMMDD-HHMMSS-NNN。\n"
+    "  job_id:      ★★ 必填 17 位 ERP 数字工单号（如 '20260917000000003'）。"
+    "必须与 data/jobs/{job_id}/ 主流程目录同名；P8 严禁自行生成 P8P9-... 形式 ID。\n"
     "  chat_id:     飞书群 ID（oc_xxx）；二选一必填；★ 当前群已自动注入时可省略。\n"
     "  group_name:  按 FEISHU_GROUP_MAP.name 反查 chat_id；二选一必填；可省略。\n"
     "  account_id:  Gateway 账号 ID（多账号机器人场景）。\n"
@@ -801,7 +807,9 @@ def open_work_ticket(
     Args:
         events:      P7 风险事件列表。必须 ≥1；每个 event 含 risk_event_id / risk_level。
         risk_basis:  风险依据（LLM 从 events 推断；空字符串 OK）。
-        job_id:      None → 自动生成 P8P9-YYYYMMDD-HHMMSS-NNN；已有 ID → 报错（不覆盖）。
+        job_id:      ★ 必填 17 位 ERP 数字工单号（如 '20260917000000003'）；
+                     必须与 data/jobs/{job_id}/ 主流程目录同名。
+                     已有 ID → 幂等返回现有 state（不覆盖）。
         chat_id:     飞书群 ID（oc_xxx）；LLM 可省略——缺省时从 chat_ctx 兜底。
         group_name:  按 FEISHU_GROUP_MAP.name 反查 chat_id；LLM 可省略——缺省时从 chat_ctx 反查。
         account_id:  Gateway 账号 ID（多账号机器人场景）。
@@ -871,12 +879,26 @@ def open_work_ticket(
                 recoverable=False,
             ), ensure_ascii=False)
 
-    # ── 3. job_id 自动生成 ──
-    if not job_id:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        suffix = now.microsecond // 1000
-        job_id = f"P8P9-{now.strftime('%Y%m%d-%H%M%S')}-{suffix:03d}"
+    # ── 3. job_id 必填 + 17 位 ERP 数字工单号强校验 ──
+    # 2026-09-17：P8P9 状态机与主流程作业同目录（data/jobs/{17位}/），
+    # job_id 必须 = 17 位 ERP 工单号；不允许 P8 自行生成 P8P9-YYYYMMDD-...。
+    if not job_id or not str(job_id).strip():
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message="open_work_ticket: job_id 必填，必须是 17 位数字 ERP 工单号"
+                    "（如 '20260917000000003'）；P8 严禁自行生成 P8P9-... 形式 ID。"
+                    "请用户提供 17 位 ERP 工单号（与 data/jobs/{job_id}/ 主流程目录同名）。",
+            recoverable=False,
+        ), ensure_ascii=False)
+    import re
+    if not re.match(r"^\d{17}$", str(job_id).strip()):
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message=f"open_work_ticket: job_id={job_id!r} 格式错误，必须是 17 位纯数字 ERP 工单号"
+                    f"（如 '20260917000000003'）。",
+            recoverable=False,
+        ), ensure_ascii=False)
+    job_id = str(job_id).strip()
 
     # ── 4. 调 P8P9 agent_interface + card_render ──
     try:
@@ -902,6 +924,7 @@ def open_work_ticket(
             chat_id=chat_id,
             group_name=group_name,
             account_id=account_id,
+            is_resend=False,  # open_work_ticket 是首次发送
         )
     except Exception as exc:
         logger.exception("open_work_ticket 失败：job_id=%s err=%s", job_id, exc)
@@ -912,11 +935,16 @@ def open_work_ticket(
         ), ensure_ascii=False)
 
     # 提取每个 event 的 card message_id（飞书回调识别用）
+    # 2026-09-17 修复：P8P9/_send_event_card 实际返回 {"send_result": "<message_id>"},
+    # 旧版曾返回 {"message_id": ...}。两种格式都兼容。
     card_message_ids = []
     if isinstance(send_result, dict):
         for r in send_result.get("results", []):
-            if isinstance(r, dict) and r.get("message_id"):
-                card_message_ids.append(r["message_id"])
+            if not isinstance(r, dict):
+                continue
+            mid = r.get("send_result") or r.get("message_id")
+            if mid and r.get("status") in ("sent", "ok", "updated"):
+                card_message_ids.append(mid)
 
     logger.info(
         "open_work_ticket: job_id=%s events=%d cards=%d",
@@ -949,7 +977,8 @@ def open_work_ticket(
     "重发当前 P8P9 job 的飞书卡片到原绑定群。"
     "★ 防网络波动：卡片显示异常（按钮没渲染 / 模板错乱 / 消息丢失）时调用。\n"
     "★ 不修改 job_status / version / 业务字段；纯展示修复。\n"
-    "参数：job_id: P8P9-YYYYMMDD-... ID。\n"
+    "参数：job_id: 17 位 ERP 数字工单号（如 '20260917000000003'）；"
+    "P8P9 状态机与主流程同目录，禁止 P8P9-... 命名空间。\n"
     "依赖：state.card_binding.chat_id 必须已绑（open_work_ticket 自动绑）。"
 ))
 def resend_current_card(
@@ -959,7 +988,7 @@ def resend_current_card(
     """重发当前 P8P9 job 的飞书卡片。
 
     Args:
-        job_id:   P8P9 作业 ID（必须 P8P9- 前缀）。
+        job_id:   17 位数字 ERP 工单号（如 '20260917000000003'）；P8P9 与主流程同目录。
         chat_ctx: ★ 运行时注入（InjectedToolArg，LLM 不可见）。
                   来自 chat_reply / create_disposition_agent；含 chat_id / chat_type。
                   重发时优先用 state.card_binding.chat_id（open 时已绑）；缺失时用 chat_ctx 兜底。
@@ -967,12 +996,12 @@ def resend_current_card(
     Returns:
         标准 JSON 响应。
     """
-    # 2026-09-17 新增：chat_ctx 兜底（仅当 state.card_binding 没绑 chat_id 时）
-    # 通常 open_work_ticket 已绑，resend 用 state.card_binding.chat_id 即可；此兜底保险用。
-    if not job_id or not str(job_id).startswith("P8P9-"):
+    # 2026-09-17 修复：job_id 必须是 17 位数字 ERP 工单号（P8P9 与主流程同目录一一对应），
+    # 不再是旧的 P8P9-YYYYMMDD-HHMMSS-NNN 形式。
+    if not job_id or not str(job_id).strip() or not re.match(r"^\d{17}$", str(job_id).strip()):
         return json.dumps(make_error(
             code="INVALID_ARGUMENT",
-            message=f"resend_current_card: 无效 job_id={job_id!r}",
+            message=f"resend_current_card: 无效 job_id={job_id!r}（必须是 17 位数字 ERP 工单号）",
             recoverable=False,
         ), ensure_ascii=False)
 
@@ -997,13 +1026,17 @@ def resend_current_card(
             chat_id=chat_id,
             group_name=binding.get("group_name"),
             account_id=binding.get("account_id"),
+            is_resend=True,  # 2026-09-17：resend 用不同 idempotency_key 避免 Gateway 409
         )
 
         card_message_ids = []
         if isinstance(send_result, dict):
             for r in send_result.get("results", []):
-                if isinstance(r, dict) and r.get("message_id"):
-                    card_message_ids.append(r["message_id"])
+                if not isinstance(r, dict):
+                    continue
+                mid = r.get("send_result") or r.get("message_id")
+                if mid and r.get("status") in ("sent", "ok", "updated"):
+                    card_message_ids.append(mid)
 
         logger.info(
             "resend_current_card: job_id=%s chat_id=%s cards=%d",
