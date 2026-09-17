@@ -23,6 +23,7 @@ STAGE_TO_FILE = {
     "P8": "P8_DISPOSITION_SYSTEM_PROMPT.md",
     "P8_CARD_ACTION": "P8_CARD_ACTION_SYSTEM_PROMPT.md",   # 2026-08-20 新增
     "P9": "P9_CLOSURE_SYSTEM_PROMPT.md",
+    "P9_AUDIT": "P9_AUDIT_SYSTEM_PROMPT.md",  # 2026-09-17 新增：P9 审核 agent（materials 审核 + verdict）
     "P10": "P10_ARCHIVE_SYSTEM_PROMPT.md",
 }
 
