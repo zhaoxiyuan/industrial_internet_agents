@@ -21,7 +21,9 @@ from agents.p5_verify_agent import run_verify_agent
 from agents.p6_monitor_agent import run_a5_monitoring, map_a5_events_to_p6
 from agents.p7_risk_agent import run_risk_agent
 from agents.p8_disposition_agent import run_disposition_agent
-from agents.p9_closure_agent import run_closure_agent
+# 2026-09-17 v2：P9 智能体无 tool，仅 `run_p9_closure_review(job_id) -> str`（生成关闭理由文本）
+# 旧蓝图版 `run_closure_agent` / `closure_status / verify / report / close` 4 个 tool 已废弃
+from agents.p9_closure_agent import run_p9_closure_review
 # 2026-08-20 临时注释：p10_archive_agent 重构 in-flight。CLI P10 命令暂不可用。
 # P10 重构完取消注释。
 # from agents.p10_archive_agent import run_archive_agent
@@ -552,26 +554,27 @@ def closure():
 @click.argument("task_id")
 @click.pass_context
 def closure_status(ctx, task_id):
-    """跟踪闭环状态"""
-    try:
-        result = run_closure_agent(f"跟踪闭环状态，task_id: {task_id}")
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """[v2 已废弃] P9 v2 无 status tool。改用 `closure review <job_id>` 看关闭理由，或查 state.review.history"""
+    click.echo(json.dumps({
+        "deprecated": True,
+        "v2_replacement": f"python -m agents.cli closure review {task_id}",
+        "note": "P9 v2 不再跟踪闭环状态；闭环状态由 record_closure_review 业务动作管理，"
+                 "可查看 state.job_status / state.review.history。"
+    }, ensure_ascii=False, indent=2), err=True)
+    sys.exit(2)
 
 
 @closure.command("verify")
 @click.argument("task_id")
 @click.pass_context
 def closure_verify(ctx, task_id):
-    """执行闭环完整性检查"""
-    try:
-        result = run_closure_agent(f"执行闭环完整性检查，task_id: {task_id}")
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """[v2 已废弃] P9 v2 无 verify tool。闭环完整性检查应在状态机层做，参见 P8P9/state_machine.py"""
+    click.echo(json.dumps({
+        "deprecated": True,
+        "v2_replacement": "P8P9/state_machine.py::ClosureService.get_state(job_id)",
+        "note": "P9 v2 只生成关闭理由，不做完整性校验。"
+    }, ensure_ascii=False, indent=2), err=True)
+    sys.exit(2)
 
 
 @closure.command("report")
@@ -580,32 +583,38 @@ def closure_verify(ctx, task_id):
               default="markdown", help="报告格式")
 @click.pass_context
 def closure_report(ctx, task_id, report_format):
-    """生成作业过程报告"""
-    try:
-        msg = f"生成作业过程报告，task_id: {task_id}，format: {report_format}"
-        result = run_closure_agent(msg)
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
-    except Exception as e:
-        click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
-        sys.exit(1)
+    """[v2 已废弃] P9 v2 无 report tool。报告生成由 P10 archive agent 负责"""
+    click.echo(json.dumps({
+        "deprecated": True,
+        "v2_replacement": "P10 archive agent（重构中）",
+        "note": "P9 v2 只生成关闭理由文本（≤500 字）。报告由 P10 归档时生成。"
+    }, ensure_ascii=False, indent=2), err=True)
+    sys.exit(2)
 
 
 @closure.command("close")
 @click.argument("task_id")
 @click.pass_context
 def closure_close(ctx, task_id):
-    """关闭事件和作业"""
+    """[v2 已废弃] P9 v2 不负责关闭作业。关闭走业务动作 record_closure_review(decision='approved')"""
+    click.echo(json.dumps({
+        "deprecated": True,
+        "v2_replacement": f"POST /api/closure/jobs/{task_id}/record-closure-review "
+                           "-H 'Content-Type: application/json' "
+                           "-d '{\"decision\":\"approved\",\"comment\":\"...\"}'",
+        "note": "P9 v2 无 tool，不调用任何状态变更。请用 web_server 关闭接口。"
+    }, ensure_ascii=False, indent=2), err=True)
+    sys.exit(2)
+
+
+@closure.command("review")
+@click.argument("job_id")
+@click.pass_context
+def closure_review(ctx, job_id):
+    """v2 唯一动作：调 P9 智能体生成关闭理由文本（≤500 字 Markdown）"""
     try:
-        result = run_closure_agent(f"关闭事件和作业，task_id: {task_id}")
-        # 检查是否需要人工确认
-        try:
-            data = json.loads(result)
-            if "result" in data and data["result"].get("requires_human_confirm"):
-                click.echo(json.dumps(data, ensure_ascii=False, indent=2), err=True)
-                sys.exit(3)  # 需要人工确认
-        except json.JSONDecodeError:
-            pass
-        echo_result(result, ctx.obj["output"], ctx.obj["quiet"])
+        result = run_p9_closure_review(job_id)
+        click.echo(result)
     except Exception as e:
         click.echo(json.dumps({"error": str(e)}, ensure_ascii=False), err=True)
         sys.exit(1)

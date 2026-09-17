@@ -56,8 +56,10 @@ from .p4_binding_agent import execute_stage as p4_execute_stage
 from .p5_verify_agent import execute_stage as p5_execute_stage
 from .p6_monitor_agent import execute_stage as p6_execute_stage
 from .p7_risk_agent import execute_stage as p7_execute_stage
-from .p8_disposition_agent import execute_stage as p8_execute_stage
-from .p9_closure_agent import execute_stage as p9_execute_stage
+# 2026-09-17 v2：P8 重写后不再有 execute_stage（v2 只暴露 open_work_ticket + resend_current_card 两个 tool）
+# 主流程 P8 入口走本文件下面的 execute_p8() —— 它内部调 run_disposition_agent 启动 chat agent。
+# STAGE_EXECUTORS["P8"] 直接引用 execute_p8 本体，无需本行 alias。
+from .p9_closure_agent import run_p9_closure_review  # 2026-09-17 v2：execute_stage 已删除；用 run_p9_closure_review
 from .p10_archive_agent import execute_stage as p10_execute_stage
 
 # 导入各阶段工具函数
@@ -69,7 +71,8 @@ from .p5_verify_agent import verify_execute, verify_recommendation
 from .p6_monitor_agent import monitor_start, monitor_events
 from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import run_disposition_agent
-from .p9_closure_agent import closure_status, closure_verify, closure_report, closure_close
+# 2026-09-17 v2：P9 无 tool；旧 closure_status / closure_verify / closure_report / closure_close 已废弃
+from .p9_closure_agent import run_p9_closure_review  # noqa: F811  已在 line 60 导入过（重复 import 兼容）
 # 2026-08-20 临时注释：p10_archive_agent 重构 in-flight；archive_* 调用仅在
 # execute_p10（P10 阶段）使用，不影响 P1-P9 / chat_reply / web。P10 重构完
 # 取消注释。
@@ -642,12 +645,18 @@ def execute_p8(job_id: str) -> dict:
 
 
 def execute_p9(job_id: str) -> dict:
-    """执行 P9 阶段：闭环跟踪与报告"""
+    """P9 阶段执行入口（v2：仅调 run_p9_closure_review 生成关闭理由）。
+
+    2026-09-17 v2 重构：
+    - 旧版 execute_stage 调 4 个 tool（closure_status/verify/report/close）；
+      v2 全部废弃，P9 无 tool。
+    - 当前阶段执行只调 run_p9_closure_review(job_id)，拿到关闭理由文本后写 p9_result.json。
+    - 注意：真正的 approved 关闭流程已由 P8P9.business_actions.record_closure_review
+      自动同步调 P9，本函数保留是为了向后兼容旧主流程调用约定。
+    """
     log = get_stage_logger("P9")
     log.log_enter(job_id)
-    p8_result = read_json_file(get_stage_result_path(job_id, "p8"))
-    task_id = p8_result.get("task_id", "")
-    logger.info(f"[P9] task_id={task_id}")
+    logger.info(f"[P9 v2] job_id={job_id}；调 run_p9_closure_review")
 
     result = {
         "job_id": job_id,
@@ -657,31 +666,15 @@ def execute_p9(job_id: str) -> dict:
     }
 
     try:
-        logger.info(f"[P9] 调用 closure_status.invoke: task_id={task_id}")
-        status_result = json.loads(closure_status.invoke(task_id))
-        log.log_tool_call("closure_status", {"task_id": task_id}, status_result)
-        if "result" in status_result:
-            result["closure_status"] = status_result["result"]
-
-        logger.info(f"[P9] 调用 closure_verify.invoke: task_id={task_id}")
-        verify_result = json.loads(closure_verify.invoke(task_id))
-        log.log_tool_call("closure_verify", {"task_id": task_id}, verify_result)
-        if "result" in verify_result:
-            result["verify_result"] = verify_result["result"]
-
-        logger.info(f"[P9] 调用 closure_report.invoke: task_id={task_id}")
-        report_result = json.loads(closure_report.invoke(task_id))
-        log.log_tool_call("closure_report", {"task_id": task_id}, report_result)
-        if "result" in report_result:
-            result["report"] = report_result["result"]
+        # v2：唯一调用 — run_p9_closure_review 返回关闭理由文本
+        p9_text = run_p9_closure_review(job_id)
+        result["p9_opinion_text"] = p9_text
+        result["p9_opinion_text_len"] = len(p9_text or "")
+        log.log_tool_call("run_p9_closure_review", {"job_id": job_id},
+                          {"text_len": len(p9_text or "")})
 
         result["completed"] = True
         result["completed_at"] = datetime.now(timezone.utc).isoformat()
-
-        result["pending_confirmation"] = {
-            "type": "closure_close",
-            "message": "请确认是否关闭事件和作业"
-        }
 
     except Exception as e:
         log.log_error(job_id, e)
@@ -765,8 +758,10 @@ STAGE_EXECUTORS = {
     "P5": p5_execute_stage,
     "P6": p6_execute_stage,
     "P7": p7_execute_stage,
-    "P8": p8_execute_stage,
-    "P9": p9_execute_stage,
+    # 2026-09-17 v2：P8 execute_stage 已废弃；改用本文件的 execute_p8（统一其他阶段命名）
+    "P8": execute_p8,
+    # 2026-09-17 v2：P9 execute_stage 已废弃；改用本文件的 execute_p9（v2 仅调 run_p9_closure_review）
+    "P9": execute_p9,
     "P10": p10_execute_stage,
 }
 

@@ -66,32 +66,24 @@ from .p5_verify_agent import (
 # p6_monitor_agent 承载 A5 前端 + A6 前端（由 p7_risk_agent.register_a6_routes 挂载），共享端口 5002
 # 实际使用的 A5/A6 路由函数无需在此导出
 
+# 2026-09-17 v2：P8 仅暴露 open_work_ticket + resend_current_card 两个 tool
+# 旧蓝图版（update_job / hitl_decide / notify_feishu 等 6 个 tool）已废弃
 from .p8_disposition_agent import (
     create_disposition_agent,
-    create_disposition_agent_with_hitl,
     run_disposition_agent,
     disposition_demo,
-    # 蓝图 API：5 个工具 + 长期记忆入口
-    update_job,            # 创建/更新 P8_job（Command → working_memory）
-    hitl_decide,           # 设置 HITL 等待决策
-    read_p7_events,        # 读 p7_result.json
-    notify_feishu,         # 推送飞书（channel_gateway_client 真实联通）
-    list_active_p8_jobs,   # 列出当前 in-progress P8_job
-    recall_jobs,           # 长期记忆 LLM 入口（罗盘长期记忆）
-    # Checkpointer 导出（A7/api/p8_working_memory_ctrl 调用）
+    open_work_ticket,
+    resend_current_card,
     get_p8_checkpointer,
-    _p8_checkpointer,
 )
 
+# 2026-09-17 v2：P9 无 tool，纯对话
+# 旧蓝图版（create_closure_agent_with_hitl / run_closure_agent /
+#   closure_status / closure_verify / closure_report / closure_close）已废弃
 from .p9_closure_agent import (
     create_closure_agent,
-    create_closure_agent_with_hitl,
-    run_closure_agent,
+    run_p9_closure_review,
     closure_demo,
-    closure_status,
-    closure_verify,
-    closure_report,
-    closure_close,
 )
 
 # ============================================================
@@ -195,13 +187,13 @@ __all__ = [
     # P7: risk  (p7_risk_agent 暴露 risk_analyze/risk_list 工具，A6 路由通过 register_a6_routes 挂载到 P6)
     # P8: disposition
     "create_disposition_agent",
-    "create_disposition_agent_with_hitl",
     "run_disposition_agent",
     "disposition_demo",
-    # P9: closure
+    "open_work_ticket",
+    "resend_current_card",
+    # P9: closure (v2 无 tool；run_p9_closure_review 是 record_closure_review approved 调用的入口)
     "create_closure_agent",
-    "create_closure_agent_with_hitl",
-    "run_closure_agent",
+    "run_p9_closure_review",
     "closure_demo",
     # P10: archive
     "create_archive_agent",

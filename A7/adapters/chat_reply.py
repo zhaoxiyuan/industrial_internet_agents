@@ -799,6 +799,15 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
     # 2026-08-19：thread_id 落地 —— 群=chat_id / 单聊=open_id，确保 MemorySaver
     # 按会话隔离 working_memory 与 messages（之前默认 "default" 多群串台）。
     # 2026-08-20：job_id 透传（解析 [job_id=...] 后，None → Bot 临时会话不持久化）
+    # 2026-09-17：chat_ctx 透传（当前对话来源群上下文）。
+    #   - P8 agent 据此注入 system_prompt + open_work_ticket / resend_current_card 兜底填 chat_id
+    #   - chat_id 由 _extract_chat_id(event) 提供（line 696 已抽好）
+    #   - chat_type 由 _extract_chat_type(event) 提供（line 765）
+    #   - group_name 按 FEISHU_GROUP_MAP 反查（在 P8 agent 内部做；这里只透传 chat_id/chat_type）
+    chat_ctx = {
+        "chat_id": chat_id or "",
+        "chat_type": chat_type or "",
+    }
     try:
         llm_response = disposition_demo(
             human_message,
@@ -806,6 +815,7 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
             user_ctx=user_ctx,
             thread_id=thread_id,
             job_id=job_id,
+            chat_ctx=chat_ctx,   # 2026-09-17 新增
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
