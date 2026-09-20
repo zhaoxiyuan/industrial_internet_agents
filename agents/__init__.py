@@ -77,10 +77,13 @@ from .p8_disposition_agent import (
     get_p8_checkpointer,
 )
 
-# 2026-09-17 v2：P9 无 tool，纯对话
+# 2026-09-17 v2：P9 无 tool，纯对话；审核 + 关闭文案合并到同一文件 p9_agent.py
 # 旧蓝图版（create_closure_agent_with_hitl / run_closure_agent /
 #   closure_status / closure_verify / closure_report / closure_close）已废弃
-from .p9_closure_agent import (
+from .p9_agent import (
+    create_audit_agent,
+    run_p9_materials_audit,
+    audit_demo,
     create_closure_agent,
     run_p9_closure_review,
     closure_demo,
@@ -192,6 +195,9 @@ __all__ = [
     "open_work_ticket",
     "resend_current_card",
     # P9: closure (v2 无 tool；run_p9_closure_review 是 record_closure_review approved 调用的入口)
+    "create_audit_agent",
+    "run_p9_materials_audit",
+    "audit_demo",
     "create_closure_agent",
     "run_p9_closure_review",
     "closure_demo",

@@ -542,10 +542,14 @@ def record_closure_review(
     svc = ClosureService()
     state = svc.get_state(job_id)
     current = state.get("job_status")
-    if current not in ("waiting_human_review", "ready_to_close"):
+    # v2.1（2026-09-17 修正）：增加 materials_in_audit 态允许。
+    # 原设计：P9 audit 自动推 ready_to_close / waiting_human_review，人工从这两个态做决策。
+    # v2.1 修正后：P9 audit 不推状态（保持 materials_in_audit），人工 record_closure_review
+    # 直接从 materials_in_audit 决策 → approved 直接跳 closed。
+    if current not in ("waiting_human_review", "ready_to_close", "materials_in_audit"):
         raise IllegalTransition(
-            f"record_closure_review 仅在 waiting_human_review/ready_to_close 态允许；"
-            f"实际={current!r}"
+            f"record_closure_review 仅在 waiting_human_review/ready_to_close/"
+            f"materials_in_audit 态允许；实际={current!r}"
         )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -567,6 +571,20 @@ def record_closure_review(
         fields["closed_at"] = now
         fields["closed_by"] = actor["open_id"]
         fields["job_closure_status"] = "closed"
+        # v2.1（2026-09-17 修正）：materials_in_audit → closed 不被状态机允许（必须经过
+        # ready_to_close）。P9 audit 不推状态后，job 长期停留在 materials_in_audit；
+        # 人工 record_closure_review approved 需先内部推到 ready_to_close 再跳 closed。
+        if current == "materials_in_audit":
+            logger.info(
+                f"record_closure_review approved 从 materials_in_audit 起跳："
+                f"先内部推 ready_to_close，再推 closed job_id={job_id}"
+            )
+            intermediate = svc.set_job_status(
+                job_id, "ready_to_close",
+                actor=actor, expected_version=expected_version,
+                **{"review": review_obj},
+            )
+            expected_version = intermediate.get("version")
         state = svc.set_job_status(
             job_id, "closed",
             actor=actor, expected_version=expected_version, **fields,
@@ -575,7 +593,7 @@ def record_closure_review(
         # 写入 state.review.p9_opinion_text + 卡片 P9 段。
         # 失败兜底：不阻断关闭流程（卡片仍 closed；p9_opinion_text 留 None）。
         try:
-            from agents.p9_closure_agent import run_p9_closure_review
+            from agents.p9_agent import run_p9_closure_review
             p9_text = run_p9_closure_review(job_id)
             if p9_text:
                 # 用 patch_fields 写入 p9_opinion_text（不触发状态机转换，

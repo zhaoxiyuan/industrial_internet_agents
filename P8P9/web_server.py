@@ -37,6 +37,12 @@ except ImportError:
 
 from P8P9 import agent_interface, business_actions
 from P8P9.services.card_render import send_event_card_for_web
+# 2026-09-17：强制 import audit_scheduler 以触发 _register_self()，
+# 否则 business_actions._audit_scheduler 永远 None → submit_rectification_materials
+# 末尾的 _trigger_audit(job_id) 静默 return，P9 真审核 agent 不会被调用。
+# callback_router.py 已 import，但 web_server 单独启动时（pytest / 直接 import）这条
+# 链路断开。显式 import 兜底。
+from P8P9.services import audit_scheduler as _audit_scheduler_module  # noqa: F401
 from P8P9.links import (
     ClosureLinkService,
     LinkInvalid, LinkExpired, LinkExhausted, LinkActorMismatch,

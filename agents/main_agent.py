@@ -59,7 +59,7 @@ from .p7_risk_agent import execute_stage as p7_execute_stage
 # 2026-09-17 v2：P8 重写后不再有 execute_stage（v2 只暴露 open_work_ticket + resend_current_card 两个 tool）
 # 主流程 P8 入口走本文件下面的 execute_p8() —— 它内部调 run_disposition_agent 启动 chat agent。
 # STAGE_EXECUTORS["P8"] 直接引用 execute_p8 本体，无需本行 alias。
-from .p9_closure_agent import run_p9_closure_review  # 2026-09-17 v2：execute_stage 已删除；用 run_p9_closure_review
+from .p9_agent import run_p9_closure_review  # 2026-09-17 v2：execute_stage 已删除；用 run_p9_closure_review
 from .p10_archive_agent import execute_stage as p10_execute_stage
 
 # 导入各阶段工具函数
@@ -72,7 +72,7 @@ from .p6_monitor_agent import monitor_start, monitor_events
 from .p7_risk_agent import risk_analyze, risk_list
 from .p8_disposition_agent import run_disposition_agent
 # 2026-09-17 v2：P9 无 tool；旧 closure_status / closure_verify / closure_report / closure_close 已废弃
-from .p9_closure_agent import run_p9_closure_review  # noqa: F811  已在 line 60 导入过（重复 import 兼容）
+from .p9_agent import run_p9_closure_review  # noqa: F811  已在 line 60 导入过（重复 import 兼容）
 # 2026-08-20 临时注释：p10_archive_agent 重构 in-flight；archive_* 调用仅在
 # execute_p10（P10 阶段）使用，不影响 P1-P9 / chat_reply / web。P10 重构完
 # 取消注释。

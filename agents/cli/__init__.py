@@ -23,7 +23,7 @@ from agents.p7_risk_agent import run_risk_agent
 from agents.p8_disposition_agent import run_disposition_agent
 # 2026-09-17 v2：P9 智能体无 tool，仅 `run_p9_closure_review(job_id) -> str`（生成关闭理由文本）
 # 旧蓝图版 `run_closure_agent` / `closure_status / verify / report / close` 4 个 tool 已废弃
-from agents.p9_closure_agent import run_p9_closure_review
+from agents.p9_agent import run_p9_closure_review
 # 2026-08-20 临时注释：p10_archive_agent 重构 in-flight。CLI P10 命令暂不可用。
 # P10 重构完取消注释。
 # from agents.p10_archive_agent import run_archive_agent

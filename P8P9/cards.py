@@ -111,12 +111,17 @@ def inline_form(
         disabled: True → 按钮 disabled
         disabled_reason: disable 时附加在按钮 name 后的说明（用于日志）
     """
+    # 2026-09-17：飞书 Card 2.0 要求整个卡片所有元素 name 全局唯一。
+    # 同卡片里如果两个 form 的 submit 按钮都叫 submit_action（如 record_closure_review），
+    # update_card_entity 会报 name(record_closure_review) duplicate 错误。
+    # button.name 加 form_name 后缀保证唯一，路由信息放在 button.value.action（callback_router 优先读 value.action）。
+    submit_button_name = f"{submit_action}_{name}" if name else submit_action
     submit_button: Dict[str, Any] = {
         "tag": "button",
         "text": {"tag": "plain_text", "content": submit_label},
         "type": button_type if not disabled else "default",
         "width": width,
-        "name": submit_action,  # ← 关键：按钮名 = action 名，callback_router 通过此路由
+        "name": submit_button_name,
         "action_type": "form_submit",  # ← 关键：触发 form 提交
         # 路由信息透传：通过 value 字段（同时是 behaviors value 的载体）。
         # 不能直接加 behaviors——飞书把 button 视为普通 callback button 而非
@@ -444,14 +449,41 @@ def _build_materials_in_audit(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
 ) -> List[Dict[str, Any]]:
-    """§2.4.3：无业务按钮；只读 + P9 审核进度。"""
+    """§2.4.3：v2.1（2026-09-17）—— 业务按钮 + P9 审核进度。
+
+    v2.1 设计：P9 audit 不推状态，job 长期停留 materials_in_audit；卡片必须给人工
+    「审核通过」/「驳回」按钮（决策权归人工）。
+
+    P9 状态显示：
+      - is_mock=true    → 「P9 审核待人工介入」
+      - confidence>=0.8 → 「P9 审核已通过 · 建议关闭」（参考意见）
+      - 0.5~0.8         → 「P9 审核中 · 建议人工复核」
+      - <0.5            → 「P9 审核中 · 建议驳回」
+    """
     p9 = (state.get("review") or {}).get("p9_opinion") or {}
-    p9_status = p9.get("verdict", "pending")
+    if p9.get("is_mock"):
+        p9_status = "P9 审核待人工介入"
+    elif p9.get("comment") is None:
+        p9_status = "🔄 P9 审核中 · 等待意见"
+    else:
+        confidence = p9.get("confidence") or 0.0
+        if confidence >= 0.8:
+            p9_status = f"P9 审核已通过 · 建议关闭（参考意见 confidence={confidence:.2f}）"
+        elif confidence >= 0.5:
+            p9_status = f"P9 审核中 · 建议人工复核（confidence={confidence:.2f}）"
+        else:
+            p9_status = f"P9 审核中 · 建议驳回（confidence={confidence:.2f}）"
+
+    p9_comment = (p9.get("comment") or "")[:200]
     elements: List[Dict[str, Any]] = [
         markdown(
             f"**告警ID**：`{state.get('job_id')}`\n"
             f"**状态**：🔍 P9 审核中\n"
             f"**审核结果**：{p9_status}"
+        ),
+        hr(),
+        markdown(
+            "**📋 P9 审核意见**\n\n" + (p9_comment or "_（P9 审核尚未完成；可先参考下方按钮决策）_")
         ),
         hr(),
         markdown(
@@ -461,11 +493,57 @@ def _build_materials_in_audit(
         hr(),
         markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))),
         hr(),
-        markdown("**⏳ 审核完成后将自动转入 `ready_to_close` 等待关闭确认**"),
-        column_set([column([
-            link_button("查看详情", entry_url, button_type="default")
-        ], weight=1)]),
+        markdown("**P9 仅提供参考意见；决策权归人工 — 请点击下方按钮终审**"),
     ]
+
+    # v2.1 业务按钮：人工终审（approved → ready_to_close → closed；rejected → rectifying + 清材料）
+    #
+    # 2026-09-17 修复：用独立 form 容器（Card 2.0 标准模式）而不是 callback_button_with_form。
+    # form_action 字段在 Card 2.0 schema 中不存在，会导致 input 框不渲染（仅 max_length 提示）。
+    # 改用 inline_form（form 容器内 inline_textarea + form_submit 按钮），与 _build_acknowledged
+    # 的 submit_form/relinquish_form 一致。
+    job_id_str = state.get("job_id") or ""
+    # 2026-09-17：飞书 Card 2.0 要求整个卡片所有元素 name 全局唯一。
+    # 两个 form 都用 name="comment" 会触发 ErrMsg: name(comment) duplicate → update_card_entity 失败。
+    # 改用 approved_comment / rejection_reason 区分，callback_router 按 decision 映射回 comment。
+    approved_form = inline_form(
+        name=f"approved_form_{job_id_str}",
+        elements=[
+            inline_textarea("approved_comment", "请填写审核意见（≥ 10 字）", min_length=10),
+        ],
+        submit_label="✅ 审核通过 · 关闭",
+        submit_action="record_closure_review",
+        submit_value={
+            "action": "record_closure_review",
+            "decision": "approved",
+            "job_id": job_id_str,
+            "expected_version": version,
+        },
+        button_type="primary",
+        width="fill",
+    )
+    rejected_form = inline_form(
+        name=f"rejected_form_{job_id_str}",
+        elements=[
+            inline_textarea("rejection_reason", "请说明驳回理由（≥ 10 字）", min_length=10),
+        ],
+        submit_label="❌ 驳回 · 退回整改",
+        submit_action="record_closure_review",
+        submit_value={
+            "action": "record_closure_review",
+            "decision": "rejected",
+            "job_id": job_id_str,
+            "expected_version": version,
+        },
+        button_type="danger",
+        width="fill",
+    )
+    elements.append(approved_form)
+    elements.append(rejected_form)
+
+    elements.append(column_set([column([
+        link_button("查看详情", entry_url, button_type="default")
+    ], weight=1)]))
     return elements
 
 

@@ -5,7 +5,7 @@
 #   - §6.3.3 异步调度封装
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# P9 审核 agent 接入契约（2026-09-17 已实现）：
+# P9 审核 agent 接入契约（v2.1，2026-09-17 修正）：
 #
 #   **P9 智能体**负责审核 submit_rectification_materials 上传的处置材料。
 #   整条链路如下：
@@ -18,36 +18,32 @@
 #   2. P9 智能体异步拿到 materials.submissions 最新一条，
 #      调 LLM 审核 review_text + evidence_ids + submissions，
 #      产出 review.p9_opinion = {
-#          verdict:        "pass" | "reject" | "need_supplement",
+#          comment:        str (≤1000 字；可包含「建议驳回 / 建议补充 / 建议人工复核」意见),
 #          confidence:     float (0-1),
-#          comment:        str (≤500 字),
 #          evidence_check: list[{evidence_id, ok, reason}],
 #          audited_at:     iso8601,
 #          auditor:        "P9-AuditAgent",
 #          is_mock:        False,
 #      }
 #
-#   3. P9 智能体把 p9_opinion 写入 state.review（patch_fields 不动 job_status），
-#      再按 verdict 调 set_job_status 推 job_status：
-#        - verdict == "pass"            → ready_to_close（人工终审 record_closure_review）
-#        - verdict == "reject"          → waiting_human_review（人工驳回）
-#        - verdict == "need_supplement" → waiting_human_review（人工要求补充）
-#      （注意：状态机不允许 materials_in_audit → rectifying 一步直达；
-#       只能走 waiting_human_review 再由 record_closure_review 决定 closed/rectifying）
+#   3. ★ v2.1 修正：P9 智能体把 p9_opinion 写入 state.review（patch_fields 不动 job_status）
+#      job_status **保持 materials_in_audit 不动**，不推 ready_to_close / waiting_human_review
+#      P9 没有决策权限，comment 中可包含建议但**不**直接拒绝
 #
-#   4. update_job_card 刷新卡片：
-#      - ready_to_close 卡片显示「P9 审核通过，等待人工终审」+「确认关闭 / 驳回」按钮
-#      - waiting_human_review 卡片显示 P9 审核意见 + 待人工复核
+#   4. update_job_card 刷新卡片：job_status 未变，卡片仍是 materials_in_audit 态；
+#      渲染时会把 review.p9_opinion.comment 摘要 + confidence 显示在 P9 段
 #
 #   5. 人工走 record_closure_review(decision="approved"|"rejected")：
 #        - approved → closed（触发归档）—— 此时再同步调 p9_closure_agent 写 p9_opinion_text
 #        - rejected → rectifying + 清 materials（用户可改后再提）
+#      P9 写的 comment 仅作为人工决策的参考，**不**强制采纳
 #
 #   **失败兜底**：
 #     - LLM invoke 抛异常 → fallback 到 _run_p9_audit_fallback_placeholder：
-#       仅写 review.p9_opinion（标注 is_mock=true + verdict="pending_real_agent"），
+#       仅写 review.p9_opinion（标注 is_mock=true + comment 含「P9 审核待人工介入」提示），
 #       job_status 保持 materials_in_audit 不动（避免假阳性 close job）。
-#     - verdict JSON 解析失败 → 由 p9_audit_agent._parse_audit_output 兜底 need_supplement。
+#     - JSON 解析失败 → 由 p9_agent._parse_audit_output 兜底 confidence=0.5 +
+#       「P9 审核输出 comment 缺失或非标准结构；建议人工复核」
 #
 # 公开 API：
 #   - agent_audit_job(job_id: str, *, intent: str = "materials_audit") -> dict
@@ -86,31 +82,34 @@ def agent_audit_job(job_id: str, *, intent: str = "materials_audit") -> Dict[str
 
 
 def _run_p9_audit_agent(job_id: str, intent: str) -> Dict[str, Any]:
-    """P9 真审核 agent：调 agents.p9_audit_agent.run_p9_materials_audit。
+    """P9 真审核 agent：调 agents.p9_agent.run_p9_materials_audit。
 
-    失败语义：LLM 抛异常 → fallback 到 _run_p9_audit_fallback_placeholder；
+    v2.1：run_p9_materials_audit 只输出意见（comment + confidence + evidence_check），
+    不推 job_status。失败语义：LLM 抛异常 → fallback 到 _run_p9_audit_fallback_placeholder；
     避免 audit 流程崩溃 + 假阳性 close job。
     """
     try:
-        from agents.p9_audit_agent import run_p9_materials_audit
+        from agents.p9_agent import run_p9_materials_audit
     except ImportError as e:
         logger.warning(
-            f"[P9 audit] agents.p9_audit_agent 不可用：err={e}；fallback 占位"
+            f"[P9 audit] agents.p9_agent 不可用：err={e}；fallback 占位"
         )
         return _run_p9_audit_fallback_placeholder(job_id, intent)
 
     try:
         opinion = run_p9_materials_audit(job_id)
         logger.info(
-            f"[P9 audit] 完成：job_id={job_id} "
-            f"verdict={opinion.get('verdict')!r} "
-            f"confidence={opinion.get('confidence', 0.0):.2f}"
+            f"[P9 audit] 完成（仅写意见，不推状态）：job_id={job_id} "
+            f"confidence={opinion.get('confidence', 0.0):.2f} "
+            f"comment_len={len(opinion.get('comment') or '')} "
+            f"job_status 保持 materials_in_audit"
         )
         return {
             "status": "completed",
             "job_id": job_id,
-            "verdict": opinion.get("verdict"),
             "is_mock": False,
+            "confidence": opinion.get("confidence", 0.0),
+            "comment_len": len(opinion.get("comment") or ""),
         }
     except Exception as e:
         logger.exception(
@@ -122,11 +121,11 @@ def _run_p9_audit_agent(job_id: str, intent: str) -> Dict[str, Any]:
 def _run_p9_audit_fallback_placeholder(job_id: str, intent: str) -> Dict[str, Any]:
     """LLM 失败兜底：仅写 review.p9_opinion（标注 is_mock=true），**不**推动 job_status。
 
-    避免假阳性 close job（与 v2.1 mock 行为一致）：
+    v2.1（2026-09-17）修正：
+      - p9_opinion 结构：comment + confidence + evidence_check（**没有** verdict 字段）
       - job_status 保持 materials_in_audit 不动
-      - p9_opinion.verdict = "pending_real_agent"（明确标记「待真 agent」）
       - p9_opinion.is_mock = True
-      - 触发 update_job_card 让卡片显示「P9 审核待人工介入」标记
+      - p9_opinion.comment 含「P9 审核待人工介入；接入稳定后可重新提交材料触发重审」提示
     """
     try:
         time.sleep(0.1)  # 模拟异步调度延迟
@@ -145,13 +144,12 @@ def _run_p9_audit_fallback_placeholder(job_id: str, intent: str) -> Dict[str, An
         now = datetime.now(timezone.utc).isoformat()
         review = dict(state.get("review") or {})
         review["p9_opinion"] = {
-            "verdict": "pending_real_agent",  # 不是 pass/reject；明确标记「待真 agent」
-            "confidence": 0.0,
+            # v2.1：无 verdict 字段；comment 表达「待人工介入」
             "comment": (
                 f"[fallback] P9 真审核 agent 调用失败（LLM 异常 / import 失败 / 状态机异常）；"
-                f"fallback 占位写入。job_status 保持 materials_in_audit 不动；"
-                f"接入稳定后可重新提交材料触发重审。"
+                f"fallback 占位写入。建议人工复核；接入稳定后可重新提交材料触发重审。"
             ),
+            "confidence": 0.0,
             "evidence_check": [],
             "audited_at": now,
             "auditor": "P9-Fallback-Bot",
@@ -169,7 +167,7 @@ def _run_p9_audit_fallback_placeholder(job_id: str, intent: str) -> Dict[str, An
             review=review,
         )
         # 触发卡片刷新（job_status 未变，所以卡片仍是 materials_in_audit 态；
-        # 渲染时会把 review.p9_opinion.is_mock 标记展示出来）
+        # 渲染时会把 review.p9_opinion.is_mock + comment 标记展示出来）
         try:
             from . import card_render
             card_render.update_job_card(job_id, new_state.get("version", 0))

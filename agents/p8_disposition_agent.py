@@ -32,7 +32,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from langchain_core.tools import tool, InjectedToolCallId, InjectedToolArg
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -1103,65 +1103,515 @@ def list_active_p8_jobs() -> str:
 # 工具 6：recall_jobs — 长期记忆查询（罗盘长期记忆 LLM 工具入口）
 # ============================================================
 # 与过渡版同名签名 —— LLM 调用约定不变
+#
+# 2026-09-18 修复：P8P9 v2.1 重构后，归档实际写到
+#   data/jobs/_long_term/<job_id>.json  （[P8P9/business_actions.py:651](P8P9/business_actions.py#L651)）
+# 而 A7/storage/p8_long_term.py 还在读老的
+#   data/jobs/{job_id}/P8/archived.json  （[A7/storage/p8_long_term.py:88](A7/storage/p8_long_term.py#L88)）
+# 两边错位 → P8 agent 实际查不到任何 P8P9 归档。
+# 修复：本工具**优先**读 _long_term/（P8P9 真实数据源），**回退**到 A7.storage
+# （老 P8Job 蓝图，向后兼容）。
 # ============================================================
 @tool(description=(
-    "从长期记忆查询历史 P8_job。仅在用户明确要求时调用（如 '昨天那个事件最后怎么处理的'）。"
-    "query: 关键词（如 '昨天可燃气体' / 'P8J-20260813-180000-001'）。"
+    "从长期记忆查询历史 P8_job/P8P9 job。仅在用户明确要求时调用（如 '昨天那个事件最后怎么处理的'）。"
+    "query: 关键词（如 '昨天可燃气体' / 'P8J-20260813-180000-001' / 17 位 ERP job_id）。"
     "默认返回索引层一句话描述（轻量；最多 20 条）；如需完整归档详情，"
-    "请再用 detail_p8_job_id='<p8_job_id>' 再调一次。"
-    "★ 长期记忆入口（罗盘长期记忆）：数据源 = A7/storage/p8_long_term.py（per-job ``archived.json`` 按需扫描聚合）"
+    "请再用 detail_job_id='<job_id>' 再调一次。"
+    "★ 长期记忆入口（罗盘长期记忆）：数据源 = data/jobs/_long_term/{job_id}.json（P8P9 真实归档），"
+    "回退到 A7/storage/p8_long_term.py（老 P8Job 蓝图，向后兼容）"
 ))
-def recall_jobs(query: str, detail_p8_job_id: Optional[str] = None) -> str:
-    """从长期记忆查询历史 P8_job（罗盘长期记忆 LLM 工具入口）。
+def recall_jobs(query: str = "", detail_job_id: Optional[str] = None) -> str:
+    """从长期记忆查询历史 job（罗盘长期记忆 LLM 工具入口）。
 
     ★★★ 长期记忆 LLM 入口（罗盘长期记忆） ★★★
-    本函数调用 A7/storage/p8_long_term.py 的索引层 + 数据层接口，
-    LLM 通过本工具访问长期记忆。
+    数据源（按优先级）：
+      1) P8P9 v2.1 真实归档：data/jobs/_long_term/{job_id}.json
+      2) 老 P8Job 蓝图：data/jobs/{job_id}/P8/archived.json（A7/storage/p8_long_term.py）
 
     参数:
-        query: 关键词（用于索引层子串搜索；如 '可燃气体' / 'HIGH' / p8_job_id）
-        detail_p8_job_id: 可选；指定后直接走数据层精确查询（"两步走" 第二步）
+        query:         关键词（用于索引层子串搜索；如 '可燃气体' / 'HIGH' / 17 位 job_id）
+        detail_job_id: 可选；指定后直接走数据层精确查询（"两步走" 第二步）。
+                       既接受 17 位 ERP job_id（P8P9），也接受 P8J-... 形式 p8_job_id（老蓝图）。
     返回:
-        标准 JSON 响应：detail_p8_job_id 给定时返回单条完整 archived P8Job；
-        否则返回 [(p8_job_id, 一句话描述), ...] 列表
+        标准 JSON 响应：detail_job_id 给定时返回单条完整 archived job；
+        否则返回 [(job_id, 一句话描述), ...] 列表（合并 _long_term/ + P8/archived.json）
     """
-    if not query and not detail_p8_job_id:
+    if not query and not detail_job_id:
         return json.dumps(make_error(
             code="INVALID_ARGUMENT",
-            message="recall_jobs: query 与 detail_p8_job_id 至少给一个",
+            message="recall_jobs: query 与 detail_job_id 至少给一个",
             recoverable=False,
         ), ensure_ascii=False)
 
     # === 路径 A：精确查询（"两步走" 第二步 — 拿详情） ===
-    if detail_p8_job_id:
-        archived = get_archived_job(detail_p8_job_id)
+    if detail_job_id:
+        archived = _get_archived_job_compat(detail_job_id)
         if archived is None:
             return json.dumps(make_error(
                 code="LONG_TERM_NOT_FOUND",
-                message=f"长期记忆无 p8_job_id={detail_p8_job_id}",
+                message=f"长期记忆无 job_id={detail_job_id}（_long_term/ 与 P8/archived.json 都查过）",
                 recoverable=False,
             ), ensure_ascii=False)
         return json.dumps(make_response(
             "recall_jobs (detail)",
-            {"p8_job_id": detail_p8_job_id, "archived_job": archived},
+            {"job_id": detail_job_id, "archived_job": archived},
         ), ensure_ascii=False)
 
     # === 路径 B：索引层子串搜索（"两步走" 第一步 — 拿概览） ===
-    # 2026-08-20 重构：删除 "if not query: hits = load_all_index_entries()" 分支——
-    # line 858 已 guard 空 query（query 与 detail_p8_job_id 至少给一个），此分支不可达。
-    hits = search_archived_descriptions(query, limit=20)
-
+    hits = _search_archived_descriptions_compat(query, limit=20)
     return json.dumps(make_response(
         "recall_jobs (index)",
         {
             "query": query,
-            "hits": [{"p8_job_id": pid, "description": desc} for pid, desc in hits],
+            "hits": [{"job_id": jid, "description": desc} for jid, desc in hits],
             "count": len(hits),
             "next_step_hint": (
-                "若用户要看某条详情，请再用 detail_p8_job_id='<p8_job_id>' 再调一次"
+                "若用户要看某条详情，请再用 detail_job_id='<job_id>' 再调一次"
             ),
         },
     ), ensure_ascii=False)
+
+
+# ============================================================
+# 工具 6b：list_archived_jobs — 长期记忆表查询（recall_jobs 增强版）
+# ============================================================
+# 2026-09-18 新增：recall_jobs 只能子串匹配；要「列全部 / 按时间 / 按 level / 按
+# decision 过滤」必须新增 tool。本工具返回结构化表格（每行 = 一条 archived job），
+# LLM 可直接读表或继续传 detail_job_id 给 recall_jobs 看详情。
+#
+# 数据源（与 recall_jobs 一致）：
+#   1) data/jobs/_long_term/{job_id}.json  （P8P9 真实归档）
+#   2) data/jobs/{job_id}/P8/archived.json （老 P8Job 蓝图，via A7.storage）
+#
+# 过滤参数（全部可选；同时满足 AND）：
+#   since / until        — archived_at 时间窗口（ISO 8601，如 "2026-09-17T00:00:00Z"）
+#   min_level / max_level — display_risk_level（1=一般 / 2=较重 / 3=严重 / 4=特别严重）
+#   decision             — "approved" / "rejected"（精确匹配 review.last_decision）
+#   decider_open_id      — 审核人 open_id 精确匹配
+#   limit                — 默认 50，最大 200
+# ============================================================
+@tool(description=(
+    "列出已归档的 P8P9 job（recall_jobs 增强版），返回结构化表格。"
+    "★ 适用场景：用户问『最近归档了哪些作业』『approved 的有哪些』『所有严重级历史作业』时调用。\n"
+    "★ 与 recall_jobs 的区别：recall_jobs 是关键词子串模糊搜索（轻量索引层）；"
+    "本工具是结构化表查询（可按时间/等级/decision/decider 过滤，返回每条完整元信息）。\n"
+    "过滤参数（全部可选，AND）：\n"
+    "  since / until        — archived_at 时间窗口（ISO 8601，如 '2026-09-17T00:00:00Z'）\n"
+    "  min_level / max_level — 风险等级（1=一般/2=较重/3=严重/4=特别严重）\n"
+    "  decision             — 'approved' 或 'rejected'（精确匹配 review.last_decision）\n"
+    "  decider_open_id      — 审核人 open_id 精确匹配\n"
+    "  limit                — 默认 50，最大 200\n"
+    "返回：每行含 job_id / archived_at / max_level / decision / decider / index_entry。"
+    "★ 不传任何过滤参数 = 列出全部归档（按 archived_at DESC）。"
+))
+def list_archived_jobs(
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    min_level: Optional[int] = None,
+    max_level: Optional[int] = None,
+    decision: Optional[str] = None,
+    decider_open_id: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """列出已归档的 P8P9 job（结构化表查询）。
+
+    数据源（与 recall_jobs 一致）：
+      1) data/jobs/_long_term/{job_id}.json  （P8P9 真实归档）
+      2) data/jobs/{job_id}/P8/archived.json （老 P8Job 蓝图，via A7/storage.load_all_archived_jobs）
+    """
+    if limit <= 0 or limit > 200:
+        return json.dumps(make_error(
+            code="INVALID_ARGUMENT",
+            message=f"list_archived_jobs: limit 必须在 (0, 200]，实际={limit}",
+            recoverable=False,
+        ), ensure_ascii=False)
+
+    rows: List[Dict[str, Any]] = []
+
+    # ── 1) 扫 P8P9 _long_term/（优先） ──
+    lt_dir = _long_term_dir()
+    if lt_dir.exists():
+        for jf in lt_dir.glob("*.json"):
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            rows.append(_extract_table_row_from_long_term(data))
+
+    # ── 2) 回退老蓝图 ──
+    try:
+        from A7.storage.p8_long_term import load_all_archived_jobs
+        for archived in load_all_archived_jobs():
+            # 老 P8Job dict 结构（与 P8P9 不同）：直接包含 p8_job_id / max_level / ...
+            # 但本工具统一成表格 row
+            rows.append(_extract_table_row_from_old_blueprint(archived))
+    except Exception as exc:
+        logger.warning("list_archived_jobs: 老蓝图 load_all_archived_jobs 失败: %s", exc)
+
+    # ── 3) 过滤（AND） ──
+    filtered = _filter_table_rows(
+        rows,
+        since=since, until=until,
+        min_level=min_level, max_level=max_level,
+        decision=decision, decider_open_id=decider_open_id,
+    )
+
+    # ── 4) 按 archived_at DESC 排序 + 截断 ──
+    filtered.sort(key=lambda r: r.get("archived_at") or "", reverse=True)
+    rows_out = filtered[:limit]
+
+    return json.dumps(make_response(
+        "list_archived_jobs",
+        {
+            "filters": {
+                "since": since, "until": until,
+                "min_level": min_level, "max_level": max_level,
+                "decision": decision, "decider_open_id": decider_open_id,
+                "limit": limit,
+            },
+            "count": len(rows_out),
+            "total_matched": len(filtered),
+            "rows": rows_out,
+            "next_step_hint": (
+                "要看某条详情，用 recall_jobs(detail_job_id='<job_id>')"
+            ),
+        },
+    ), ensure_ascii=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 工具 7：lookup_feishu_contact — 飞书群/作业人员映射查询
+# 2026-09-20 新增：读 .env 中的 FEISHU_GROUP_MAP / FEISHU_USER_MAP 做双向反查
+# 数据源：项目根 .env（即 a/.env，路径 = p8_disposition_agent.py 上两级目录的 .env）
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FEISHU_MAP_KEYS = {
+    "group": "FEISHU_GROUP_MAP",
+    "name": "FEISHU_USER_MAP",
+}
+
+
+def _read_env_value(env_path: Path, key: str) -> str:
+    """从 .env 文件读一个 key 的字符串值（含双引号包裹的自动去壳）。
+
+    简单 regex 解析，不依赖 python-dotenv。每次 tool 调用都现读 → 改完 .env
+    不必重启 agent（只重启 chat_reply 进程一次即可重载模块；之后 .env 改动即生效）。
+    """
+    if not env_path.exists():
+        return ""
+    try:
+        content = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    pattern = rf"^{re.escape(key)}\s*=\s*(.*)$"
+    m = re.search(pattern, content, re.MULTILINE)
+    if not m:
+        return ""
+    val = m.group(1).strip()
+    # 去外壳引号
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+        val = val[1:-1]
+    return val
+
+
+def _load_feishu_map(env_path: Path, key: str) -> Dict[str, Any]:
+    """从 .env 读 FEISHU_USER_MAP / FEISHU_GROUP_MAP 的 JSON 值 → dict。
+
+    容错：缺失/损坏 → 返回 {}，不抛错（避免 tool 阻塞 agent）。
+
+    2026-09-20 fallback：.env 现有写法是把 JSON 套了双层引号 + 反斜杠转义
+    （"{\\\"...\\\":\\\"...\\\"}"），python-dotenv 读到的也是带 \\\" 的字面量，
+    json.loads 直接失败。需要 strip 反斜杠再 loads。
+    """
+    raw = _read_env_value(env_path, key)
+    if not raw:
+        return {}
+    # 1) 先尝试直接 json.loads
+    try:
+        v = json.loads(raw)
+        if isinstance(v, dict):
+            return v
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # 2) fallback：raw 含 \\\" / \\' → 还原成普通 JSON 再试
+    if '\\"' in raw or "\\'" in raw:
+        try:
+            v = json.loads(raw.replace('\\"', '"').replace("\\'", "'"))
+            if isinstance(v, dict):
+                return v
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+@tool(description=(
+    "查询飞书群（FEISHU_GROUP_MAP）或作业人员（FEISHU_USER_MAP）映射。"
+    "type 必传：'group' 查群（chat_id → {name, description}）；"
+    "'name' 查人（open_id → {role, name}）。"
+    "查询模式（由 name / id 是否传入决定）："
+    "(1) 只传 type → 返回该类型完整映射表；"
+    "(2) 传 type + name → 用 name 查 id，返回所有匹配（可能有重名）；"
+    "(3) 传 type + id → 用 id 反查 name/role；"
+    "(4) 传 type + name + id → 双向校验：name→id 与给定 id 一致才算 match。"
+    "数据源：项目根 .env 中的 FEISHU_GROUP_MAP / FEISHU_USER_MAP。"
+    "只读查询，不会修改任何状态，可放心使用。"
+))
+def lookup_feishu_contact(
+    type: Annotated[str, "必传。'group' 查群（chat_id 形如 oc_xxx）；'name' 查人（open_id 形如 ou_xxx）"],
+    name: Annotated[Optional[str], "群名或人名（可空）。与 id 同时传时做双向校验"] = None,
+    id: Annotated[Optional[str], "群 chat_id (oc_xxx) 或 人 open_id (ou_xxx)（可空）"] = None,
+) -> str:
+    # 1. 校验 type
+    if type not in _FEISHU_MAP_KEYS:
+        return json.dumps(make_response(
+            "lookup_feishu_contact",
+            {
+                "error": f"type 必须是 'group' 或 'name'，收到 {type!r}",
+                "valid_values": list(_FEISHU_MAP_KEYS.keys()),
+            },
+        ), ensure_ascii=False)
+
+    # 2. 定位 .env：项目根（即 a/.env）。p8_disposition_agent.py 在 agents/ 下，
+    #    所以 ROOT = 上两级目录。
+    project_root = Path(__file__).resolve().parent.parent
+    env_key = _FEISHU_MAP_KEYS[type]
+    mapping = _load_feishu_map(project_root / ".env", env_key)
+
+    # 3. 模式判断
+    has_name = bool(name and name.strip())
+    has_id = bool(id and id.strip())
+
+    # 模式 1：只传 type → 列出全部
+    if not has_name and not has_id:
+        return json.dumps(make_response(
+            "lookup_feishu_contact",
+            {
+                "type": type,
+                "mode": "list_all",
+                "source_env_key": env_key,
+                "count": len(mapping),
+                "mapping": mapping,
+                "warning": (f".env 中 {env_key} 未配置或解析失败") if not mapping else None,
+            },
+        ), ensure_ascii=False)
+
+    # 模式 2：传 type + name → 用 name 查 id
+    if has_name and not has_id:
+        matches = []
+        for k, v in mapping.items():
+            if isinstance(v, dict) and v.get("name") == name:
+                matches.append({"id": k, **v})
+        return json.dumps(make_response(
+            "lookup_feishu_contact",
+            {
+                "type": type,
+                "mode": "name_to_id",
+                "source_env_key": env_key,
+                "name": name,
+                "count": len(matches),
+                "matches": matches,
+            },
+        ), ensure_ascii=False)
+
+    # 模式 3：传 type + id → 用 id 反查 name
+    if has_id and not has_name:
+        data = mapping.get(id)
+        if data is None:
+            return json.dumps(make_response(
+                "lookup_feishu_contact",
+                {
+                    "type": type,
+                    "mode": "id_to_name",
+                    "source_env_key": env_key,
+                    "id": id,
+                    "found": False,
+                },
+            ), ensure_ascii=False)
+        return json.dumps(make_response(
+            "lookup_feishu_contact",
+            {
+                "type": type,
+                "mode": "id_to_name",
+                "source_env_key": env_key,
+                "id": id,
+                "found": True,
+                "data": data,
+            },
+        ), ensure_ascii=False)
+
+    # 模式 4：传 type + name + id → 双向校验
+    matched_ids = []
+    for k, v in mapping.items():
+        if isinstance(v, dict) and v.get("name") == name:
+            matched_ids.append(k)
+
+    if id in matched_ids:
+        return json.dumps(make_response(
+            "lookup_feishu_contact",
+            {
+                "type": type,
+                "mode": "cross_check",
+                "source_env_key": env_key,
+                "name": name,
+                "id": id,
+                "match": True,
+                "data": mapping[id],
+            },
+        ), ensure_ascii=False)
+
+    return json.dumps(make_response(
+        "lookup_feishu_contact",
+        {
+            "type": type,
+            "mode": "cross_check",
+            "source_env_key": env_key,
+            "name": name,
+            "id": id,
+            "match": False,
+            "name_resolves_to": matched_ids,
+        },
+    ), ensure_ascii=False)
+
+
+def _extract_table_row_from_long_term(data: Dict[str, Any]) -> Dict[str, Any]:
+    """从 _long_term/{job_id}.json 提取表行（job_id / archived_at / max_level / decider / decision）。"""
+    cs = data.get("closure_state") or {}
+    review = cs.get("review") or {}
+    history = review.get("history") or []
+    last_decision = review.get("last_decision") or ""
+    decider = ""
+    if history:
+        decider = history[-1].get("by", "") or ""
+    return {
+        "source": "p8p9_long_term",
+        "job_id": data.get("job_id") or cs.get("job_id") or "",
+        "archived_at": data.get("archived_at") or cs.get("archived_at") or "",
+        "max_level": cs.get("display_risk_level"),
+        "decision": last_decision,
+        "decider": decider,
+        "index_entry": data.get("index_entry") or "",
+    }
+
+
+def _extract_table_row_from_old_blueprint(archived: Dict[str, Any]) -> Dict[str, Any]:
+    """从老 P8Job 蓝图 archived dict 提取表行。"""
+    return {
+        "source": "p8_old_blueprint",
+        "job_id": archived.get("p8_job_id") or archived.get("job_id") or "",
+        "archived_at": archived.get("archived_at") or "",
+        "max_level": archived.get("max_level"),
+        "decision": archived.get("decision") or "",
+        "decider": archived.get("decider") or archived.get("by") or "",
+        "index_entry": archived.get("index_entry") or "",
+    }
+
+
+def _filter_table_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    min_level: Optional[int] = None,
+    max_level: Optional[int] = None,
+    decision: Optional[str] = None,
+    decider_open_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """AND 过滤；时间窗口用前缀字符串比较（ISO 8601 字典序 = 时间序）。"""
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        # archived_at 时间窗口
+        ts = (r.get("archived_at") or "").strip()
+        if since and ts and ts < since:
+            continue
+        if until and ts and ts > until:
+            continue
+        # level
+        lvl = r.get("max_level")
+        if isinstance(lvl, int):
+            if min_level is not None and lvl < min_level:
+                continue
+            if max_level is not None and lvl > max_level:
+                continue
+        # decision
+        if decision and r.get("decision") != decision:
+            continue
+        # decider
+        if decider_open_id and r.get("decider") != decider_open_id:
+            continue
+        out.append(r)
+    return out
+
+
+# ─── 兼容层：合并 _long_term/（P8P9 真实）+ A7/storage（老蓝图） ───────────
+
+# 2026-09-18：P8P9 v2.1 归档路径 = data/jobs/_long_term/{job_id}.json
+# 复用 P8P9/state_machine.py 的 base_dir 计算（避免 hardcode data/）
+_LONG_TERM_DIRNAME = "_long_term"
+
+
+def _long_term_dir() -> Path:
+    """P8P9 长期记忆目录（[P8P9/business_actions.py:651](P8P9/business_actions.py#L651)）。"""
+    try:
+        from P8P9 import state_machine as _sm
+        base = Path(_sm.__file__).resolve().parent.parent  # P8P9/state_machine.py → project root
+    except Exception:
+        base = Path(__file__).resolve().parent.parent
+    return base / "data" / "jobs" / _LONG_TERM_DIRNAME
+
+
+def _long_term_path(job_id: str) -> Path:
+    return _long_term_dir() / f"{job_id}.json"
+
+
+def _get_archived_job_compat(job_id: str) -> Optional[Dict[str, Any]]:
+    """优先 P8P9 _long_term/；回退老 A7/storage p8_long_term.py。"""
+    p = _long_term_path(job_id)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("recall_jobs: _long_term/%s.json 解析失败: %s", job_id, exc)
+    # 回退老蓝图
+    try:
+        return get_archived_job(job_id)
+    except Exception as exc:
+        logger.warning("recall_jobs: A7.storage.get_archived_job(%s) 失败: %s", job_id, exc)
+        return None
+
+
+def _search_archived_descriptions_compat(query: str, limit: int = 20):
+    """合并搜索 _long_term/（P8P9）+ 老蓝图（A7.storage）。"""
+    out: List[tuple] = []
+
+    # 1) 扫 P8P9 _long_term/ 子串匹配 index_entry + closure_state.archived_to_lt/...
+    lt_dir = _long_term_dir()
+    if lt_dir.exists():
+        for jf in sorted(lt_dir.glob("*.json")):
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            jid = data.get("job_id") or jf.stem
+            entry = (data.get("index_entry") or "").lower()
+            # 子串匹配 index_entry + job_id
+            q = (query or "").lower().strip()
+            if q and (q in (jid or "").lower() or q in entry):
+                out.append((jid, data.get("index_entry") or ""))
+
+    # 2) 回退老蓝图
+    try:
+        out.extend(search_archived_descriptions(query, limit=limit))
+    except Exception as exc:
+        logger.warning("recall_jobs: A7.storage.search_archived_descriptions 失败: %s", exc)
+
+    # 去重 + 截断
+    seen, deduped = set(), []
+    for jid, desc in out:
+        if jid in seen:
+            continue
+        seen.add(jid)
+        deduped.append((jid, desc))
+    return deduped[:limit]
 
 
 # ============================================================
@@ -1211,9 +1661,13 @@ def create_disposition_agent(
     llm = create_chat_model_with_logging("P8")
     # 2026-09-17 v2：notify_feishu → open_work_ticket + resend_current_card
     # 旧版 notify_feishu 调 feishu_gateway_cli 直推卡片；v2 走 P8P9 状态机新管线
+    # 2026-09-18 v2.1：recall_jobs 路径修复 + 新增 list_archived_jobs（recall_jobs 增强版）
+    # 2026-09-20：新增 lookup_feishu_contact（飞书群/人员映射查询）
     tools = [
         update_job, hitl_decide, read_p7_events,
-        open_work_ticket, resend_current_card, list_active_p8_jobs, recall_jobs,
+        open_work_ticket, resend_current_card, list_active_p8_jobs,
+        recall_jobs, list_archived_jobs,
+        lookup_feishu_contact,
     ]
 
     sys_prompt = (
@@ -1264,20 +1718,26 @@ def create_disposition_agent_with_hitl(
     llm = create_chat_model_with_logging("P8")
     # 2026-09-17 v2：notify_feishu → open_work_ticket + resend_current_card
     # 旧版 notify_feishu 调 feishu_gateway_cli 直推卡片；v2 走 P8P9 状态机新管线
+    # 2026-09-18 v2.1：recall_jobs 路径修复 + 新增 list_archived_jobs（recall_jobs 增强版）
+    # 2026-09-20：新增 lookup_feishu_contact（飞书群/人员映射查询）
     tools = [
         update_job, hitl_decide, read_p7_events,
-        open_work_ticket, resend_current_card, list_active_p8_jobs, recall_jobs,
+        open_work_ticket, resend_current_card, list_active_p8_jobs,
+        recall_jobs, list_archived_jobs,
+        lookup_feishu_contact,
     ]
 
     hitl_middleware = HumanInTheLoopMiddleware(
         interrupt_on={
-            "update_job":          True,   # 创建/更新 P8_job 必须确认
-            "hitl_decide":         True,   # 进入 HITL 决策必须确认
-            "open_work_ticket":    True,   # 2026-09-17 v2：开启 P8P9 作业票（发卡片）必须确认
-            "resend_current_card": False,  # 2026-09-17 v2：重发卡片是幂等展示修复，不阻断（防网络波动）
-            "read_p7_events":      False,  # 只读放行
-            "list_active_p8_jobs": False,  # 只读放行
-            "recall_jobs":         False,  # 长期记忆只读放行
+            "update_job":              True,   # 创建/更新 P8_job 必须确认
+            "hitl_decide":             True,   # 进入 HITL 决策必须确认
+            "open_work_ticket":        True,   # 2026-09-17 v2：开启 P8P9 作业票（发卡片）必须确认
+            "resend_current_card":     False,  # 2026-09-17 v2：重发卡片是幂等展示修复，不阻断（防网络波动）
+            "read_p7_events":          False,  # 只读放行
+            "list_active_p8_jobs":     False,  # 只读放行
+            "recall_jobs":             False,  # 长期记忆只读放行
+            "list_archived_jobs":      False,  # 2026-09-18：归档列表只读放行
+            "lookup_feishu_contact":   False,  # 2026-09-20：飞书群/人映射只读查询放行
         }
     )
 

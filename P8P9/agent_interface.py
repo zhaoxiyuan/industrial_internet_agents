@@ -269,13 +269,20 @@ def _state_to_agent_view(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     if "p9_opinion" in review:
         op = review["p9_opinion"]
+        # v2.1（2026-09-17）：P9 audit 只输出意见（无 verdict）；evidence_check + is_mock 暴露给前端
         review_view["p9_opinion"] = {
-            "verdict": op.get("verdict"),
-            "confidence": op.get("confidence"),
             "comment": op.get("comment"),
+            "confidence": op.get("confidence"),
+            "evidence_check": op.get("evidence_check") or [],
             "audited_at": op.get("audited_at"),
             "auditor": mask(op.get("auditor")),
+            "is_mock": bool(op.get("is_mock", False)),
         }
+
+    # v2.1（2026-09-17）：P9 关闭文案 + 生成时间暴露给前端（closed 卡片 P9 段）
+    if "p9_opinion_text" in review:
+        review_view["p9_opinion_text"] = review.get("p9_opinion_text")
+        review_view["p9_generated_at"] = review.get("p9_generated_at")
 
     # risk_changes 摘要
     rc_view = []

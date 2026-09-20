@@ -235,8 +235,19 @@ def route_card_callback(event: Dict[str, Any]) -> Dict[str, Any]:
         kwargs.setdefault("reason", "")
         kwargs.setdefault("evidence_ids", [])
     elif action == "record_closure_review":
+        # 2026-09-17：_build_materials_in_audit 用两个独立 form（approved_form / rejected_form），
+        # 飞书要求 name 全局唯一，所以 input.name 分别是 approved_comment / rejection_reason。
+        # record_closure_review 签名只接 comment，不接受这两个字段名。
+        # 1) 先把通用注入进来的 form-only 字段从 kwargs 删除（避免 TypeError）。
+        for k in ("approved_comment", "rejection_reason"):
+            kwargs.pop(k, None)
         kwargs.setdefault("decision", value.get("decision") or form_value.get("decision", ""))
         kwargs.setdefault("comment", "")
+        # 2) 把 form 字段值映射到 comment。
+        for k in ("approved_comment", "rejection_reason", "comment"):
+            if form_value.get(k):
+                kwargs["comment"] = form_value[k]
+                break
 
     try:
         return handler(job_id, **kwargs)
