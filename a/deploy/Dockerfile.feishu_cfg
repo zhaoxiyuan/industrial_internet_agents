@@ -1,0 +1,29 @@
+# a/deploy/Dockerfile.feishu_cfg — 飞书通道配置 UI(Flask :5003)
+#
+# 入口命令来自 feishu_gateway_cli/feishu_config_app.py 的 main(),
+# CLI 参数:--host/--port。
+# 健康检查:由我们新增的 GET /api/health 路由处理(已加在该文件)。
+
+FROM a-deploy-base
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+COPY a/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt \
+ && pip install --no-cache-dir \
+        'flask>=3.0' \
+        'requests>=2.31'
+
+COPY a/feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY a/agent_config/       ./agent_config/
+COPY a/.env                ./.env
+
+EXPOSE 5003
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5003/api/health || exit 1
+
+CMD ["python", "-m", "feishu_gateway_cli.feishu_config_app", \
+     "--host", "0.0.0.0", "--port", "5003"]

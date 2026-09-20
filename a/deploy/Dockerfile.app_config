@@ -1,0 +1,27 @@
+# a/deploy/Dockerfile.app_config — LLM/VL 配置 UI(Flask :5000)
+#
+# 入口命令来自 frontend/app_config.py 的 main(),CLI 参数:--host/--port。
+# /api/health 已存在(frontend/app_config.py:567-569),无需改动业务代码。
+
+FROM a-deploy-base
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+COPY a/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt \
+ && pip install --no-cache-dir \
+        'flask>=3.0' \
+        'requests>=2.31'
+
+COPY a/frontend/       ./frontend/
+COPY a/agent_config/   ./agent_config/
+COPY a/.env            ./.env
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5000/api/health || exit 1
+
+CMD ["python", "frontend/app_config.py", "--host", "0.0.0.0", "--port", "5000"]

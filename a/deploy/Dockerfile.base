@@ -1,0 +1,37 @@
+# a/deploy/Dockerfile.base — a/ 子项目 Python 服务公共基础镜像
+#
+# 用法:其他 Dockerfile 用 `FROM a-deploy-base` 引用。
+#   构建顺序:docker compose 会按依赖顺序自动构建 → 第一次会先 build base。
+#   tag 名称:在 docker-compose.yml 的 service 名基础上加 :latest 前缀。
+
+FROM python:3.12-slim
+
+# Build-only proxy arguments.  They are deliberately not persisted in the
+# resulting image, so application containers do not inherit proxy settings.
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+# 不缓冲输出(让 python print 立即同步到 docker logs)
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8
+
+# tini:作为 PID 1,负责把 docker stop 的 SIGTERM 正确转发给 python 进程
+# curl:HEALTHCHECK 命令需要
+# ca-certificates:部分 https 接口(飞书 OpenAPI、LLM API)需要信任 CA 链
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        curl \
+        tini \
+        ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# 标准工作目录(所有服务镜像统一)
+WORKDIR /srv/app
+
+# 容器入口用 tini 包一层(CMD 不写死,由各服务 Dockerfile 决定)
+ENTRYPOINT ["tini", "--"]

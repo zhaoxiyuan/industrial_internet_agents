@@ -1,0 +1,30 @@
+# a/deploy/Dockerfile.webui — 飞书卡片回调入口(stdlib http.server :8080)
+#
+# ⚠ 这个服务用 host 网络(network_mode: host)而非 bridge:
+#   a/web/server.py 写死绑定 127.0.0.1:8080,无 CLI 参数,无 env 控制 host;
+#   强制 0.0.0.0 会需要改代码 → 不改业务代码的前提下,host 网络是唯一选择。
+#   副作用:容器直接共享宿主机网络栈,8080 端口被它独占(其他服务别再用 8080)。
+#
+# docker-compose.yml 通过环境变量注入 A_P8P9_BASE_URL=http://p8p9:8089,
+# 容器内 webhook 转发走 service 名而不是 127.0.0.1。
+
+FROM a-deploy-base
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+# 只用 stdlib,不需额外依赖
+COPY a/web/               ./web/
+COPY a/P8P9/              ./P8P9/
+COPY a/A7/                ./A7/
+COPY a/feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY a/data/              ./data/
+COPY a/agent_config/      ./agent_config/
+COPY a/.env               ./.env
+
+# 不 EXPOSE:host 网络模式下端口是宿主机的,EXPOSE 没意义
+# 不写 HEALTHCHECK:web/server.py 是 stdlib http.server,没现成 health 路由
+#   (我们已加 /api/health 在 _do_GET_inner 开头,但 host 网络的容器通常不靠 docker healthcheck,
+#    nginx upstream 用 try_files + curl 即可探活)
+CMD ["python", "-m", "web.server"]

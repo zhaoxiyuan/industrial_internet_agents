@@ -1,0 +1,147 @@
+# a/deploy/docker-compose.yml — a/ 子项目 7 服务编排(Nginx + 6 后端 + chat_reply 宿主机跑)
+#
+# 启动顺序:docker compose 按 networks/depends_on 解析;
+#   - nginx depends_on: [gateway, p6, p8p9, app_config, feishu_cfg, webui]
+#   - webui 用 network_mode: host(详见 Dockerfile.webui 说明)
+#   - gateway 复用 a/gateway/Dockerfile(自带 HEALTHCHECK)
+#   - chat_reply 不在本 compose 里,继续宿主机跑 aaaseverstart.py start chat_reply
+
+name: industrial-agents-a
+
+services:
+  gateway:
+    # 复用 a/gateway/Dockerfile(node:22-alpine + npm 装的 OpenClaw Channel Gateway)
+    build:
+      context: ../gateway
+    image: a-gateway:latest
+    container_name: a-gateway
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      # gateway 的 /app/data 持久化(原 Dockerfile 已声明 VOLUME)
+      - ../data:/app/data
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  p6:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.p6
+    image: a-p6:latest
+    container_name: a-p6
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      - ../data:/srv/app/data
+      - ../A5/logs:/srv/app/A5/logs
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  p8p9:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.p8p9
+    image: a-p8p9:latest
+    container_name: a-p8p9
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      - ../data:/srv/app/data
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  app_config:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.app_config
+    image: a-app-config:latest
+    container_name: a-app-config
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      - ../agent_config:/srv/app/agent_config
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  feishu_cfg:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.feishu_cfg
+    image: a-feishu-cfg:latest
+    container_name: a-feishu-cfg
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      # feishu_cfg 写 .env + gateway/.env + gateway/config/*.json
+      # 三个都要挂出去,否则容器里写的不会反映到宿主机,下次重启丢失
+      - ../.env:/srv/app/.env
+      - ../agent_config:/srv/app/agent_config
+      - ../feishu_gateway_cli:/srv/app/feishu_gateway_cli
+      - ../gateway:/srv/app/gateway
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  webui:
+    # ⚠ 用 host 网络:web/server.py 写死 127.0.0.1,不改代码的唯一选择
+    # 副作用:8080 端口被宿主机独占;其他服务别再用 8080
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.webui
+    image: a-webui:latest
+    container_name: a-webui
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      # 默认 127.0.0.1:8089 在容器内不通;必须改成 service 名
+      - A_P8P9_BASE_URL=http://p8p9:8089
+      - A_WEBUI_PORT=8080
+    volumes:
+      - ../data:/srv/app/data
+      - ../agent_config:/srv/app/agent_config
+    network_mode: host
+    extra_hosts:
+      # 让容器内能用 host.docker.internal 访问宿主机(chat_reply 等)
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: a-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
+      # 复用宿主机 certbot 申请的证书(标准路径)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - gateway
+      - p6
+      - p8p9
+      - app_config
+      - feishu_cfg
+      - webui
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+networks:
+  internal:
+    driver: bridge
+    # 不勾 external gateway,默认的内部网桥即可
