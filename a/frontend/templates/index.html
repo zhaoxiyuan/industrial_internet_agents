@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A5 作业过程监测 Demo</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:system-ui,monospace; background:#0f172a; color:#e2e8f0; min-height:100vh; }
+
+#app { max-width:1200px; margin:0 auto; padding:20px; }
+
+/* ── 顶部标题 + 控制栏 ── */
+.header { display:flex; align-items:center; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+h1 { font-size:18px; color:#e2e8f0; white-space:nowrap; }
+.controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+select,button { padding:7px 14px; font-size:13px; border-radius:6px; border:none; cursor:pointer; }
+select { background:#1e293b; color:#e2e8f0; }
+.btn-blue { background:#3b82f6; color:#fff; font-weight:bold; }
+.btn-red  { background:#ef4444; color:#fff; font-weight:bold; }
+.btn-green{ background:#16a34a; color:#fff; }
+.btn-gray { background:#475569; color:#fff; }
+button:disabled { opacity:0.5; cursor:not-allowed; }
+
+/* ── Tab 栏 ── */
+.tab-bar { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid #334155; }
+.tab-btn {
+  padding:8px 20px; font-size:13px; background:transparent; color:#94a3b8;
+  border:none; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
+  transition:all 0.15s;
+}
+.tab-btn:hover { color:#e2e8f0; }
+.tab-btn.active { color:#3b82f6; border-bottom-color:#3b82f6; }
+
+/* ── Tab 内容 ── */
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+/* ── 通用卡片 ── */
+.card { background:#1e293b; border-radius:8px; padding:16px; margin-bottom:12px; }
+.card h3 { font-size:13px; color:#94a3b8; margin-bottom:10px; border-bottom:1px solid #334155; padding-bottom:6px; }
+
+/* ── 进度条 ── */
+.progress { width:100%; height:8px; background:#334155; border-radius:4px; margin-bottom:12px; overflow:hidden; }
+.progress-bar { height:100%; background:#3b82f6; transition:width 0.3s; border-radius:4px; }
+
+/* ── 状态文字 ── */
+.status { font-size:13px; color:#94a3b8; }
+.status-run { color:#4ade80; }
+.status-stop{ color:#ef4444; }
+
+/* ── 网格布局 ── */
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.grid-4 { display:grid; grid-template-columns:2fr 1fr; gap:12px; }
+
+/* ── 列表行 ── */
+.row { display:flex; justify-content:space-between; padding:5px 0; font-size:13px; border-bottom:1px solid #1e293b; }
+.row:last-child { border-bottom:none; }
+.row .label { color:#94a3b8; }
+
+/* ── 颜色 ── */
+.ok   { color:#4ade80; }
+.no   { color:#ef4444; font-weight:bold; }
+.warn { color:#fbbf24; }
+.info { color:#60a5fa; }
+
+/* ── 事件卡片 ── */
+.event-item {
+  background:#7f1d1d; border-left:3px solid #ef4444;
+  padding:10px 12px; margin-bottom:8px; border-radius:4px; font-size:13px;
+}
+.event-item.closed { background:#14532d; border-left-color:#4ade80; }
+.event-item .ev-head { display:flex; justify-content:space-between; margin-bottom:4px; }
+.ev-time { color:#f87171; font-weight:bold; }
+.ev-type { color:#fca5a5; }
+.ev-person { color:#fde68a; }
+.ev-exp { color:#fca5a5; font-size:12px; margin-top:4px; }
+.ev-closed { color:#4ade80; font-size:12px; }
+
+/* ── Agent 队列 ── */
+.queue-item {
+  display:flex; align-items:center; gap:10px;
+  padding:8px 12px; border-radius:6px; margin-bottom:6px; font-size:13px;
+}
+.queue-item.done       { background:#14532d; border-left:3px solid #4ade80; }
+.queue-item.processing { background:#1e293b; border-left:3px solid #3b82f6; animation:pulse 1s infinite; }
+.queue-item.waiting    { background:#1e293b; border-left:3px solid #64748b; opacity:0.6; }
+.queue-item.error      { background:#7f1d1d; border-left:3px solid #ef4444; }
+.queue-item .qicon { font-size:16px; }
+.queue-item .qkey { color:#94a3b8; font-size:12px; }
+.queue-item .qms  { margin-left:auto; font-size:12px; color:#94a3b8; }
+
+/* ── textarea ── */
+textarea { width:100%; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:10px; font-size:12px; font-family:monospace; line-height:1.6; resize:vertical; }
+.btn-row { display:flex; gap:8px; margin-bottom:10px; }
+
+/* ── 统计徽章 ── */
+.stats-row { display:flex; gap:16px; margin-bottom:12px; flex-wrap:wrap; }
+.stat-badge { background:#334155; padding:6px 14px; border-radius:20px; font-size:13px; }
+.stat-badge .val { color:#e2e8f0; font-weight:bold; margin-right:4px; }
+.stat-badge .lbl { color:#94a3b8; }
+
+/* ── 无数据提示 ── */
+.empty { color:#475569; font-size:13px; padding:20px; text-align:center; }
+
+/* ── 日志文件统计 ── */
+.log-counts { display:flex; gap:12px; flex-wrap:wrap; font-size:13px; }
+.log-count { background:#334155; padding:4px 12px; border-radius:4px; }
+.log-count .v { color:#60a5fa; font-weight:bold; }
+
+/* ── 系统提示词 ── */
+.sp-warning { font-size:12px; color:#fbbf24; margin-bottom:8px; }
+
+/* ── 动画 ── */
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 顶部 -->
+  <div class="header">
+    <h1>A5 作业过程监测 Demo</h1>
+    <span id="statusText" class="status">未启动</span>
+  </div>
+
+  <!-- Tab 栏 -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="btn-tab0" onclick="showTab(0)">Mock进度 + 报警看板</button>
+    <button class="tab-btn"        id="btn-tab1" onclick="showTab(1)">Agent进度</button>
+    <button class="tab-btn"        id="btn-tab2" onclick="showTab(2)">作业票规则</button>
+    <button class="tab-btn"        id="btn-tab3" onclick="showTab(3)">系统提示词</button>
+  </div>
+
+  <!-- ========== Tab0: Mock进度 + 报警看板 ========== -->
+  <div class="tab-content active" id="tab0">
+
+    <!-- 控制栏 -->
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      <select id="selScenario">
+        <option value="B">场景 B - 工人摘头盔</option>
+        <option value="A">场景 A - 正常作业</option>
+        <option value="C">场景 C - 可燃气体上升</option>
+        <option value="D">场景 D - 监护人离岗</option>
+        <option value="E">场景 E - 多重违规</option>
+      </select>
+      <button class="btn-blue" id="btnPlay" onclick="startScenario()">▶ 开始播放</button>
+      <button class="btn-red"  id="btnStop" onclick="stopScenario()" disabled>■ 停止</button>
+    </div>
+
+    <!-- 进度条 -->
+    <div class="progress"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
+
+    <!-- 实时数据 + 报警事件 -->
+    <div class="grid-4">
+      <!-- 左：实时数据 -->
+      <div>
+        <div class="card">
+          <h3>PPE 检测</h3>
+          <div id="ppeList"><div class="empty">无数据</div></div>
+        </div>
+        <div class="card">
+          <h3>传感器</h3>
+          <div id="sensorList"><div class="empty">无数据</div></div>
+        </div>
+        <div class="card">
+          <h3>人员位置</h3>
+          <div id="positionList"><div class="empty">无数据</div></div>
+        </div>
+      </div>
+      <!-- 右：报警事件 -->
+      <div>
+        <div class="card">
+          <h3>报警事件 <span id="evCount" style="color:#94a3b8;font-size:12px;font-weight:normal"></span></h3>
+          <div id="eventList" style="max-height:320px;overflow-y:auto;"><div class="empty">暂无事件</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 日志文件统计 -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <h3 style="margin:0;border:none;padding:0">日志文件状态</h3>
+        <button class="btn-red" style="padding:4px 12px;font-size:12px;" onclick="clearLogs()">🗑 清理日志</button>
+      </div>
+      <div class="log-counts" id="logCounts">
+        <div class="log-count">snapshot: <span class="v" id="cntSnapshot">-</span></div>
+        <div class="log-count">raw_event: <span class="v" id="cntRaw">-</span></div>
+        <div class="log-count">processing: <span class="v" id="cntProcessing">-</span></div>
+        <div class="log-count">error: <span class="v" id="cntError">-</span></div>
+        <div class="log-count">cv: <span class="v" id="cntCv">-</span></div>
+        <div class="log-count">sensor: <span class="v" id="cntSensor">-</span></div>
+        <div class="log-count">position: <span class="v" id="cntPosition">-</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== Tab1: Agent进度 ========== -->
+  <div class="tab-content" id="tab1">
+    <div class="card">
+      <h3>Agent 控制</h3>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <select id="selInterval">
+          <option value="3">间隔: 3秒</option>
+          <option value="5">间隔: 5秒</option>
+          <option value="10" selected>间隔: 10秒</option>
+        </select>
+        <select id="selBatch">
+          <option value="5">批次: 5条</option>
+          <option value="10" selected>批次: 10条</option>
+        </select>
+        <button class="btn-blue" id="btnAgentStart" onclick="startAgent()">▶ 启动Agent</button>
+        <button class="btn-red"  id="btnAgentStop"  onclick="stopAgent()" disabled>■ 停止Agent</button>
+        <span id="agentStatus" class="status">未启动</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>处理队列 <span id="queueStats" style="color:#94a3b8;font-size:12px;font-weight:normal"></span></h3>
+      <div id="queueList"><div class="empty">无处理记录</div></div>
+    </div>
+
+    <div class="card">
+      <h3>统计</h3>
+      <div class="stats-row" id="statsRow">
+        <div class="stat-badge"><span class="val" id="statTotal">0</span><span class="lbl"> 处理批次</span></div>
+        <div class="stat-badge"><span class="val" id="statDone" style="color:#4ade80">0</span><span class="lbl"> 已完成条</span></div>
+        <div class="stat-badge"><span class="val" id="statError" style="color:#ef4444">0</span><span class="lbl"> 失败条</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== Tab2: 作业票规则 ========== -->
+  <div class="tab-content" id="tab2">
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn-green" onclick="saveRules()">💾 保存</button>
+        <button class="btn-gray"  onclick="resetRules()">↺ 重置</button>
+        <button class="btn-gray"  onclick="loadRules()">↻ 刷新</button>
+      </div>
+      <textarea id="rulesEditor" rows="18"></textarea>
+    </div>
+  </div>
+
+  <!-- ========== Tab3: 系统提示词 ========== -->
+  <div class="tab-content" id="tab3">
+    <div class="card">
+      <p class="sp-warning">⚠ 修改系统提示词会影响 Agent 判断逻辑，请谨慎操作</p>
+      <div class="btn-row">
+        <button class="btn-green" onclick="saveSystemPrompt()">💾 保存</button>
+        <button class="btn-gray"  onclick="resetSystemPrompt()">↺ 重置</button>
+        <button class="btn-gray"  onclick="loadSystemPrompt()">↻ 刷新</button>
+      </div>
+      <textarea id="spEditor" rows="18"></textarea>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script>
+// ── 全局状态 ─────────────────────────────────────────────────
+let _scenarioRunning = false;
+let _agentRunning = false;
+let _currentSecond = 0;
+
+// 三个独立定时器
+let _pollLogTimer = null;     // 日志计数轮询（页面加载即启动，每秒）
+let _pollScenarioTimer = null; // 场景进度轮询（点击开始播放后每秒）
+let _pollAgentTimer = null;    // Agent轮询（点击启动Agent后每秒）
+
+const WORKERS = {
+  P7:  { name:"张师傅", role:"焊工" },
+  P8:  { name:"王师傅", role:"焊工" },
+  P11: { name:"赵师傅", role:"监护人" },
+};
+
+// ── Tab 切换 ─────────────────────────────────────────────────
+function showTab(idx) {
+  document.querySelectorAll('.tab-content').forEach((el,i) =>
+    el.classList.toggle('active', i===idx));
+  document.querySelectorAll('.tab-btn').forEach((el,i) =>
+    el.classList.toggle('active', i===idx));
+}
+
+// ── 轮询管理 ─────────────────────────────────────────────────
+// 日志计数轮询：页面一加载就启动，独立每秒运行
+function startLogPoll() {
+  if (_pollLogTimer) return;
+  _pollLogTimer = setInterval(pollLog, 1000);
+}
+function stopLogPoll() {
+  if (_pollLogTimer) { clearInterval(_pollLogTimer); _pollLogTimer = null; }
+}
+
+// 场景进度轮询：点击开始播放后启动/停止，与日志轮询完全独立
+function startScenarioPoll() {
+  if (_pollScenarioTimer) return;
+  _pollScenarioTimer = setInterval(pollScenario, 1000);
+}
+function stopScenarioPoll() {
+  if (_pollScenarioTimer) { clearInterval(_pollScenarioTimer); _pollScenarioTimer = null; }
+}
+
+// Agent轮询：点击启动Agent后启动/停止，与前两者完全独立
+function startAgentPoll() {
+  if (_pollAgentTimer) return;
+  _pollAgentTimer = setInterval(pollAgent, 1000);
+}
+function stopAgentPoll() {
+  if (_pollAgentTimer) { clearInterval(_pollAgentTimer); _pollAgentTimer = null; }
+}
+
+// ── 日志计数轮询（独立每秒） ──────────────────────────────────
+async function pollLog() {
+  await Promise.all([fetchLogCounts(), fetchRawEvents()]);
+}
+
+async function fetchLogCounts() {
+  try {
+    const r = await fetch("/api/logs");
+    const d = await r.json();
+    document.getElementById("cntSnapshot").textContent  = (d.snapshots  || []).length;
+    document.getElementById("cntRaw").textContent       = (d.raw_events || []).length;
+    document.getElementById("cntProcessing").textContent= (d.processing || []).length;
+    document.getElementById("cntError").textContent     = (d.errors     || []).length;
+    document.getElementById("cntCv").textContent        = (d.cv         || []).length;
+    document.getElementById("cntSensor").textContent    = (d.sensor     || []).length;
+    document.getElementById("cntPosition").textContent  = (d.position   || []).length;
+  } catch(e) { console.error("fetchLogCounts:", e); }
+}
+
+// ── 场景进度轮询（独立每秒） ──────────────────────────────────
+async function pollScenario() {
+  try {
+    const r = await fetch("/api/scenario/status");
+    const d = await r.json();
+    _currentSecond = d.current_second || 0;
+    const pct = Math.min(100, (_currentSecond / 30) * 100);
+    document.getElementById("progressBar").style.width = pct + "%";
+    document.getElementById("statusText").textContent =
+      _scenarioRunning
+        ? `T=${_currentSecond}s/30s | CV=${d.cv_count || 0}条`
+        : "已停止";
+
+    // 读取最新的 snapshot 显示实时数据（用 /api/logs 接口拿文件列表）
+    await fetchLatestSnapshot();
+  } catch(e) { console.error("pollScenario:", e); }
+}
+
+async function fetchLatestSnapshot() {
+  try {
+    const r = await fetch("/api/logs");
+    const d = await r.json();
+    const snaps = d.snapshots || [];
+    if (snaps.length === 0) return;
+    const latest = snaps[snaps.length - 1];
+    const fr = await fetch(`/api/logs/${encodeURIComponent(latest)}`);
+    if (!fr.ok) return;
+    const sd = await fr.json();
+    if (!sd.snapshots || !sd.snapshots[0]) return;
+    renderSnapshot(sd.snapshots[0]);
+  } catch(e) { console.error("fetchLatestSnapshot:", e); }
+}
+
+function renderSnapshot(snap) {
+  // PPE
+  const cv = snap.cv_summary || {};
+  let ppeHtml = "";
+  for (const [pid, info] of Object.entries(WORKERS)) {
+    const w = info;
+    const cvInfo = cv[pid];
+    if (!cvInfo) {
+      ppeHtml += `<div class="row"><span>${pid}(${w.name},${w.role})</span><span class="warn">无数据</span></div>`;
+      continue;
+    }
+    const hOk = cvInfo.helmet_missing_ratio < 0.8;
+    const hR  = (cvInfo.helmet_missing_ratio * 100).toFixed(0);
+    const gOk = cvInfo.goggles_missing_ratio < 0.8;
+    const gR  = ((cvInfo.goggles_missing_ratio || 0) * 100).toFixed(0);
+    const sOk = cvInfo.suit_missing_ratio < 0.8;
+    const sR  = ((cvInfo.suit_missing_ratio || 0) * 100).toFixed(0);
+    ppeHtml += `<div class="row">
+      <span>${pid}(${w.name})</span>
+      <span>头盔:<span class="${hOk?'ok':'no'}">${hOk?'OK':'NO('+hR+'%)'}</span>
+      <span>护目镜:<span class="${gOk?'ok':'no'}">${gOk?'OK':'NO('+gR+'%)'}</span>
+      <span>防护服:<span class="${sOk?'ok':'no'}">${sOk?'OK':'NO('+sR+'%)'}</span>
+    </div>`;
+  }
+  document.getElementById("ppeList").innerHTML = ppeHtml || "<div class=empty>无</div>";
+
+  // 传感器
+  const ss = snap.sensor_summary || {};
+  let sHtml = "";
+  for (const [sid, r] of Object.entries(ss)) {
+    const cls = r.status === "alarm" ? "no" : r.status === "warning" ? "warn" : "ok";
+    sHtml += `<div class="row"><span>${sid}</span><span class="${cls}">${r.status}</span></div>`;
+  }
+  document.getElementById("sensorList").innerHTML = sHtml || "<div class=empty>无</div>";
+
+  // 位置
+  const ps = snap.position_summary || {};
+  let posHtml = "";
+  for (const [wid, p] of Object.entries(ps)) {
+    const zone = p.in_danger_zone ? "危险区" : "普通区";
+    const cls = p.in_danger_zone ? "ok" : "warn";
+    const w = WORKERS[wid] || { name: wid };
+    posHtml += `<div class="row"><span>${w.name}(${wid})</span><span class="${cls}">${p.area_id}(${zone})</span></div>`;
+  }
+  document.getElementById("positionList").innerHTML = posHtml || "<div class=empty>无</div>";
+}
+
+// ── Agent轮询（独立每秒） ────────────────────────────────────
+async function pollAgent() {
+  await fetchAgentStatus();
+}
+
+async function fetchAgentStatus() {
+  try {
+    const r = await fetch("/api/agent/status");
+    const d = await r.json();
+
+    _agentRunning = d.running;
+    document.getElementById("btnAgentStart").disabled = d.running;
+    document.getElementById("btnAgentStop").disabled  = !d.running;
+    document.getElementById("agentStatus").textContent = d.running ? "运行中" : "已停止";
+
+    // 统计数据
+    const s = d.stats || {};
+    document.getElementById("statTotal").textContent  = s.total || 0;
+    document.getElementById("statDone").textContent   = s.done || 0;
+    document.getElementById("statError").textContent  = s.error || 0;
+    document.getElementById("queueStats").textContent =
+      `批次 ${s.total||0} | 已完成 ${s.done||0} 条 | 失败 ${s.error||0} 条`;
+
+    // 处理队列（批级）
+    renderQueue(d.pending || {});
+  } catch(e) { console.error("poll agent:", e); }
+}
+
+function renderQueue(pending) {
+  const items = Object.entries(pending).sort();
+  // 只显示处理中/重试中的批次，已完成和失败的过滤掉
+  const active = items.filter(([, info]) => {
+    const s = info.status || "processing";
+    return s === "processing" || s === "retryable";
+  });
+  if (active.length === 0) {
+    document.getElementById("queueList").innerHTML = "<div class=empty>无处理中任务</div>";
+    return;
+  }
+  let html = "";
+  for (const [batch_key, info] of active) {
+    const wts = info.wall_times || [];
+    const count = info.count || wts.length;
+    const first_wt = wts[0] || batch_key;
+    const wallTime = first_wt.replace(/-/g,":").replace(/_/g,".");
+    const status = info.status || "processing";
+    const clsMap = { processing: "processing", retryable: "processing" };
+    const iconMap = { processing: "🔄", retryable: "🔄" };
+    const labelMap = { processing: "处理中", retryable: "重试中" };
+    const cls = clsMap[status] || "processing";
+    const icon = iconMap[status] || "🔄";
+    const label = labelMap[status] || "处理中";
+    html += `<div class="queue-item ${cls}">
+      <span class="qicon">${icon}</span>
+      <span class="qkey">${wallTime.slice(11,23)} (${count}条)</span>
+      <span class="qms">${label}</span>
+    </div>`;
+  }
+  document.getElementById("queueList").innerHTML = html;
+}
+
+async function fetchRawEvents() {
+  try {
+    const r = await fetch("/api/agent/events");
+    if (!r.ok) return;
+    const d = await r.json();
+    const events = d.events || [];
+    if (events.length === 0) {
+      document.getElementById("eventList").innerHTML = "<div class=empty>暂无事件</div>";
+      document.getElementById("evCount").textContent = "";
+      return;
+    }
+    let html = "";
+    for (const ev of events) {
+      const pid = ev.person?.id || "?";
+      const w = WORKERS[pid] || { name: pid, role: "" };
+      const closed = ev.status === "closed";
+      html += `<div class="event-item ${closed ? 'closed' : ''}">
+        <div class="ev-head">
+          <span class="ev-type">${ev.type || '未知'}</span>
+          <span class="ev-time">${ev.wall_time || ev._source_file || ''}</span>
+        </div>
+        <div class="ev-person">${w.name}(${w.role})</div>
+        ${ev.explanation ? `<div class="ev-exp">${ev.explanation}</div>` : ""}
+        ${closed ? `<div class="ev-closed">✓ 已关闭</div>` : ""}
+      </div>`;
+    }
+    document.getElementById("eventList").innerHTML = html;
+    document.getElementById("evCount").textContent = `共 ${events.length} 个事件`;
+  } catch(e) { console.error("fetchRawEvents:", e); }
+}
+
+// ── 场景控制 ─────────────────────────────────────────────────
+async function startScenario() {
+  const scenario = document.getElementById("selScenario").value;
+  try {
+    const r = await fetch("/api/scenario/start", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ scenario }),
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    _scenarioRunning = true;
+    document.getElementById("btnPlay").disabled = true;
+    document.getElementById("btnStop").disabled = false;
+    document.getElementById("statusText").textContent = `启动中... ${d.scenario}`;
+    startScenarioPoll();
+  } catch(e) { alert("启动失败: " + e); }
+}
+
+async function stopScenario() {
+  try {
+    await fetch("/api/scenario/stop", {method:"POST"});
+    _scenarioRunning = false;
+    document.getElementById("btnPlay").disabled = false;
+    document.getElementById("btnStop").disabled = true;
+    document.getElementById("statusText").textContent = "已停止";
+    stopScenarioPoll();
+  } catch(e) { alert("停止失败: " + e); }
+}
+
+// ── 清理日志 ────────────────────────────────────────────────
+async function clearLogs() {
+  if (!confirm("确定清理 A5/logs 下所有日志文件？")) return;
+  try {
+    const r = await fetch("/api/logs/clear", {method:"POST"});
+    const d = await r.json();
+    document.getElementById("statusText").textContent = `已清理 ${d.removed} 个文件`;
+    await fetchLogCounts();
+    await fetchRawEvents();
+  } catch(e) { alert("清理失败: " + e); }
+}
+
+// ── Agent 控制 ────────────────────────────────────────────────
+async function startAgent() {
+  const interval = parseInt(document.getElementById("selInterval").value);
+  const batch    = parseInt(document.getElementById("selBatch").value);
+  try {
+    const r = await fetch("/api/agent/start", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ interval_sec: interval, batch_size: batch }),
+    });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    _agentRunning = true;
+    document.getElementById("btnAgentStart").disabled = true;
+    document.getElementById("btnAgentStop").disabled  = false;
+    document.getElementById("agentStatus").textContent = "运行中";
+    startAgentPoll();
+  } catch(e) { alert("Agent启动失败: " + e); }
+}
+
+async function stopAgent() {
+  try {
+    await fetch("/api/agent/stop", {method:"POST"});
+    _agentRunning = false;
+    document.getElementById("btnAgentStart").disabled = false;
+    document.getElementById("btnAgentStop").disabled  = true;
+    document.getElementById("agentStatus").textContent = "已停止";
+    stopAgentPoll();
+  } catch(e) { alert("Agent停止失败: " + e); }
+}
+
+// ── 规则编辑器 ────────────────────────────────────────────────
+async function loadRules() {
+  const r = await fetch("/api/rules");
+  const d = await r.json();
+  document.getElementById("rulesEditor").value = d.rules || "";
+}
+async function saveRules() {
+  const text = document.getElementById("rulesEditor").value;
+  await fetch("/api/rules", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rules:text})});
+  document.getElementById("statusText").textContent = "规则已保存";
+}
+async function resetRules() {
+  await fetch("/api/rules/reset", {method:"POST"});
+  loadRules();
+  document.getElementById("statusText").textContent = "规则已重置";
+}
+
+// ── 系统提示词 ─────────────────────────────────────────────────
+async function loadSystemPrompt() {
+  const r = await fetch("/api/system_prompt");
+  const d = await r.json();
+  document.getElementById("spEditor").value = d.system_prompt || "";
+}
+async function saveSystemPrompt() {
+  const text = document.getElementById("spEditor").value;
+  await fetch("/api/system_prompt", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({system_prompt:text})});
+  document.getElementById("statusText").textContent = "系统提示词已保存";
+}
+async function resetSystemPrompt() {
+  await fetch("/api/system_prompt/reset", {method:"POST"});
+  loadSystemPrompt();
+  document.getElementById("statusText").textContent = "系统提示词已重置";
+}
+
+// ── 初始化：页面加载即启动日志轮询 ─────────────────────────────
+loadRules();
+loadSystemPrompt();
+startLogPoll();
+</script>
+</body>
+</html>

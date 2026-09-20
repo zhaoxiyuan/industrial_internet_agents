@@ -11,7 +11,7 @@ ARG https_proxy
 ARG no_proxy
 
 # 1. 装 a/ 全部依赖 + 缺失的 fastapi/uvicorn/flask
-COPY a/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt \
  && pip install --no-cache-dir \
         'fastapi>=0.110' \
@@ -19,16 +19,16 @@ RUN pip install -r /tmp/requirements.txt \
         'flask>=3.0'
 
 # 2. COPY 必要的源码(精确控制层,避免无关变更触发 rebuild)
-COPY a/agents/         ./agents/
-COPY a/A5/             ./A5/
-COPY a/A6_A7/          ./A6_A7/
-COPY a/A7/             ./A7/
-COPY a/P8P9/           ./P8P9/
-COPY a/feishu_gateway_cli/ ./feishu_gateway_cli/
-COPY a/frontend/       ./frontend/
-COPY a/data/           ./data/
-COPY a/agent_config/   ./agent_config/
-COPY a/.env            ./.env
+COPY agents/         ./agents/
+COPY A5/             ./A5/
+COPY A6_A7/          ./A6_A7/
+COPY A7/             ./A7/
+COPY P8P9/           ./P8P9/
+COPY feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY frontend/       ./frontend/
+COPY data/           ./data/
+COPY agent_config/   ./agent_config/
+COPY .env            ./.env
 
 EXPOSE 5002
 

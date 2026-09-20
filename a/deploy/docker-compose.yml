@@ -6,8 +6,6 @@
 #   - gateway 复用 a/gateway/Dockerfile(自带 HEALTHCHECK)
 #   - chat_reply 不在本 compose 里,继续宿主机跑 aaaseverstart.py start chat_reply
 
-name: industrial-agents-a
-
 services:
   gateway:
     # 复用 a/gateway/Dockerfile(node:22-alpine + npm 装的 OpenClaw Channel Gateway)

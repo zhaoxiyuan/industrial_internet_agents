@@ -9,15 +9,15 @@ ARG http_proxy
 ARG https_proxy
 ARG no_proxy
 
-COPY a/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt \
  && pip install --no-cache-dir \
         'flask>=3.0' \
         'requests>=2.31'
 
-COPY a/frontend/       ./frontend/
-COPY a/agent_config/   ./agent_config/
-COPY a/.env            ./.env
+COPY frontend/       ./frontend/
+COPY agent_config/   ./agent_config/
+COPY .env            ./.env
 
 EXPOSE 5000
 

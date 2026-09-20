@@ -15,13 +15,13 @@ ARG https_proxy
 ARG no_proxy
 
 # 只用 stdlib,不需额外依赖
-COPY a/web/               ./web/
-COPY a/P8P9/              ./P8P9/
-COPY a/A7/                ./A7/
-COPY a/feishu_gateway_cli/ ./feishu_gateway_cli/
-COPY a/data/              ./data/
-COPY a/agent_config/      ./agent_config/
-COPY a/.env               ./.env
+COPY web/               ./web/
+COPY P8P9/              ./P8P9/
+COPY A7/                ./A7/
+COPY feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY data/              ./data/
+COPY agent_config/      ./agent_config/
+COPY .env               ./.env
 
 # 不 EXPOSE:host 网络模式下端口是宿主机的,EXPOSE 没意义
 # 不写 HEALTHCHECK:web/server.py 是 stdlib http.server,没现成 health 路由

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>a/ - P6-P9 子项目入口</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segee UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            padding: 20px;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+        .header {
+            background: linear-gradient(135deg, #FF9800, #FF5722);
+            color: white;
+            padding: 30px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header p { font-size: 14px; opacity: 0.95; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .card h2 {
+            font-size: 18px;
+            color: #FF5722;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+        .card p { line-height: 1.6; font-size: 14px; }
+        .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+        .links a {
+            background: #FF9800;
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        .links a:hover { background: #FF5722; }
+        code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "Consolas", monospace;
+            font-size: 13px;
+        }
+        .api-list li {
+            padding: 6px 0;
+            font-family: "Consolas", monospace;
+            font-size: 13px;
+        }
+        .api-list .method {
+            display: inline-block;
+            width: 50px;
+            font-weight: bold;
+        }
+        .POST { color: #4CAF50; }
+        .GET { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>a/ — P6-P9 子项目入口</h1>
+            <p>工业互联网边缘智能作业监测系统 · 监测 + 风险研判 + 处置 + 审核/关闭 闭环</p>
+        </div>
+
+        <div class="card">
+            <h2>📡 飞书交互闭环</h2>
+            <p>本服务(端口 8080)是飞书卡片按钮回调的入口。飞书用户点击按钮 → Node.js Gateway 转发到本服务 → 转发到 P8P9 状态机。</p>
+            <div class="links">
+                <a href="http://127.0.0.1:8089" target="_blank">P8P9 Web 面板 (8089)</a>
+                <a href="/p8_detail.html">P8 详情模板</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🔌 配套服务入口</h2>
+            <p>本服务只覆盖 P6-P9 业务辅助 endpoint,以下服务由各自的"自带前端"提供:</p>
+            <div class="links">
+                <a href="http://127.0.0.1:5002" target="_blank">P6 监测 + A5/A6 (5002)</a>
+                <a href="http://127.0.0.1:8089" target="_blank">P8P9 状态机 Web (8089)</a>
+                <a href="http://127.0.0.1:5000" target="_blank">配置前端 (5000)</a>
+                <a href="http://127.0.0.1:5003" target="_blank">飞书配置 UI (5003)</a>
+                <a href="http://127.0.0.1:8787" target="_blank">Gateway 健康检查</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📋 本服务暴露的 API</h2>
+            <ul class="api-list">
+                <li><span class="method POST">POST</span> <code>/api/feishu/card-callback</code> — 飞书卡片按钮回调入口(转发到 P8P9)</li>
+                <li><span class="method GET">GET</span>  <code>/api/jobs/{job_id}/working-memory</code> — P8 工作记忆快照查询</li>
+                <li><span class="method GET">GET</span>  <code>/api/feishu/card-callbacks</code> — 已注册飞书卡片 ID 索引</li>
+            </ul>
+            <p style="margin-top: 12px; color: #666; font-size: 13px;">
+                <strong>说明</strong>: 本服务刻意不服务 <code>/api/config</code>、<code>/api/prompt/{stage}</code>、<code>/api/workflow/*</code> 等 endpoint,
+                因为这些是 P1-P5 主流程相关,不在 a/ 子项目范围内。完整 P1-P10 Web 服务请用根目录 <code>web/server.py</code>(端口 8080,会跟本服务冲突,只能二选一)。
+            </p>
+        </div>
+
+        <div class="card">
+            <h2>⚠️ 与根目录 webui 的差异</h2>
+            <p>根目录原版 <code>web/server.py</code> 是 P1-P10 编排入口,依赖 <code>agents.main_agent</code>(P1-P5 全套);</p>
+            <p>a/ 子项目只服务 P6-P9,所以本服务是<a href="a/web/server.py">精简版</a>,仅保留 飞书卡片回调 + P8 工作记忆查询 + 卡片索引 三个 endpoint。</p>
+            <p>完整 P1-P10 编排请用根目录原版,或重新启动 <code>python aaaseverstart.py start webui</code>。</p>
+        </div>
+    </div>
+</body>
+</html>

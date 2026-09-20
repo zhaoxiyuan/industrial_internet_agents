@@ -9,20 +9,20 @@ ARG http_proxy
 ARG https_proxy
 ARG no_proxy
 
-COPY a/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt \
  && pip install --no-cache-dir \
         'flask>=3.0' \
         'requests>=2.31'
 
-COPY a/agents/             ./agents/
-COPY a/A6_A7/              ./A6_A7/
-COPY a/A7/                 ./A7/
-COPY a/P8P9/               ./P8P9/
-COPY a/feishu_gateway_cli/ ./feishu_gateway_cli/
-COPY a/data/               ./data/
-COPY a/agent_config/       ./agent_config/
-COPY a/.env                ./.env
+COPY agents/             ./agents/
+COPY A6_A7/              ./A6_A7/
+COPY A7/                 ./A7/
+COPY P8P9/               ./P8P9/
+COPY feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY data/               ./data/
+COPY agent_config/       ./agent_config/
+COPY .env                ./.env
 
 EXPOSE 8089
 
