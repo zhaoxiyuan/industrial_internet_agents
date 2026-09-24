@@ -1,0 +1,145 @@
+{
+  "wall_times": [
+    "2026:08:20T14:59:47.793",
+    "2026:08:20T14:59:48.793",
+    "2026:08:20T14:59:49.793",
+    "2026:08:20T14:59:50.793",
+    "2026:08:20T14:59:51.793",
+    "2026:08:20T14:59:52.793",
+    "2026:08:20T14:59:53.793"
+  ],
+  "batch_size": 7,
+  "input_prompt": "处理 7 秒批量数据，时间范围: 2026:08:20T14:59:47.793 ~ 2026:08:20T14:59:53.793\n\n作业票: PTW-2026-0803-动火-007(二级动火)\n必戴PPE: helmet, goggles, protective_suit, safety_shoes\n\n业务规则:\n作业票业务规则(Agent 推理时参考):\n\n1. 动火作业必戴 PPE: 安全帽、护目镜、防护服、安全鞋。\n   但监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\n\n2. 动火作业要求监护人全程在场,不得离开危险作业区。\n   监护人一旦离开动火区,应立即报告。\n\n3. 可燃气体浓度超过 1.0% LEL 时必须立即停止作业,\n   超过 0.7% LEL 时需加强通风并准备暂停预案。\n\n4. 不做去重:每次调用直接输出当前检测到的所有候选事件,\n   同一人员同一类型的持续违规应逐秒报告,不合并也不过滤。\n\n5. 判断是否违规时,要综合 CV 多数表决结果、传感器状态和人员位置,\n   不要仅凭单一证据。\n\n\n[T1/7 @ 2026:08:20T14:59:47.793] PPE检测:\n  P7(张师傅): 25帧,头盔25帧未戴(100%)->*** 头盔缺失 ***\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:47.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:47.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T2/7 @ 2026:08:20T14:59:48.793] PPE检测:\n  P7(张师傅): 25帧,头盔25帧未戴(100%)->*** 头盔缺失 ***\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:48.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:48.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T3/7 @ 2026:08:20T14:59:49.793] PPE检测:\n  P7(张师傅): 25帧,头盔25帧未戴(100%)->*** 头盔缺失 ***\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:49.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:49.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T4/7 @ 2026:08:20T14:59:50.793] PPE检测:\n  P7(张师傅): 25帧,头盔/护目镜/防护服均正常\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:50.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:50.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T5/7 @ 2026:08:20T14:59:51.793] PPE检测:\n  P7(张师傅): 25帧,头盔/护目镜/防护服均正常\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:51.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:51.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T6/7 @ 2026:08:20T14:59:52.793] PPE检测:\n  P7(张师傅): 25帧,头盔/护目镜/防护服均正常\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:52.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:52.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T7/7 @ 2026:08:20T14:59:53.793] PPE检测:\n  P7(张师傅): 25帧,头盔/护目镜/防护服均正常\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:59:53.793] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:59:53.793] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n以上是批量现场数据，每条 [@ 时间] 标注了其归属时间。请综合判断是否存在需报告的候选安全事件。同一人员同一类型的持续违规，应合并为1个事件（覆盖整个batch时间范围），不逐秒重复输出。",
+  "raw_output": "<think>Let me analyze the batch data carefully across all 7 seconds.\n\n**PPE缺失检查:**\n\nP7 (张师傅):\n- T1-T3 (14:59:47.793 - 14:59:49.793): 头盔未戴 100% (3秒)\n- T4-T7 (14:59:50.793 - 14:59:53.793): 头盔/护目镜/防护服均正常\n\nSo P7 has helmet missing for 3 continuous seconds (T1-T3).\n\nP8 (王师傅): All normal, no violations.\n\nP11 (赵师傅):\n- T1-T7: 护目镜未戴 100% (全部7秒)\n\nWait, but business rule says: \"监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\"\nSo P11 is a 监护人 (supervisor), and 监护人 is not required to wear goggles. So P11's goggle missing is NOT a violation.\n\nP7 (张师傅) is a 焊工 (welder), so P7 must wear helmet. T1-T3 shows helmet missing 100%, which is a violation.\n\n**P7 PPE缺失 - 头盔缺失:**\n- T1 @ 14:59:47.793: 25帧,头盔25帧未戴(100%) -> 违规\n- T2 @ 14:59:48.793: 25帧,头盔25帧未戴(100%) -> 违规\n- T3 @ 14:59:49.793: 25帧,头盔25帧未戴(100%) -> 违规\n- T4 @ 14:59:50.793: 正常\n- T5-T7: 正常\n\nSo P7 头盔缺失 is continuous from T1 to T3, which is 3 seconds.\n\n**P11 护目镜缺失:**\n- P11 is 监护人, business rule says 监护人不需要护目镜.\n- So P11 的护目镜缺失不构成违规。不报告。\n\nWait, let me re-read the rules:\n\"判断依据:\n  - helmet/goggles/protective_suit 任一 PPE 的违规帧数 / 总帧数 >= 80%\n  - 输入数据中 cv_summary 里有 \"*** 头盔缺失 ***\" 标注的\"\n\nBut the business rules say 监护人不需要护目镜. So I should consider that.\n\nHmm, but the system prompt says: \"判断依据: helmet/goggles/protective_suit 任一 PPE 的违规帧数 / 总帧数 >= 80%\"\n\nAnd the business rules clarify that 监护人 is exempt from goggles. So P11's goggle missing should NOT be classified as PPE缺失.\n\nSo only P7 helmet missing is a violation.\n\n**传感器告警:**\n- All sensors normal throughout. No violations.\n\n**监护人离岗:**\n- P11 is in 动火区-A(危险区) throughout. No violation.\n\n**Summary of events:**\n1. P7 头盔缺失: T1-T3 (14:59:47.793 - 14:59:49.793), 3 seconds\n\nLet me verify the wall_time and end_wall_time:\n- wall_time: 2026:08:20T14:59:47.793 (first detection)\n- duration_sec: 3 (T1 to T3 = 3 seconds)\n- end_wall_time: 2026:08:20T14:59:50.793\n\nWait, the data says \"wall_time 为最后一条的时间\" for batch mode. But the prompt also says \"wall_time 是事件首次发现的时间\". Let me re-read.\n\nLooking at the prompt again:\n\"duration_sec: 事件持续时长(秒),从 wall_time 开始的连续秒数\"\n\"wall_time: 事件首次发现的时间\"\n\"end_wall_time = wall_time + duration_sec\"\n\nOK so wall_time is the first time the event is detected, and end_wall_time = wall_time + duration_sec.\n\nFor P7 helmet missing:\n- First detected at T1 = 14:59:47.793\n- Last detected at T3 = 14:59:49.793\n- Duration: 3 seconds (T1, T2, T3)\n- end_wall_time = 14:59:47.793 + 3 seconds = 14:59:50.793\n\nLet me construct the output:\n\n```json\n[\n  {\n    \"is_event\": true,\n    \"type\": \"PPE缺失\",\n    \"person\": {\"id\": \"P7\", \"name\": \"张师傅\", \"role\": \"焊工\"},\n    \"evidence\": {\"ppe_type\": \"helmet\", \"violation_frames\": 25, \"total_frames\": 25, \"ratio\": 1.0},\n    \"explanation\": \"P7 在 2026:08:20T14:59:47.793~2026:08:20T14:59:50.793 期间持续未戴头盔,3秒(75帧)均未戴,占比 100%,判定为 PPE 违规\",\n    \"status\": \"ongoing\",\n    \"wall_time\": \"2026:08:20T14:59:47.793\",\n    \"duration_sec\": 3,\n    \"end_wall_time\": \"2026:08:20T14:59:50.793\"\n  }\n]\n```\n\nWait, I need to think about the time format. The input uses \"2026:08:20T14:59:47.793\" format. Let me preserve that.\n\nActually, looking more carefully at the format in the system prompt example:\n\"wall_time\": \"2026-08-06T09:35:12.000\"\n\nBut the input data uses \"2026:08:20T14:59:47.793\". I should use the format from the input data since that's what's in the snapshot.\n\nLet me also reconsider whether P11's goggle missing should be reported. The system prompt says:\n\"PPE缺失 - 判断依据: helmet/goggles/protective_suit 任一 PPE 的违规帧数 / 总帧数 >= 80%\"\n\nBut the business rules say:\n\"监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\"\n\nSo the business rule takes precedence - P11 is exempt from goggles. I should NOT report P11's goggle missing as a violation.\n\nActually wait, let me re-read rule 5: \"判断是否违规时,要综合 CV 多数表决结果、传感器状态和人员位置,不要仅凭单一证据。\" and rule 1: \"动火作业必戴 PPE: 安全帽、护目镜、防护服、安全鞋。但监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\"\n\nSo 监护人 (P11) 不需要护目镜, only needs to check helmet. P11 IS wearing helmet in all frames. So P11 has no PPE violation.\n\nOK my analysis is correct. Only P7's helmet missing is a violation.\n\nLet me also double-check: P7 is 焊工 (welder), so needs all PPE: helmet, goggles, protective_suit, safety_shoes. In T1-T3, only helmet is reported missing, and it's 100%. So the violation is clearly helmet missing.\n\nFinal output: Just one event for P7 helmet missing.\n\nFor the explanation, I need to include the time range \"2026:08:20T14:59:47.793~2026:08:20T14:59:50.793\".</think>\n\n```json\n[\n  {\n    \"is_event\": true,\n    \"type\": \"PPE缺失\",\n    \"person\": {\"id\": \"P7\", \"name\": \"张师傅\", \"role\": \"焊工\"},\n    \"evidence\": {\n      \"ppe_type\": \"helmet\",\n      \"violation_seconds\": [\"14:59:47.793\", \"14:59:48.793\", \"14:59:49.793\"],\n      \"per_second\": [\n        {\"wall_time\": \"2026:08:20T14:59:47.793\", \"violation_frames\": 25, \"total_frames\": 25, \"ratio\": 1.0},\n        {\"wall_time\": \"2026:08:20T14:59:48.793\", \"violation_frames\": 25, \"total_frames\": 25, \"ratio\": 1.0},\n        {\"wall_time\": \"2026:08:20T14:59:49.793\", \"violation_frames\": 25, \"total_frames\": 25, \"ratio\": 1.0}\n      ],\n      \"aggregate_violation_frames\": 75,\n      \"aggregate_total_frames\": 75,\n      \"aggregate_ratio\": 1.0\n    },\n    \"explanation\": \"P7(张师傅,焊工)在 2026:08:20T14:59:47.793~2026:08:20T14:59:50.793 期间持续未戴头盔,3秒共75帧均未戴,占比 100%,判定为 PPE 违规。第4秒起头盔恢复正常,事件结束于 T3 最后一秒。\",\n    \"status\": \"resolved\",\n    \"wall_time\": \"2026:08:20T14:59:47.793\",\n    \"duration_sec\": 3,\n    \"end_wall_time\": \"2026:08:20T14:59:50.793\"\n  }\n]\n```\n\n**分析说明:**\n\n1. **PPE缺失**:\n   - **P7(张师傅,焊工)**: T1~T3 持续 3 秒头盔未戴,占比 100%,**构成违规**。\n   - **P11(赵师傅,监护人)**: 7 秒内持续未戴护目镜,但根据业务规则第1条\"监护人不要求佩戴护目镜,只检查安全帽\",且 P11 全程头盔正常 → **不构成违规,不予报告**。\n   - **P8(王师傅)**: 全程 PPE 正常 → 无违规。\n\n2. **传感器告警**: 火焰/可燃气体/温度传感器全程 normal → 无告警。\n\n3. **监护人离岗**: P11 全程在 动火区-A(危险区) → 未离岗。\n\n故本批次仅输出 1 条候选事件(P7 头盔缺失),违规已自行恢复,status 标记为 resolved。",
+  "parsed_events": [
+    {
+      "is_event": true,
+      "type": "PPE缺失",
+      "person": {
+        "id": "P7",
+        "name": "张师傅",
+        "role": "焊工"
+      },
+      "evidence": {
+        "ppe_type": "helmet",
+        "violation_seconds": [
+          "14:59:47.793",
+          "14:59:48.793",
+          "14:59:49.793"
+        ],
+        "per_second": [
+          {
+            "wall_time": "2026:08:20T14:59:47.793",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": 1.0
+          },
+          {
+            "wall_time": "2026:08:20T14:59:48.793",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": 1.0
+          },
+          {
+            "wall_time": "2026:08:20T14:59:49.793",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": 1.0
+          }
+        ],
+        "aggregate_violation_frames": 75,
+        "aggregate_total_frames": 75,
+        "aggregate_ratio": 1.0
+      },
+      "explanation": "P7(张师傅,焊工)在 2026:08:20T14:59:47.793~2026:08:20T14:59:50.793 期间持续未戴头盔,3秒共75帧均未戴,占比 100%,判定为 PPE 违规。第4秒起头盔恢复正常,事件结束于 T3 最后一秒。",
+      "status": "resolved",
+      "wall_time": "2026:08:20T14:59:47.793",
+      "duration_sec": 3,
+      "end_wall_time": "2026:08:20T14:59:50.793",
+      "event_id": "A5-P7-1787209233207",
+      "first_seen": "2026:08:20T14:59:47.793",
+      "last_seen": "2026:08:20T14:59:53.793"
+    }
+  ],
+  "grouped_results": {
+    "2026:08:20T14:59:47.793": {
+      "wall_time": "2026:08:20T14:59:47.793",
+      "events": [
+        {
+          "is_event": true,
+          "type": "PPE缺失",
+          "person": {
+            "id": "P7",
+            "name": "张师傅",
+            "role": "焊工"
+          },
+          "evidence": {
+            "ppe_type": "helmet",
+            "violation_seconds": [
+              "14:59:47.793",
+              "14:59:48.793",
+              "14:59:49.793"
+            ],
+            "per_second": [
+              {
+                "wall_time": "2026:08:20T14:59:47.793",
+                "violation_frames": 25,
+                "total_frames": 25,
+                "ratio": 1.0
+              },
+              {
+                "wall_time": "2026:08:20T14:59:48.793",
+                "violation_frames": 25,
+                "total_frames": 25,
+                "ratio": 1.0
+              },
+              {
+                "wall_time": "2026:08:20T14:59:49.793",
+                "violation_frames": 25,
+                "total_frames": 25,
+                "ratio": 1.0
+              }
+            ],
+            "aggregate_violation_frames": 75,
+            "aggregate_total_frames": 75,
+            "aggregate_ratio": 1.0
+          },
+          "explanation": "P7(张师傅,焊工)在 2026:08:20T14:59:47.793~2026:08:20T14:59:50.793 期间持续未戴头盔,3秒共75帧均未戴,占比 100%,判定为 PPE 违规。第4秒起头盔恢复正常,事件结束于 T3 最后一秒。",
+          "status": "resolved",
+          "wall_time": "2026:08:20T14:59:47.793",
+          "duration_sec": 3,
+          "end_wall_time": "2026:08:20T14:59:50.793",
+          "event_id": "A5-P7-1787209233207",
+          "first_seen": "2026:08:20T14:59:47.793",
+          "last_seen": "2026:08:20T14:59:53.793"
+        }
+      ]
+    },
+    "2026:08:20T14:59:48.793": {
+      "wall_time": "2026:08:20T14:59:48.793",
+      "events": []
+    },
+    "2026:08:20T14:59:49.793": {
+      "wall_time": "2026:08:20T14:59:49.793",
+      "events": []
+    },
+    "2026:08:20T14:59:50.793": {
+      "wall_time": "2026:08:20T14:59:50.793",
+      "events": []
+    },
+    "2026:08:20T14:59:51.793": {
+      "wall_time": "2026:08:20T14:59:51.793",
+      "events": []
+    },
+    "2026:08:20T14:59:52.793": {
+      "wall_time": "2026:08:20T14:59:52.793",
+      "events": []
+    },
+    "2026:08:20T14:59:53.793": {
+      "wall_time": "2026:08:20T14:59:53.793",
+      "events": [],
+      "tick_ms": 32401.63
+    }
+  },
+  "tick_ms": 32401.63
+}

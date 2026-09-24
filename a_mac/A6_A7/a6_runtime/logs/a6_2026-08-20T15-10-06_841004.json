@@ -1,0 +1,35 @@
+{
+  "a6_event_id": "A6-20260820-151006-829",
+  "aggregated_from": [
+    "2026:08:20T15:08:36.964"
+  ],
+  "event_type": "PPE缺失",
+  "first_seen": "2026-08-20T15:08:34.964",
+  "last_seen": "2026-08-20T15:08:36.964",
+  "wall_time": "2026-08-20T15:08:36.964",
+  "duration_sec": 2.0,
+  "involved_persons": [
+    "P7"
+  ],
+  "risk_level": 1,
+  "risk_level_name": "轻微",
+  "risk_basis": "单人(P7)、持续时长2.0秒、头盔缺失率100%；不满足<2秒误报排除条件（恰为2.0秒，不严格小于2秒），但持续时间极短；无危险区域、传感器、监护人相关信息，无法触发加成项",
+  "suggestions": [
+    "聚合到活跃违规记录A6-20260820-150427-969，合并evidence后由A6重新评估累计风险等级",
+    "持续观察P7是否在数秒内恢复佩戴头盔，若持续缺失则风险等级将逐步提升",
+    "若P7处于动火/高处等危险作业区，需确认is_in_danger_zone字段以触发危险区域+1加成",
+    "建议现场提醒P7规范佩戴安全头盔"
+  ],
+  "reasoning": "1) **聚合决策（铁律触发）**：用户提示中已存在活跃违规记录 A6-20260820-150427-969（person_id=P7, violation_type=PPE缺失），与待研判事件（person_id=P7, event_type=PPE缺失）在 violation_type 和 person_id 上完全一致，三项条件全部满足 → **必须返回 aggregate**，不进行任何重新评估。2) **风险等级研判**：本批次事件 duration=2.0秒，violation_rate=100%，violation_frames=50/50，说明2秒窗口内头盔确实未被佩戴；但持续时长恰好为2.0秒，未严格满足'<2秒误报排除'条件。证据中未提供 is_in_danger_zone、sensor_status、guard_present 字段，无法触发危险区域/环境叠加/管理失控加成。因此基础判定为 level 1（轻微：偶发、单人、短暂）。3) 后续A6合并本evidence后，duration将累计增长，若超过30秒/60秒将触发持续时间加成，需持续追踪。",
+  "evidence": {
+    "ppe_type": "helmet",
+    "violation_ticks": [
+      "T1@15:08:34.964",
+      "T2@15:08:35.964"
+    ],
+    "violation_frames": 50,
+    "total_frames": 50,
+    "violation_rate": "100%"
+  },
+  "timestamp": "2026-08-20T15:10:06.841004"
+}

@@ -1,0 +1,38 @@
+{
+  "a6_event_id": "A6-20260820-150420-192",
+  "aggregated_from": [
+    "2026:08:20T15:02:58.341"
+  ],
+  "event_type": "PPE缺失",
+  "first_seen": "2026-08-20T15:02:50.341",
+  "last_seen": "2026-08-20T15:02:58.341",
+  "wall_time": "2026-08-20T15:02:58.341",
+  "duration_sec": 8.0,
+  "involved_persons": [
+    "P7"
+  ],
+  "risk_level": 1,
+  "risk_level_name": "轻微",
+  "risk_basis": "单人PPE缺失（头盔），当前事件持续8秒，违规率100%；active记录与待研判事件violation_key一致（P7+PPE缺失），按铁律强制聚合。累计活跃跨度约3分钟但中间存在明显空档，evidence中未提供危险区域/传感器/监护人信息，无环境叠加，无群体违规，无管理失控迹象，故维持基础等级。",
+  "suggestions": [
+    "立即通知P7张师傅佩戴好安全头盔",
+    "现场语音/广播提醒该区域人员注意PPE规范",
+    "持续追踪该人员后续是否恢复佩戴，若超30秒未恢复需提升风险等级",
+    "建议排查该区域监控是否存在其他人员类似违规"
+  ],
+  "reasoning": "1) 聚合判断：用户prompt中存在活跃违规记录A6-20260820-150219-206，其violation_type='PPE缺失'、person_id='P7'，与待研判事件完全一致，触发决策铁律三项条件，必须返回aggregate，不重新评估。虽然中间存在约2分57秒的空档，但断续违规按规则视为同一违规进行聚合，由A6合并evidence后再重新评估。2) 风险等级：基础场景为单人PPE缺失（头盔），持续8秒（<10秒），属于轻微级别。evidence未提供is_in_danger_zone、sensor_status、guard_present信息，无法判定危险区域加成、环境叠加加成或管理失控加成。当前事件violation_rate达100%，continuous_seconds=5秒，说明违规确实持续存在，但持续时间尚未达到10秒基础阈值（当前事件）或30秒/60秒加成阈值。综合评定为轻微（level 1）。",
+  "evidence": {
+    "ppe_type": "helmet",
+    "violation_frames_per_sec": 25,
+    "total_frames_per_sec": 25,
+    "violation_rate": "100%",
+    "ppe_required": [
+      "helmet",
+      "goggles",
+      "protective_suit",
+      "safety_shoes"
+    ],
+    "continuous_seconds": 5
+  },
+  "timestamp": "2026-08-20T15:04:20.194189"
+}

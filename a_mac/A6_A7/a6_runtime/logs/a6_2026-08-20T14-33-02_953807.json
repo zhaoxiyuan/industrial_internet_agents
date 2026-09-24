@@ -1,0 +1,36 @@
+{
+  "a6_event_id": "A6-20260820-143302-943",
+  "aggregated_from": [
+    "2026:08:20T14:32:07.210"
+  ],
+  "event_type": "PPE缺失",
+  "first_seen": "2026-08-20T14:32:06.210",
+  "last_seen": "2026-08-20T14:32:07.210",
+  "wall_time": "2026-08-20T14:32:07.210",
+  "duration_sec": 1.0,
+  "involved_persons": [
+    "P7"
+  ],
+  "risk_level": 0,
+  "risk_level_name": "无风险",
+  "risk_basis": "本次事件持续时长仅1.0秒（<2秒），属于短暂摘头盔行为（疑似擦汗等），依据快速排除规则判定为无风险误报。聚合后首次判断为准，不升级。",
+  "suggestions": [
+    "无需报警或干预",
+    "持续观察P7后续是否再次出现PPE缺失"
+  ],
+  "reasoning": "1. 聚合决策：用户提示中已存在P7的活跃违规记录（A6-20260820-143237-987），violation_type为PPE缺失，person_id为P7，与待研判事件的三要素完全一致，触发聚合铁律，必须返回aggregate。2. 风险等级：待研判事件duration=1.0秒，<2秒，属于'快速排除规则'适用场景（疑似短暂摘头盔擦汗），判定risk_level=0。3. 同时依据规则'即使聚合后duration>2秒也以首次判断为准'，首次判断为无风险，聚合后维持结论不变。",
+  "evidence": {
+    "ppe_item": "helmet",
+    "T1": {
+      "total_frames": 25,
+      "missing_frames": 25,
+      "ratio": "100%"
+    },
+    "T2": {
+      "total_frames": 25,
+      "missing_frames": 25,
+      "ratio": "100%"
+    }
+  },
+  "timestamp": "2026-08-20T14:33:02.953807"
+}

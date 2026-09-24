@@ -1,0 +1,37 @@
+{
+  "a6_event_id": "A6-20260820-143409-500",
+  "aggregated_from": [
+    "2026:08:20T14:33:27.893"
+  ],
+  "event_type": "PPE缺失",
+  "first_seen": "2026-08-20T14:33:27.893",
+  "last_seen": "2026-08-20T14:33:33.893",
+  "wall_time": "2026-08-20T14:33:33.893",
+  "duration_sec": 6.0,
+  "involved_persons": [
+    "P7"
+  ],
+  "risk_level": 1,
+  "risk_level_name": "轻微",
+  "risk_basis": "1. 单人（P7张师傅）头盔缺失，持续6秒，介于2秒误报阈值与10秒一般阈值之间；2. 无危险区域标识，无传感器报警，基础等级为轻微（1级）；3. 满足聚合铁律：活跃记录A6-20260820-143302-943的violation_type=PPE缺失、person_id=P7与待研判事件完全一致，必须聚合。",
+  "suggestions": [
+    "持续观察P7张师傅头盔佩戴情况，确认是否已恢复佩戴",
+    "若该区域属于动火/高处作业区域，需复核施工人员PPE管理规定并加强现场督导",
+    "可在该作业点附近增设PPE智能识别摄像头与语音提醒设备"
+  ],
+  "reasoning": "首先检查活跃违规记录：存在A6-20260820-143302-943（person_id=P7, violation_type=PPE缺失），与待研判事件A5-P7-1787207631864的person_id和violation_type完全匹配，根据铁律必须返回aggregation_decision=aggregate。风险等级方面：该事件持续6秒（>2秒误报阈值，排除risk_level=0），但<10秒，属于短暂单人PPE缺失；无危险区域标识（is_in_danger_zone未提供）、无传感器报警、无监护人缺失信息，因此基础等级判定为轻微（1级）。不触发任何等级加成条件（持续时间未超30秒/60秒、非多人违规、无环境叠加、非管理失控）。聚合后A6系统将合并evidence重新评估累计风险。",
+  "evidence": {
+    "ppe_item": "helmet",
+    "violation_frames": 25,
+    "total_frames": 25,
+    "violation_ratio": "100%",
+    "cv_annotation": "*** 头盔缺失 ***",
+    "violation_seconds": [
+      "2026:08:20T14:33:27.893",
+      "2026:08:20T14:33:28.893",
+      "2026:08:20T14:33:29.893"
+    ],
+    "recovered_at": "2026:08:20T14:33:30.893"
+  },
+  "timestamp": "2026-08-20T14:34:09.501824"
+}

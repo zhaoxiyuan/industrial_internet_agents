@@ -1,0 +1,66 @@
+{
+  "event_id": "A5-P7-1789442970702",
+  "wall_time": "2026:09:15T11:29:19.043",
+  "event_data": {
+    "is_event": true,
+    "type": "PPE缺失",
+    "person": {
+      "id": "P7",
+      "name": "张师傅",
+      "role": "焊工"
+    },
+    "evidence": {
+      "ppe_item": "helmet",
+      "missing_frames": 25,
+      "total_frames": 25,
+      "missing_ratio": 1.0,
+      "cv_annotation": "*** 头盔缺失 ***"
+    },
+    "explanation": "P7(张师傅)在 2026:09:15T11:29:19.043~2026:09:15T11:29:22.043 期间持续未佩戴头盔,每25帧中25帧未戴,占比 100%,共持续4秒,判定为 PPE 违规。",
+    "status": "ongoing",
+    "wall_time": "2026:09:15T11:29:19.043",
+    "duration_sec": 4,
+    "end_wall_time": "2026:09:15T11:29:22.043",
+    "event_id": "A5-P7-1789442970702",
+    "first_seen": "2026:09:15T11:29:15.043",
+    "last_seen": "2026:09:15T11:29:22.043"
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260915-112950-238",
+      "aggregated_from": [
+        "A5-P7-1789442970702"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-09-15T11:29:15.043",
+      "last_seen": "2026-09-15T11:29:22.043",
+      "wall_time": "2026-09-15T11:29:22.043",
+      "duration_sec": 7.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 1,
+      "risk_level_name": "轻微",
+      "risk_basis": "P7(张师傅)头盔缺失，当前批检测持续7秒（25/25帧全部缺失，缺失率100%），属于短暂违规。evidence未提供is_in_danger_zone、sensor_status、guard_present等字段，无法判断危险区域/环境叠加/管理失控加成。基础等级判定为轻微（偶发、单人、短暂）。",
+      "suggestions": [
+        "持续观察P7是否在10秒内恢复佩戴头盔",
+        "若持续超过10秒未恢复佩戴，应升级风险等级并发出提醒",
+        "确认P7所在作业区域是否属于危险作业区，以便准确评估风险等级",
+        "监控该活跃违规记录的后续聚合事件，A6合并evidence后将重新评估整体风险"
+      ],
+      "reasoning": "1) 聚合判断：当前活跃记录 A6-20260915-090049-695 中 person_id=P7、violation_type=PPE缺失，与待研判事件完全一致，违反类型和人员均匹配，满足聚合铁律条件，必须聚合到该记录。2) 风险等级：当前事件持续7秒，头盔缺失率100%，属于短暂单人违规；evidence中未提供危险区域、传感器状态、监护人等关键信息，无法触发区域/环境/管理失控加成，基础等级为1级（轻微）。3) 注意：活跃记录first_seen为08:59:59，距当前事件11:29:22存在较大时间跨度，但活跃记录status为ongoing且violation_key一致，按规则仍判定为同一违规的延续，后续A6合并evidence后将基于累计duration重新评估风险等级。",
+      "evidence": {
+        "ppe_item": "helmet",
+        "missing_frames": 25,
+        "total_frames": 25,
+        "missing_ratio": 1.0,
+        "cv_annotation": "*** 头盔缺失 ***"
+      },
+      "timestamp": "2026-09-15T11:29:50.259665"
+    },
+    "tick_ms": 14109.45
+  },
+  "timestamp": "2026-09-15T11:29:50.406142"
+}

@@ -1,0 +1,32 @@
+{
+  "a6_event_id": "A6-20260820-151321-081",
+  "aggregated_from": [
+    "2026:08:20T15:12:16.357"
+  ],
+  "event_type": "传感器告警",
+  "first_seen": "2026-08-20T15:12:15.357",
+  "last_seen": "2026-08-20T15:12:16.357",
+  "wall_time": "2026-08-20T15:12:16.357",
+  "duration_sec": 1.0,
+  "involved_persons": [
+    "unknown"
+  ],
+  "risk_level": 1,
+  "risk_level_name": "轻微",
+  "risk_basis": "gas_detector_03 触发告警，但读数仅 1.0% LEL，远低于危险阈值（通常 20-25% LEL 才构成实质危险），持续时间仅 1 秒，属于低浓度瞬时波动告警，暂无实质风险。",
+  "suggestions": [
+    "持续关注 gas_detector_03 的后续读数变化趋势",
+    "排查传感器是否存在低阈值误报或零点漂移",
+    "确认现场是否有可燃气体泄漏源，排除真实隐患"
+  ],
+  "reasoning": "查询 gas_detector_03 的活跃违规记录，返回为空，确认本事件为新建研判（非聚合）。风险研判依据：传感器状态为 alarm，但实际读数 1.0% LEL 极低（% LEL 是爆炸下限百分比，1% 远低于常规警戒值 10% 和危险值 20-25%），且持续仅 1 秒，判定为轻微级别的低浓度波动告警。当前无其他违规事件或环境叠加，无需提升等级。",
+  "evidence": {
+    "sensor_id": "gas_detector_03",
+    "sensor_type": "gas_detector",
+    "value": 1.0,
+    "unit": "% LEL",
+    "status": "alarm",
+    "wall_time": "2026-08-20T15:12:16.357"
+  },
+  "timestamp": "2026-08-20T15:13:21.081365"
+}

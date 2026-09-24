@@ -1,0 +1,84 @@
+{
+  "wall_times": [
+    "2026:08:20T14:32:06.210",
+    "2026:08:20T14:32:07.210"
+  ],
+  "batch_size": 2,
+  "input_prompt": "处理 2 秒批量数据，时间范围: 2026:08:20T14:32:06.210 ~ 2026:08:20T14:32:07.210\n\n作业票: PTW-2026-0803-动火-007(二级动火)\n必戴PPE: helmet, goggles, protective_suit, safety_shoes\n\n业务规则:\n作业票业务规则(Agent 推理时参考):\n\n1. 动火作业必戴 PPE: 安全帽、护目镜、防护服、安全鞋。\n   但监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\n\n2. 动火作业要求监护人全程在场,不得离开危险作业区。\n   监护人一旦离开动火区,应立即报告。\n\n3. 可燃气体浓度超过 1.0% LEL 时必须立即停止作业,\n   超过 0.7% LEL 时需加强通风并准备暂停预案。\n\n4. 不做去重:每次调用直接输出当前检测到的所有候选事件,\n   同一人员同一类型的持续违规应逐秒报告,不合并也不过滤。\n\n5. 判断是否违规时,要综合 CV 多数表决结果、传感器状态和人员位置,\n   不要仅凭单一证据。\n\n\n[T1/2 @ 2026:08:20T14:32:06.210] PPE检测:\n  P7(张师傅): 25帧,头盔25帧未戴(100%)->*** 头盔缺失 ***\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:32:06.210] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:32:06.210] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n[T2/2 @ 2026:08:20T14:32:07.210] PPE检测:\n  P7(张师傅): 25帧,头盔25帧未戴(100%)->*** 头盔缺失 ***\n  P8(王师傅): 25帧,头盔/护目镜/防护服均正常\n  P11(赵师傅): 25帧,护目镜25帧未戴(100%)->*** 护目镜缺失 ***\n[@ 2026:08:20T14:32:07.210] 传感器:\n  flame_detector_03(flame_detector_03): False -> normal 正常\n  gas_detector_03(gas_detector_03): 0.2 -> normal 正常\n  temperature_03(temperature_03): 26.0 -> normal 正常\n[@ 2026:08:20T14:32:07.210] 位置:\n  P11: 动火区-A(危险区) \n  P7: 动火区-A(危险区) \n  P8: 动火区-A(危险区) \n\n以上是批量现场数据，每条 [@ 时间] 标注了其归属时间。请综合判断是否存在需报告的候选安全事件。同一人员同一类型的持续违规，应合并为1个事件（覆盖整个batch时间范围），不逐秒重复输出。",
+  "raw_output": "<think>Let me analyze the batch data covering 2 seconds: 2026:08:20T14:32:06.210 ~ 2026:08:20T14:32:07.210.\n\n**PPE Check:**\n- P7 (张师傅, 焊工): 头盔缺失 100% (25/25 frames in T1, 25/25 in T2) → PPE violation\n- P8 (王师傅): All PPE normal → no violation\n- P11 (赵师傅, 监护人): 护目镜缺失 100%. BUT per business rule #1, 监护人 does not require goggles (only needs helmet). So this is NOT a violation.\n\nWait, the rule says: \"监护人不要求佩戴护目镜(需要观察现场情况),只检查安全帽。\"\n\nSo P11 not wearing goggles is NOT a violation because P11 is a 监护人 and per business rule, 监护人 only needs to check helmet (not goggles). The data doesn't show P11 missing helmet, only goggles. So P11 has no PPE violation.\n\n- P11 helmet: Not mentioned as missing → normal\n\n**Sensor Check:**\n- flame_detector_03: normal\n- gas_detector_03: 0.2 → normal\n- temperature_03: 26.0 → normal\nNo sensor alarms.\n\n**Guardian on duty (监护人离岗):**\n- P11 (赵师傅) is in 动火区-A(危险区) → in danger zone, not absent\nNo guardian violation.\n\n**Summary of events:**\n1. P7 头盔缺失 - continuous across T1 and T2 (2 seconds)\n   - wall_time: 2026:08:20T14:32:06.210\n   - duration_sec: 2 (T1 at 06.210 and T2 at 07.210, so 2 seconds)\n   - end_wall_time: 2026:08:20T14:32:08.210\n\nWait, let me reconsider the duration. The batch covers 14:32:06.210 to 14:32:07.210. That's 1 second of data actually. But there are 2 ticks: T1 at 06.210 and T2 at 07.210.\n\nThe prompt says: \"处理 2 秒批量数据\" - processing 2 seconds of batch data. And the range is 06.210 ~ 07.210, which is 1 second apart. But there are 2 snapshots.\n\nActually, wall_time starts at first detection (06.210), duration_sec = number of seconds in batch. If batch has 2 snapshots at 06.210 and 07.210, that's roughly 1 second span but 2 data points. \n\nLooking at the format more carefully: wall_time is the start of first detection, end_wall_time = wall_time + duration_sec.\n\nIf wall_time = 2026:08:20T14:32:06.210 and duration_sec = 2, then end_wall_time = 2026:08:20T14:32:08.210.\n\nBut the data only spans to 07.210. Hmm. Let me think about this differently.\n\nLooking at example in the instructions: \"P7 在 2026-08-06T09:35:12.000~09:35:17.000 期间持续未戴头盔,75帧中75帧未戴,占比 100%,判定为 PPE 违规\" with wall_time=\"2026-08-06T09:35:12.000\", duration_sec=6, end_wall_time=\"2026-08-06T09:35:17.000\".\n\n12.000 + 6 seconds = 18.000, but the end is 17.000. So it seems duration_sec is the count of seconds, and the end time is the last observed second's timestamp.\n\nWait: 12.000 to 17.000 with duration_sec=6. That means the snapshots are at 12, 13, 14, 15, 16, 17 (6 seconds). And 12 + 6 = 18, but end_wall_time = 17.000.\n\nHmm, this is a bit confusing. Let me re-read: \"end_wall_time 必须等于 wall_time + duration_sec,时间戳格式一致\"\n\nOK so end_wall_time must equal wall_time + duration_sec. But the example shows 12.000 + 6 = 18.000, not 17.000.\n\nWait, maybe the format is a bit loose. Or maybe duration_sec counts as \"the number of ticks\" which is 6, and end_wall_time is the timestamp of the last tick. In that case:\n- wall_time = 12.000 (start of first tick)\n- duration_sec = 6 (number of ticks or span)\n- end_wall_time = 17.000 (end of last tick)\n\nSo duration_sec is not strictly added to wall_time as a time delta. It seems to represent the duration in seconds (17-12 = 5, not 6). Actually 17-12 = 5 seconds span but duration_sec=6.\n\nHmm, the rule says \"end_wall_time 必须等于 wall_time + duration_sec\" but the example contradicts this. Let me just follow the example since that's the canonical example. So I'll set end_wall_time as the timestamp of the last snapshot.\n\nIn my case:\n- Batch spans 06.210 ~ 07.210\n- wall_time = 2026:08:20T14:32:06.210\n- end_wall_time = 2026:08:20T14:32:07.210\n- duration_sec = 2 (2 snapshots in batch)\n\nActually wait, if end_wall_time = wall_time + duration_sec, then duration_sec = 1.000 seconds. So duration_sec = 1.\n\nBut that doesn't match the example either. Let me just follow the example pattern where:\n- duration_sec seems to be the count of seconds observed (or some other count)\n- end_wall_time is the last observed timestamp\n\nThe example has 75 frames in the explanation, so 75/5 = 15 frames per second, suggests 5 seconds of data at 15fps, but duration_sec=6.\n\nI think there's some inconsistency. Let me just use: duration_sec = number of ticks (snapshots) in the batch, and end_wall_time = last snapshot's timestamp.\n\nFor this batch: 2 ticks → duration_sec = 2, wall_time = 06.210, end_wall_time = 07.210.\n\nActually, I think a more sensible interpretation is: duration_sec is the duration in seconds. So if snapshots are at 06.210 and 07.210, that's 1 second of wall-clock time. duration_sec = 1.\n\nBut the example: snapshots at 12.000 and 17.000 → 5 seconds → duration_sec = 5? But the example says duration_sec=6.\n\nI'm confused. Let me just go with a reasonable interpretation:\n- duration_sec = number of snapshots (ticks) in the batch\n- end_wall_time = timestamp of last snapshot\n\nFor 2-tick batch: duration_sec = 2, wall_time = 06.210, end_wall_time = 07.210.\n\nOK, I'll go with that.\n\n**Events to report:**\n\n1. P7 PPE缺失 (头盔):\n   - wall_time: 2026:08:20T14:32:06.210\n   - duration_sec: 2\n   - end_wall_time: 2026:08:20T14:32:07.210\n   - person: {id: \"P7\", name: \"张师傅\", role: \"焊工\"}\n   - evidence: 25/25 frames missing helmet in T1 (100%), 25/25 in T2 (100%)\n\nThat's the only event. Let me finalize.</think>\n\n```json\n[\n  {\n    \"is_event\": true,\n    \"type\": \"PPE缺失\",\n    \"person\": {\"id\": \"P7\", \"name\": \"张师傅\", \"role\": \"焊工\"},\n    \"evidence\": {\n      \"ppe_item\": \"helmet\",\n      \"T1\": {\"total_frames\": 25, \"missing_frames\": 25, \"ratio\": \"100%\"},\n      \"T2\": {\"total_frames\": 25, \"missing_frames\": 25, \"ratio\": \"100%\"}\n    },\n    \"explanation\": \"P7(张师傅,焊工)在 2026-08-20T14:32:06.210~2026-08-20T14:32:07.210 期间持续未佩戴头盔,两批次各 25帧全部未戴,占比均为 100%,判定为 PPE 违规\",\n    \"status\": \"ongoing\",\n    \"wall_time\": \"2026-08-20T14:32:06.210\",\n    \"duration_sec\": 2,\n    \"end_wall_time\": \"2026-08-20T14:32:07.210\"\n  }\n]\n```",
+  "parsed_events": [
+    {
+      "is_event": true,
+      "type": "PPE缺失",
+      "person": {
+        "id": "P7",
+        "name": "张师傅",
+        "role": "焊工"
+      },
+      "evidence": {
+        "ppe_item": "helmet",
+        "T1": {
+          "total_frames": 25,
+          "missing_frames": 25,
+          "ratio": "100%"
+        },
+        "T2": {
+          "total_frames": 25,
+          "missing_frames": 25,
+          "ratio": "100%"
+        }
+      },
+      "explanation": "P7(张师傅,焊工)在 2026-08-20T14:32:06.210~2026-08-20T14:32:07.210 期间持续未佩戴头盔,两批次各 25帧全部未戴,占比均为 100%,判定为 PPE 违规",
+      "status": "ongoing",
+      "wall_time": "2026-08-20T14:32:06.210",
+      "duration_sec": 2,
+      "end_wall_time": "2026-08-20T14:32:07.210",
+      "event_id": "A5-P7-1787207561706",
+      "first_seen": "2026:08:20T14:32:06.210",
+      "last_seen": "2026:08:20T14:32:07.210"
+    }
+  ],
+  "grouped_results": {
+    "2026:08:20T14:32:06.210": {
+      "wall_time": "2026:08:20T14:32:06.210",
+      "events": []
+    },
+    "2026:08:20T14:32:07.210": {
+      "wall_time": "2026:08:20T14:32:07.210",
+      "events": [
+        {
+          "is_event": true,
+          "type": "PPE缺失",
+          "person": {
+            "id": "P7",
+            "name": "张师傅",
+            "role": "焊工"
+          },
+          "evidence": {
+            "ppe_item": "helmet",
+            "T1": {
+              "total_frames": 25,
+              "missing_frames": 25,
+              "ratio": "100%"
+            },
+            "T2": {
+              "total_frames": 25,
+              "missing_frames": 25,
+              "ratio": "100%"
+            }
+          },
+          "explanation": "P7(张师傅,焊工)在 2026-08-20T14:32:06.210~2026-08-20T14:32:07.210 期间持续未佩戴头盔,两批次各 25帧全部未戴,占比均为 100%,判定为 PPE 违规",
+          "status": "ongoing",
+          "wall_time": "2026-08-20T14:32:06.210",
+          "duration_sec": 2,
+          "end_wall_time": "2026-08-20T14:32:07.210",
+          "event_id": "A5-P7-1787207561706",
+          "first_seen": "2026:08:20T14:32:06.210",
+          "last_seen": "2026:08:20T14:32:07.210"
+        }
+      ],
+      "tick_ms": 29076.25
+    }
+  },
+  "tick_ms": 29076.25
+}

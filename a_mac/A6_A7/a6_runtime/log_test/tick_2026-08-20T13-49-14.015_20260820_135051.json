@@ -1,0 +1,78 @@
+{
+  "event_id": "2026:08:20T13:49:14.015",
+  "wall_time": "2026:08:20T13:49:14.015",
+  "event_data": {
+    "wall_time": "2026:08:20T13:49:14.015",
+    "events": [
+      {
+        "is_event": true,
+        "type": "PPE缺失",
+        "person": {
+          "id": "P7",
+          "name": "张师傅",
+          "role": "焊工"
+        },
+        "evidence": {
+          "ppe_item": "helmet",
+          "violation_frames_per_sec": 25,
+          "total_frames_per_sec": 25,
+          "violation_ratio": 1.0,
+          "continuous_seconds": 3,
+          "timestamps_with_violation": [
+            "2026:08:20T13:49:14.015",
+            "2026:08:20T13:49:15.015",
+            "2026:08:20T13:49:16.015"
+          ]
+        },
+        "explanation": "P7 在 2026:08:20T13:49:14.015~2026:08:20T13:49:17.015 期间持续未戴头盔,3秒共75帧中75帧头盔缺失,占比 100%,判定为 PPE 违规",
+        "status": "ongoing",
+        "wall_time": "2026:08:20T13:49:14.015",
+        "duration_sec": 3,
+        "end_wall_time": "2026:08:20T13:49:17.015",
+        "event_id": "A5-P7-1787205031632",
+        "first_seen": "2026:08:20T13:49:14.015",
+        "last_seen": "2026:08:20T13:49:20.015"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-135051-186",
+      "aggregated_from": [
+        "2026:08:20T13:49:14.015"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-08-20T13:49:14.015",
+      "last_seen": "2026-08-20T13:49:20.015",
+      "wall_time": "2026-08-20T13:49:20.015",
+      "duration_sec": 6.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 2,
+      "risk_level_name": "一般",
+      "risk_basis": "LLM 输出解析失败，使用默认分级",
+      "suggestions": [
+        "待人工确认"
+      ],
+      "reasoning": "原始输出: <think>Let me analyze this event carefully.\n\n**Event to evaluate:**\n- Event ID: A5-P7-1787205031632\n- Event type: PPE缺失 (PPE Missing)\n- Person: P7 (张师傅)\n- First seen: 2026:08:20T13:49:14.015\n- Last se",
+      "evidence": {
+        "ppe_item": "helmet",
+        "violation_frames_per_sec": 25,
+        "total_frames_per_sec": 25,
+        "violation_ratio": 1.0,
+        "continuous_seconds": 3,
+        "timestamps_with_violation": [
+          "2026:08:20T13:49:14.015",
+          "2026:08:20T13:49:15.015",
+          "2026:08:20T13:49:16.015"
+        ]
+      },
+      "timestamp": "2026-08-20T13:50:51.187190"
+    },
+    "tick_ms": 19574.38
+  },
+  "timestamp": "2026-08-20T13:50:51.214073"
+}

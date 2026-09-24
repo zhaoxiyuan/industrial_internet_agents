@@ -1,0 +1,70 @@
+{
+  "event_id": "2026:08:20T15:17:07.159",
+  "wall_time": "2026:08:20T15:17:07.159",
+  "event_data": {
+    "wall_time": "2026:08:20T15:17:07.159",
+    "events": [
+      {
+        "is_event": true,
+        "type": "传感器告警",
+        "person": null,
+        "evidence": {
+          "sensor_id": "gas_detector_03",
+          "sensor_type": "gas_detector",
+          "value": "1.0",
+          "unit": "%LEL",
+          "status": "alarm",
+          "rule_reference": "业务规则3：可燃气体浓度超过 1.0% LEL 时必须立即停止作业"
+        },
+        "explanation": "gas_detector_03 在 2026-08-20T15:17:03.159~2026-08-20T15:17:05.159 期间持续报警,可燃气体浓度读数为 1.0% LEL,达到业务规则3中'超过1.0% LEL必须立即停止作业'的阈值",
+        "status": "ongoing",
+        "wall_time": "2026-08-20T15:17:03.159",
+        "duration_sec": 3,
+        "end_wall_time": "2026-08-20T15:17:05.159",
+        "event_id": "A5-?-1787210252562",
+        "first_seen": "2026:08:20T15:17:03.159",
+        "last_seen": "2026:08:20T15:17:07.159"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-151752-078",
+      "aggregated_from": [
+        "2026:08:20T15:17:07.159"
+      ],
+      "event_type": "传感器告警",
+      "first_seen": "2026-08-20T15:17:03.159",
+      "last_seen": "2026-08-20T15:17:07.159",
+      "wall_time": "2026-08-20T15:17:07.159",
+      "duration_sec": 4.0,
+      "involved_persons": [
+        "unknown"
+      ],
+      "risk_level": 2,
+      "risk_level_name": "一般",
+      "risk_basis": "gas_detector_03 报可燃气体浓度达到 1.0%LEL 报警阈值（status=alarm），触发业务规则3规定的'必须立即停止作业'条件。当前为单一传感器告警，聚合持续约8秒（15:16:59~15:17:07），尚未确认人员暴露情况，但气体报警本身即为环境风险，需要响应。",
+      "suggestions": [
+        "立即通知现场作业人员停止动火/作业活动",
+        "撤离危险区域内人员至安全区域",
+        "检查气体泄漏源并加强通风",
+        "持续监测 gas_detector_03 数值变化，确认浓度下降趋势",
+        "待浓度降至安全阈值以下后方可恢复作业"
+      ],
+      "reasoning": "1) **聚合判断**：当前活跃违规 A6-20260820-151731-360 的 violation_type='传感器告警' 与待研判事件 event_type='传感器告警' 一致；活跃记录 last_seen(15:17:02) 与待研判事件 first_seen(15:17:03) 紧密衔接，传感器均为 gas_detector_03，属于同一物理传感器告警的延续。满足铁律全部三条条件（存在活跃记录 + 类型一致 + 传感器一致），必须返回 aggregate。2) **等级判定**：可燃气体浓度达到 1.0%LEL 报警阈值，已触发业务规则3（浓度超过1.0%LEL必须立即停止作业），属于环境类风险事件。聚合后持续约8秒，未超过30秒（无持续时间加成）；仅有单一传感器告警（无多源环境叠加）；未检测到人员违规或监护人缺失信息。综合评定为一般风险（等级2），需立即响应停止作业。",
+      "evidence": {
+        "sensor_id": "gas_detector_03",
+        "sensor_type": "gas_detector",
+        "value": "1.0",
+        "unit": "%LEL",
+        "status": "alarm",
+        "rule_reference": "业务规则3：可燃气体浓度超过 1.0% LEL 时必须立即停止作业"
+      },
+      "timestamp": "2026-08-20T15:17:52.079600"
+    },
+    "tick_ms": 19534.71
+  },
+  "timestamp": "2026-08-20T15:17:52.097206"
+}
