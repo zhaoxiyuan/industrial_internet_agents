@@ -126,7 +126,7 @@ def test_rectifying_card_restores_submit_and_relinquish_after_rejection():
     card = build_job_card(
         state, version=state["version"], entry_url="http://x",
         actor_open_id="ou_test_user_001",
-        upload_url_factory=lambda job_id, target: f"http://x/{job_id}/{target}",
+        upload_url_factory=lambda job_id, target, actor: f"http://x/{job_id}/{target}?open_id={actor}",
     )
     elements = card["body"]["elements"]
     forms = [element for element in elements if element.get("tag") == "form"]

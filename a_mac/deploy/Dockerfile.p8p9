@@ -22,7 +22,8 @@ COPY P8P9/               ./P8P9/
 COPY feishu_gateway_cli/ ./feishu_gateway_cli/
 COPY data/               ./data/
 COPY agent_config/       ./agent_config/
-COPY .env                ./.env
+
+# 运行时配置由 compose 的 env_file 与只读挂载提供，不把签名密钥烘焙进镜像。
 
 EXPOSE 8089
 

@@ -148,29 +148,29 @@ def _dl_link_factory(job_id: str) -> callable:
     return factory
 
 
-def _upload_url_factory(job_id: str) -> callable:
+def _upload_url_factory(job_id: str, version: int) -> callable:
     """P8 附件上传 link_button 工厂（2026-09-20 方案 B）。
 
-    返回一个 (job_id, target) → URL 的 callable（open_id 由 cards.py 内部追加），
+    返回一个 (job_id, target, open_id) → URL 的 callable，
     用于 cards.py 在 acknowledged / materials_in_audit / waiting_human_review /
     ready_to_close 四个态渲染 "📎 上传附件" link_button。
 
-    URL 形如：
-      {base}/api/closure/upload/new?job_id={job_id}&target={target}
-
-    cards.py 会追加 &open_id={actor_open_id}（由 build_job_card 调用方传入），
+    URL 含 job_id、target、open_id、作业版本、过期时间和 HMAC 签名。
+    cards.py 将接取人 open_id 传给工厂，由工厂一次性签名完整参数。
     服务端 upload_new() 会：
       - 创建 tk_xxx token
       - 302 → /api/closure/upload?token=tk_xxx（上传页 HTML）
       - 业务校验：materials_submission 要求 accepted_by.open_id == open_id
     """
     import os
+    from ..upload_link_signing import signed_upload_query
     base = os.environ.get("P8P9_WEB_BASE_URL", "http://127.0.0.1:8089")
 
-    def factory(jid: str, target: str) -> str:
+    def factory(jid: str, target: str, open_id: str) -> str:
+        query = signed_upload_query(jid, target, open_id, version)
         return (
             f"{base}/api/closure/upload/new"
-            f"?job_id={jid}&target={target}"
+            f"?{query}"
         )
     return factory
 
@@ -188,7 +188,7 @@ def _build_card_json(state: Dict[str, Any], version: int, *, actor_open_id: Opti
         entry_url=_entry_url(job_id),
         actor_open_id=actor_open_id,
         dl_link_factory=_dl_link_factory(job_id),
-        upload_url_factory=_upload_url_factory(job_id),
+        upload_url_factory=_upload_url_factory(job_id, version),
     )
 
 

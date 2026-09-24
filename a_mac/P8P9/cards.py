@@ -302,12 +302,12 @@ def _all_uploads(state: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _upload_link_button(
     label: str, state: Dict[str, Any], target: str,
-    upload_url_factory: Optional[Callable[[str, str], str]],
+    upload_url_factory: Optional[Callable[[str, str, str], str]],
     actor_open_id: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     """§7 方案 B：生成"📎 上传附件"link_button。
 
-    upload_url_factory(job_id, target) → URL（含 actor_open_id 校验）；
+    upload_url_factory(job_id, target, actor_open_id) → 签名 URL；
     无 factory 或参数缺失 → 返回 None（不渲染按钮）。
     """
     if upload_url_factory is None:
@@ -319,10 +319,7 @@ def _upload_link_button(
     if not actor_open_id:
         accepted = state.get("accepted_by") or {}
         actor_open_id = accepted.get("open_id")
-    base_url = upload_url_factory(job_id, target)
-    # 把 open_id 作为 query 参数追加
-    sep = "&" if "?" in base_url else "?"
-    url = f"{base_url}{sep}open_id={actor_open_id or ''}"
+    url = upload_url_factory(job_id, target, actor_open_id or "")
     return link_button(label, url, button_type="default")
 
 
@@ -332,7 +329,7 @@ def build_job_card(
     state: Dict[str, Any], version: int, entry_url: str, *,
     actor_open_id: Optional[str] = None,
     dl_link_factory: Optional[Callable[[str], str]] = None,
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> Dict[str, Any]:
     """§2.4 主入口：按 job_status 路由到具体构造器。
 
@@ -343,7 +340,7 @@ def build_job_card(
         actor_open_id: 当前查看者 open_id（用于按钮 enable/disable）
         dl_link_factory: 附件下载链接工厂（closed 态用）
         upload_url_factory: §7 方案 B 上传入口 URL 工厂；
-            签名 upload_url_factory(job_id, target) -> str
+            签名 upload_url_factory(job_id, target, actor_open_id) -> str
             返回形如 `/api/closure/upload/new?job_id=X&target=Y&open_id=Z` 的 URL，
             卡片 link_button 直接跳转，服务端会生成 fresh upload token 并 302 到上传页。
 
@@ -389,7 +386,7 @@ def build_job_card(
 def _build_open(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.1：「接取任务」primary 按钮。"""
     elements: List[Dict[str, Any]] = [
@@ -425,7 +422,7 @@ def _build_open(
 def _build_acknowledged(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
     is_rectifying: bool = False,
 ) -> List[Dict[str, Any]]:
     """§2.4.2：已接取/整改中共用提交材料与退接操作区。"""
@@ -535,7 +532,7 @@ def _build_acknowledged(
 def _build_rectifying(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """驳回后保留驳回意见，并恢复处置人的提交、退接及附件入口。"""
     return _build_acknowledged(
@@ -548,7 +545,7 @@ def _build_rectifying(
 def _build_materials_in_audit(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.3：v2.1（2026-09-17）—— 业务按钮 + P9 审核进度。
 
@@ -672,7 +669,7 @@ def _build_materials_in_audit(
 def _build_waiting_human_review(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.4：input textarea + 「审核通过」/「驳回」/「升级风险」/「降级风险」。"""
     elements: List[Dict[str, Any]] = [
@@ -763,7 +760,7 @@ def _build_waiting_human_review(
 def _build_ready_to_close(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.5：input textarea + 「确认关闭」+ 升级/降级。"""
     elements: List[Dict[str, Any]] = [
@@ -841,7 +838,7 @@ def _build_ready_to_close(
 def _build_closed(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
-    upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.6：只读 + 「查看附件」link_button（dl_link_factory）。"""
     review = state.get("review") or {}

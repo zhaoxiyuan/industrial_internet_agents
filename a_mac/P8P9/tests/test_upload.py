@@ -10,6 +10,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +26,7 @@ from P8P9.links import (
     LinkInvalid, LinkExpired, LinkExhausted, LinkActorMismatch,
 )
 from P8P9.state_machine import ClosureService
+from P8P9.upload_link_signing import signed_upload_query
 from P8P9.models import (
     UPLOAD_MAX_FILE_SIZE,
     UPLOAD_MAX_JOB_SIZE,
@@ -389,6 +391,8 @@ class TestUploadBlueprint(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self._old_env = os.environ.get("P8P9_BASE_DIR")
         os.environ["P8P9_BASE_DIR"] = self.tmpdir
+        self._old_signing_secret = os.environ.get("P8P9_UPLOAD_LINK_SECRET")
+        os.environ["P8P9_UPLOAD_LINK_SECRET"] = "test-upload-signing-key-32-bytes-minimum"
 
         # seed 一个 acknowledged job
         _seed_job(
@@ -401,45 +405,55 @@ class TestUploadBlueprint(unittest.TestCase):
         self.app = app
         self.client = app.test_client()
 
+    def _signed_new_url(self, job_id="JOB-001", target="materials_submission", open_id="ou_x", **kwargs):
+        query = signed_upload_query(job_id, target, open_id, 0, **kwargs)
+        return f"/api/closure/upload/new?{query}"
+
     def tearDown(self):
         if self._old_env is None:
             os.environ.pop("P8P9_BASE_DIR", None)
         else:
             os.environ["P8P9_BASE_DIR"] = self._old_env
+        if self._old_signing_secret is None:
+            os.environ.pop("P8P9_UPLOAD_LINK_SECRET", None)
+        else:
+            os.environ["P8P9_UPLOAD_LINK_SECRET"] = self._old_signing_secret
 
     def test_upload_new_redirect(self):
-        resp = self.client.get(
-            "/api/closure/upload/new"
-            "?job_id=JOB-001&target=materials_submission&open_id=ou_x"
-        )
+        resp = self.client.get(self._signed_new_url())
         self.assertEqual(resp.status_code, 302)
         self.assertIn("token=tk_", resp.headers.get("Location", ""))
 
     def test_upload_new_actor_mismatch(self):
-        resp = self.client.get(
-            "/api/closure/upload/new"
-            "?job_id=JOB-001&target=materials_submission&open_id=ou_y"
-        )
+        resp = self.client.get(self._signed_new_url(open_id="ou_y"))
         self.assertEqual(resp.status_code, 403)
         body = resp.get_json()
         self.assertEqual(body["error"], "actor_mismatch")
 
     def test_upload_new_no_acceptor(self):
         _seed_job(self.tmpdir, "JOB-NEW", status="open", accepted_by=None)
-        resp = self.client.get(
-            "/api/closure/upload/new"
-            "?job_id=JOB-NEW&target=materials_submission&open_id=ou_x"
-        )
+        resp = self.client.get(self._signed_new_url(job_id="JOB-NEW"))
         self.assertEqual(resp.status_code, 403)
         body = resp.get_json()
         self.assertEqual(body["error"], "no_acceptor")
 
     def test_upload_new_bad_target(self):
-        resp = self.client.get(
-            "/api/closure/upload/new"
-            "?job_id=JOB-001&target=bad&open_id=ou_x"
-        )
+        resp = self.client.get(self._signed_new_url(target="bad"))
         self.assertEqual(resp.status_code, 400)
+
+    def test_upload_new_rejects_unsigned_or_tampered_link(self):
+        unsigned = self.client.get(
+            "/api/closure/upload/new?job_id=JOB-001&target=materials_submission&open_id=ou_x"
+        )
+        self.assertEqual(unsigned.status_code, 403)
+        tampered = self.client.get(self._signed_new_url().replace("open_id=ou_x", "open_id=ou_y"))
+        self.assertEqual(tampered.status_code, 403)
+
+    def test_upload_new_rejects_expired_or_stale_version(self):
+        expired = self.client.get(self._signed_new_url(expires=int(time.time()) - 1))
+        self.assertEqual(expired.status_code, 403)
+        stale = signed_upload_query("JOB-001", "materials_submission", "ou_x", 1)
+        self.assertEqual(self.client.get(f"/api/closure/upload/new?{stale}").status_code, 403)
 
     def test_upload_post_ok(self):
         # 创建 token
@@ -572,7 +586,7 @@ class TestCardsUploadsRendering(unittest.TestCase):
         card = build_job_card(
             state, version=1, entry_url="/x",
             actor_open_id="ou_x",
-            upload_url_factory=lambda j, t: f"/api/closure/upload/new?job_id={j}&target={t}",
+            upload_url_factory=lambda j, t, actor: f"/api/closure/upload/new?job_id={j}&target={t}&open_id={actor}",
         )
         elements = card["body"]["elements"]
         # 检查包含 📎 上传附件 link_button

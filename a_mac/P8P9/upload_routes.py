@@ -41,6 +41,7 @@ from .links import (
 )
 from .models import UPLOAD_TOKEN_PREFIX, UPLOAD_TOKEN_TTL_MINUTES
 from .state_machine import ClosureService, StateNotFound
+from .upload_link_signing import verify_upload_query
 
 
 logger = logging.getLogger("P8P9.upload_routes")
@@ -220,12 +221,13 @@ def upload_done():
 
 @upload_bp.get("/api/closure/upload/new")
 def upload_new():
-    """生成 upload token → 302 重定向到 /api/closure/upload?token=tk_xxx。
+    """验证卡片的限时签名，再签发 upload token 并重定向到上传页。
 
     query 参数: job_id, target, open_id
       - job_id: 作业 ID
       - target: "materials_submission" / "risk_change"
-      - open_id: 申请人 open_id（必须是 accepted_by 或 review decider）
+      - open_id: 签名绑定的申请人 open_id
+      - version/expires/sig: 作业版本、过期时间和 HMAC 签名
 
     业务权限：
       - materials_submission → 必须 accepted_by.open_id == open_id
@@ -249,6 +251,12 @@ def upload_new():
         # 业务权限校验（仅 materials_submission 严格）
         svc = ClosureService()
         state = svc.get_state(job_id)  # StateNotFound
+        if not verify_upload_query(
+            job_id, target, open_id,
+            request.args.get("version", ""), request.args.get("expires", ""),
+            request.args.get("sig", ""), current_version=int(state.get("version", 0)),
+        ):
+            return jsonify({"error": "invalid_or_expired_link"}), 403
         if target == "materials_submission":
             accepted = state.get("accepted_by") or {}
             if not accepted:
@@ -269,7 +277,7 @@ def upload_new():
         )
         # 302 重定向到上传页（带 token query）
         upload_url = info["upload_url"]
-        _log_exit("GET", "/api/closure/upload/new", {"upload_url": upload_url})
+        _log_exit("GET", "/api/closure/upload/new", {"status": "redirect_to_upload"})
         return redirect(upload_url, code=302)
     except StateNotFound as e:
         _log_exit("GET", "/api/closure/upload/new",
