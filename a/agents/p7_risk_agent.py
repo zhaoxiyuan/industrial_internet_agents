@@ -613,6 +613,17 @@ def register_a6_routes(app, a5_log_dir: Optional[str] = None,
             media_type="text/html; charset=utf-8"
         )
 
+    @app.get("/p7/", response_class=Response)
+    @app.get("/p7", response_class=Response)
+    async def p7_page():
+        """P7 风险研判页面，复用 P6 的 FastAPI 进程而非新增容器。"""
+        html = INDEX_A6_HTML
+        html = html.replace("<title>A6 风险研判看板</title>", "<title>P7 风险研判看板</title>")
+        html = html.replace("<h1>A6 风险研判看板</h1>", "<h1>P7 风险研判看板</h1>")
+        # 公网入口为 /admin/p7/；相对 API 路径会保持在该鉴权前缀内。
+        html = html.replace('"/api/a6', '"api/a6')
+        return Response(content=html, media_type="text/html; charset=utf-8")
+
     # ── 研判列表 ─────────────────────────────────────────
     @app.get("/api/a6/assessments")
     async def get_assessments(start: str = None, end: str = None,

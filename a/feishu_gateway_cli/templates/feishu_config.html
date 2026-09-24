@@ -776,7 +776,7 @@ async function deleteConfigItem(type, key) {
     : '此操作会立即修改 .env（写前自动备份 .env.bak）。';
   if (!confirm(`确定删除 ${mapLabel} 主键 ${key} ？\n\n${backupHint}`)) return;
   try {
-    const r = await fetch('/api/feishu/config/delete', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/config/delete', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ type, key }),
@@ -853,7 +853,7 @@ function escapeAttr(s) {
 
 async function loadAll() {
   try {
-    const r = await fetch('/api/feishu/config');
+    const r = await fetch('/admin/feishu-cfg/api/feishu/config');
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'unknown');
     _view = j.view;
@@ -887,7 +887,7 @@ async function saveAll() {
   const statusEl = document.getElementById('save-status');
   statusEl.innerHTML = '<div class="status status-info">保存中…</div>';
   try {
-    const r = await fetch('/api/feishu/config', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/config', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ managed, accounts, user_map, group_map }),
@@ -919,7 +919,7 @@ async function testGateway() {
   const resultEl = document.getElementById('gateway-test-result');
   resultEl.innerHTML = '<div class="status status-info">探测中…</div>';
   try {
-    const r = await fetch('/api/feishu/test/gateway', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/test/gateway', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ host, api_key: apiKey }),
@@ -953,7 +953,7 @@ async function testResolve() {
   const resultEl = document.getElementById('resolve-result');
   resultEl.innerHTML = '<div class="status status-info">解析中…</div>';
   try {
-    const r = await fetch('/api/feishu/test/resolve', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/test/resolve', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -1039,7 +1039,7 @@ async function startListener() {
   infoEl.innerHTML = '启动中…';
 
   try {
-    const r = await fetch('/api/feishu/listener/start', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/listener/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({poll_interval_sec: 2.0, idle_timeout_sec: 600}),
@@ -1061,7 +1061,7 @@ async function startListener() {
 
 async function stopListener() {
   try {
-    const r = await fetch('/api/feishu/listener/stop', {
+    const r = await fetch('/admin/feishu-cfg/api/feishu/listener/stop', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({listener_id: _listenerId || ''}),
@@ -1077,7 +1077,7 @@ async function stopListener() {
 
 async function refreshListener() {
   try {
-    const r = await fetch('/api/feishu/listener/status');
+    const r = await fetch('/admin/feishu-cfg/api/feishu/listener/status');
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'unknown');
     renderListener(j);
@@ -1172,7 +1172,7 @@ function selectEvent(seq) {
   document.getElementById('captured-hint').style.display = 'block';
 
   // 从最近一次 snapshot 找事件详情
-  fetch('/api/feishu/listener/status').then(r => r.json()).then(j => {
+  fetch('/admin/feishu-cfg/api/feishu/listener/status').then(r => r.json()).then(j => {
     if (!j.ok || !j.snapshot) return;
     const evt = (j.snapshot.events || []).find(e => e.sequence === seq);
     if (!evt) return;

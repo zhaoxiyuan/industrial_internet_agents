@@ -1,0 +1,9 @@
+version: "3"
+
+# 保存为 /etc/ngrok/ngrok.yml 后，用 systemd 启动。
+# 请将 NGROK_AUTHTOKEN 替换为你在 ngrok Dashboard 创建的 Agent Authtoken；
+# 不要把真实令牌提交到 Git 或发送到聊天。
+agent:
+  authtoken: "NGROK_AUTHTOKEN"
+  # 免费版要求 Agent 直接出网；不支持 HTTP/S 代理。
+  # 若升级至支持代理的套餐，可在此处配置 proxy_url。

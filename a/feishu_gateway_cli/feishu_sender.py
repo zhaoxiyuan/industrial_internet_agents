@@ -60,7 +60,7 @@ CLI 命令（在任何项目终端运行）
 --------------------------------------------------------------------------------
 
 所有 send_group / send_user 都可加 ``--account-id`` 选择 Gateway 上的飞书机器人账号；
-不传则走 channel_gateway_client 的默认账号（``default``，由 ``CG_DEFAULT_ACCOUNT_ID``
+不传则走 channel_gateway_client 的默认账号（``default``，由 ``FEISHU_ACCOUNT_ID``
 控制）。凭证解析完全在 Gateway 侧完成，Python 端只做透传。
 
 配置方法（Gateway .env，多账户三级 fallback，详见 feishu_config_app 多账户表）：
@@ -790,11 +790,7 @@ def send_to_group_card(
 
     # CardKit 实体只能由创建它的应用更新。把 Gateway 默认账号在发送时解析并固化，
     # 确保 create → send → callback update 全链路使用同一个飞书应用身份。
-    effective_account_id = (
-        (account_id or "").strip()
-        or os.environ.get("CG_DEFAULT_ACCOUNT_ID", "").strip()
-        or "default"
-    )
+    effective_account_id = feishu_card_api.resolve_card_account_id(account_id)
 
     # 与 cc connect 的飞书实现保持同一协议：先创建 CardKit 实体，再将实体引用
     # 作为 interactive 消息发送。此前仅传 {"card_id":"..."} 会被 IM API 当成

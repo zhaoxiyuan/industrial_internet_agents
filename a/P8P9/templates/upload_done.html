@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P8 附件上传完成</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6f8;
+    margin: 0;
+    padding: 24px;
+    color: #1f2329;
+  }
+  .container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 32px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    text-align: center;
+  }
+  h1 { font-size: 24px; margin: 0 0 16px 0; color: #2e7d32; }
+  .desc { color: #646a73; font-size: 14px; line-height: 1.8; margin-bottom: 24px; }
+  .info {
+    background: #f0f7ff;
+    border-left: 4px solid #3370ff;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 4px;
+    font-size: 13px;
+    text-align: left;
+    color: #1d2129;
+  }
+  ul.ids {
+    text-align: left;
+    background: #fafbfc;
+    border: 1px solid #dee0e3;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-family: monospace;
+    font-size: 13px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  ul.ids li { padding: 4px 0; }
+  button {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    background: #3370ff;
+    color: #fff;
+  }
+  button:hover { background: #245bdb; }
+  button.secondary {
+    background: #f0f1f3;
+    color: #1f2329;
+    margin-left: 8px;
+  }
+  button.secondary:hover { background: #e5e6eb; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>✅ 上传完成</h1>
+    <p class="desc">
+      共上传 <strong>{{ count }}</strong> 个附件。<br>
+      请回到飞书卡片，提交业务表单（业务动作会读取本次上传的附件）。
+    </p>
+
+    {% if upload_ids %}
+      <div class="info">💡 upload_id 列表（业务表单回传任一即可）：</div>
+      <ul class="ids">
+        {% for uid in upload_ids %}<li>{{ uid }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    <div>
+      <button onclick="window.close()">关闭页面</button>
+      <button class="secondary" onclick="copyIds()">复制 ID 列表</button>
+    </div>
+  </div>
+
+  <script>
+  function copyIds() {
+    const ids = {{ upload_ids|tojson }};
+    const s = ids.join('\\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(s).then(() => alert('已复制 ' + ids.length + ' 个 ID'));
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); alert('已复制 ' + ids.length + ' 个 ID'); }
+      finally { document.body.removeChild(ta); }
+    }
+  }
+  </script>
+</body>
+</html>

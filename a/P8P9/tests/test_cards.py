@@ -40,6 +40,7 @@ def test_all_statuses_build_legal_card():
         state = SAMPLE_STATES[status]
         card = build_job_card(state, version=state["version"], entry_url="http://x")
         assert card["schema"] == "2.0"
+        assert card["config"]["update_multi"] is True
         assert "header" in card
         assert "title" in card["header"]
         assert card["body"]["elements"], f"{status} 卡片 body 为空"

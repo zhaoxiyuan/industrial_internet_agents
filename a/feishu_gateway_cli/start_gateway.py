@@ -352,11 +352,10 @@ def start_gateway(
     if not config_path.exists():
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
-    # 合并 env：子进程继承 process.env，但 gateway .env 不覆盖已有同名 key
-    gw_env = _parse_env_file(GATEWAY_DIR / ".env")
+    # Gateway 与业务消费者使用同一份项目根 .env。
+    gw_env = _parse_env_file(GATEWAY_DIR.parent / ".env")
     child_env = os.environ.copy()
-    for k, v in gw_env.items():
-        child_env.setdefault(k, v)
+    child_env.update(gw_env)
 
     cmd = [node, "start.mjs", "--config", str(config_path)]
 
@@ -525,7 +524,7 @@ def gateway_status(
     if _port_in_use(host, port):
         state.health_ok = _wait_for_health(host, port, timeout=2.0)
         if state.health_ok:
-            gw_env = _parse_env_file(GATEWAY_DIR / ".env")
+            gw_env = _parse_env_file(GATEWAY_DIR.parent / ".env")
             api_key = gw_env.get("CG_API_KEY", "")
             if api_key:
                 state.ready_ok = _check_ready(host, port, api_key)

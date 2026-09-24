@@ -44,6 +44,7 @@ from .models import (
     ARCHIVE_FINAL_MARKER,
     ARCHIVE_MAX_RETRY_BACKOFF,
 )
+from .links import ClosureLinkService, LinkInvalid, LinkExpired, LinkExhausted, LinkActorMismatch
 
 
 logger = logging.getLogger("P8P9.business_actions")
@@ -156,10 +157,47 @@ def _banned_word_check(value: str, *, forbidden: List[str], field_name: str) -> 
             )
 
 
+def _consume_uploads(
+    job_id: str, upload_token: Optional[str], actor_open_id: str,
+) -> List[Dict[str, Any]]:
+    """§7 方案 B：消费 upload_token，返回 upload metadata 列表。
+
+    - upload_token 为空/None → 返回 []（保持向后兼容）
+    - token 校验失败 → 抛 LinkInvalid / LinkExpired / LinkActorMismatch
+    - token.job_id 必须 == 当前 job_id（防止跨作业串）
+
+    Returns:
+        upload metadata 列表（每个元素是 UploadService.build_metadata(...) 生成的 dict）。
+    """
+    if not upload_token:
+        return []
+    if not isinstance(upload_token, str):
+        raise InputValidationError(f"upload_token 必须是字符串，得到 {type(upload_token).__name__}")
+
+    link_svc = ClosureLinkService()
+    try:
+        info = link_svc.consume_upload_token(upload_token, actor_open_id)
+    except (LinkInvalid, LinkExpired, LinkExhausted, LinkActorMismatch) as e:
+        # 重新包成 InputValidationError 让 web_server 4xx 映射一致
+        raise InputValidationError(f"upload_token 无效: {e}")
+
+    if info["job_id"] != job_id:
+        raise InputValidationError(
+            f"upload_token 绑定的 job_id={info['job_id']!r} ≠ 当前 job_id={job_id!r}"
+        )
+
+    uploads = list(info["uploads"] or [])
+    logger.info(
+        f"upload_token 消费成功: job_id={job_id} actor={actor_open_id} count={len(uploads)}"
+    )
+    return uploads
+
+
 # ─── 1. acknowledge_disposition（§6.3.1） ────────────────────────────────────
 
 def acknowledge_disposition(
     job_id: str, *, actor: Dict[str, Any], expected_version: int,
+    upload_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """§6.3.1：open → acknowledged。抢锁 + 写 accepted_by。
 
@@ -167,6 +205,9 @@ def acknowledge_disposition(
       - actor.open_id 存在
       - 当前态 = open
       - expected_version 一致
+
+    2026-09-20 方案 B：
+      upload_token 可选；提供时会在 accepted_by.uploads 写入上传 metadata（接取即带附件场景）。
     """
     actor = _ensure_actor(actor)
     svc = ClosureService()
@@ -178,11 +219,13 @@ def acknowledge_disposition(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    uploads = _consume_uploads(job_id, upload_token, actor["open_id"])
     fields = {
         "accepted_by": {
             "open_id": actor["open_id"],
             "name": actor.get("name", ""),
             "accepted_at": now,
+            "uploads": uploads,  # 接取时附带的材料（如接取说明 / 初步证据）
         }
     }
     state = svc.set_job_status(
@@ -202,6 +245,7 @@ def submit_rectification_materials(
     actor: Dict[str, Any],
     expected_version: int,
     event_ids: Optional[List[str]] = None,
+    upload_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """§6.3.1 + §7.2.1：业务一致性校验 actor == accepted_by。
     review_text 非空（§4.2 不强制下限）。
@@ -213,6 +257,9 @@ def submit_rectification_materials(
     一步直达，必须先 acknowledged → rectifying 再 rectifying → materials_in_audit。
     用一次 svc._lock_for 包住两段 transition 保证原子（第二次 expected_version=None
     跳过乐观锁，因为锁内连续 transition 无竞争）。
+
+    2026-09-20 方案 B：upload_token 可选；提供时，uploads 写入
+    materials.submissions[-1].uploads。
     """
     actor = _ensure_actor(actor)
     svc = ClosureService()
@@ -234,6 +281,7 @@ def submit_rectification_materials(
         event_ids = [e["risk_event_id"] for e in state.get("events", []) if e.get("risk_event_id")]
 
     now = datetime.now(timezone.utc).isoformat()
+    uploads = _consume_uploads(job_id, upload_token, actor["open_id"])
     materials = state.get("materials") or {"submissions": []}
     submissions_list = list(materials.get("submissions", []))
     submissions_list.append({
@@ -242,6 +290,7 @@ def submit_rectification_materials(
         "event_ids": event_ids,
         "submitted_by": actor["open_id"],
         "submitted_at": now,
+        "uploads": uploads,  # §7 方案 B：附件 metadata 列表
     })
     fields = {
         "materials": {
@@ -330,10 +379,13 @@ def escalate_risk(
     event_id: str, new_level: int, reason: str,
     evidence_ids: Optional[List[str]],
     actor: Dict[str, Any], expected_version: int,
+    upload_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """§2.5.2：new_level > current + reason ≥ 10 字；写 risk_changes + 改 risk_level。
 
     new_level == 5 → 异步发安全管理部门群通知（本版只 log）。
+
+    2026-09-20 方案 B：upload_token 可选；提供时，uploads 写入 risk_changes[-1].uploads。
     """
     actor = _ensure_actor(actor)
     reason_clean = _validate_text_length(reason, ESCALATE_REASON_MIN, "reason")
@@ -356,6 +408,7 @@ def escalate_risk(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    uploads = _consume_uploads(job_id, upload_token, actor["open_id"])
     risk_changes = list(state.get("risk_changes") or [])
     change_id = f"RC-{len(risk_changes)+1:04d}"
     risk_changes.append({
@@ -366,6 +419,7 @@ def escalate_risk(
         "to_level": new_level,
         "reason": reason_clean,
         "evidence_ids": evidence_ids or [],
+        "uploads": uploads,  # §7 方案 B
         "by": actor["open_id"],
         "at": now,
         "status": "applied",
@@ -414,6 +468,7 @@ def downgrade_risk(
     event_id: str, new_level: int, reason: str,
     evidence_ids: Optional[List[str]],
     actor: Dict[str, Any], expected_version: int,
+    upload_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """§2.5.3：new_level < current + reason ≥ 20 字 + ≥ 1 evidence。
 
@@ -421,6 +476,9 @@ def downgrade_risk(
     本计划 P9 LLM agent 不在范围，所以 _post_process_downgrade_review 同步 mock 返回 approved。
 
     返回 state + change_request_id。
+
+    2026-09-20 方案 B：upload_token 可选；提供时，uploads 写入 risk_changes[-1].uploads
+    （attachments 与 evidence_ids 并存；evidence_ids 仍 ≥ 1 硬约束不变）。
     """
     actor = _ensure_actor(actor)
     reason_clean = _validate_text_length(reason, DOWNGRADE_REASON_MIN, "reason")
@@ -444,6 +502,7 @@ def downgrade_risk(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    uploads = _consume_uploads(job_id, upload_token, actor["open_id"])
     risk_changes = list(state.get("risk_changes") or [])
     change_id = f"RC-{len(risk_changes)+1:04d}"
     risk_changes.append({
@@ -454,6 +513,7 @@ def downgrade_risk(
         "to_level": new_level,
         "reason": reason_clean,
         "evidence_ids": evidence_ids,
+        "uploads": uploads,  # §7 方案 B
         "by": actor["open_id"],
         "at": now,
         "status": "pending_review",  # 等 P9 审核；本计划 mock 立即通过

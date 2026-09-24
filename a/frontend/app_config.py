@@ -49,9 +49,11 @@ from flask import Flask, jsonify, request, send_from_directory
 # 路径常量
 # ============================================================
 
-# 配置读写指向 agent_config/（保留敏感数据集中管理）
+# 2026-09-21: 配置读写统一指向 a/.env(与 feishu / CG_* 等基础设施配置同一个文件)。
+# 所有 6 个服务都用 env_file: ../.env 读,a/.env 是单一真相源;
+# saved_configs.json 留在 agent_config/(命名配置库,UI 切换用)。
 AGENT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "agent_config"
-ENV_FILE = AGENT_CONFIG_DIR / ".env"               # 当前激活配置(flat)
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"   # 当前激活配置(flat)
 CONFIGS_FILE = AGENT_CONFIG_DIR / "saved_configs.json"   # 所有命名配置
 HERE = Path(__file__).resolve().parent
 
@@ -161,52 +163,74 @@ def _normalize_config(cfg: Dict[str, str]) -> Dict[str, str]:
 
 
 def write_env(llm: Dict[str, str], vl: Dict[str, str], active_name: str = "") -> None:
-    """把 LLM + VL 当前值写回 .env(覆盖同名变量,写入前自动归一化)。"""
+    """
+    把 LLM + VL 当前值写回 .env(覆盖同名变量,写入前自动归一化)。
+
+    2026-09-21:ENV_FILE 现在指向根 a/.env(与 feishu / CG_* 等基础设施共享)。
+    之前会整文件重写,把 FEISHU_* / CG_* 全覆盖丢失;现在改为:
+    - 解析旧 .env → 拆成"非 A5 keys"(原样保留)和"A5 keys"(被本次入参替换)
+    - 头部 + LLM + VL + 运行控制区段(本服务专有)
+    - 其他 keys 区段(完整保留)
+    """
     llm = _normalize_config(llm)
     vl  = _normalize_config(vl)
 
-    lines: List[str] = []
-    lines.append("# ============================================================")
-    lines.append("# A5 智能体 — 当前激活的模型配置")
-    if active_name:
-        lines.append(f"# 激活的配置名: {active_name}")
-    lines.append("# 由 agent_config/app.py Web UI 写入,请勿手工编辑")
-    lines.append("# ============================================================")
-    lines.append("")
+    # 1) 读现有 .env,把非 A5 keys 全保留
+    current = read_env()
+    preserved_keys = sorted(k for k in current.keys() if not k.startswith("A5_"))
 
-    # ---- LLM ----
-    lines.append("# ===== 主推理 LLM =====")
+    preserved_lines: List[str] = []
+    if preserved_keys:
+        preserved_lines.append("# ============================================================")
+        preserved_lines.append("# 其他配置(由部署脚本 / feishu_cfg 表单写入,本服务保留不动)")
+        preserved_lines.append("# ============================================================")
+        preserved_lines.append("")
+        for k in preserved_keys:
+            preserved_lines.append(f'{k}="{current[k]}"')
+        preserved_lines.append("")
+
+    # 2) 本服务专有区段
+    own_lines: List[str] = []
+    own_lines.append("# ============================================================")
+    own_lines.append("# A5 智能体 — 当前激活的模型配置")
+    if active_name:
+        own_lines.append(f"# 激活的配置名: {active_name}")
+    own_lines.append("# 由 agent_config/app.py Web UI 写入,请勿手工编辑")
+    own_lines.append("# ============================================================")
+    own_lines.append("")
+
+    own_lines.append("# ===== 主推理 LLM =====")
     for field in LLM_FIELDS:
         var = ENV_VAR_NAMES[field]
         val = (llm.get(field) or "").strip()
         if val:
-            lines.append(f'{var}="{val}"')
-    lines.append("")
+            own_lines.append(f'{var}="{val}"')
+    own_lines.append("")
 
-    # ---- VL ----
-    lines.append("# ===== 视觉模型 VL =====")
+    own_lines.append("# ===== 视觉模型 VL =====")
     for field in VL_FIELDS:
         var = VL_ENV_VAR_NAMES[field]
         val = (vl.get(field) or "").strip()
         if val:
-            lines.append(f'{var}="{val}"')
-    lines.append("")
+            own_lines.append(f'{var}="{val}"')
+    own_lines.append("")
 
-    # ---- 运行控制 ----
-    lines.append("# ===== 运行控制 =====")
+    own_lines.append("# ===== 运行控制 =====")
     runtime_defaults = {
         "A5_DEBUG": "false",
         "A5_USE_MOCK_VL": "true",
         "A5_DECISION_CYCLE_SEC": "1.0",
         "A5_VL_TRIGGER_THRESHOLD_SEC": "3.0",
     }
-    current = read_env()
     for k in runtime_defaults:
         val = current.get(k, "") or runtime_defaults[k]
-        lines.append(f'{k}="{val}"')
-    lines.append("")
+        own_lines.append(f'{k}="{val}"')
+    own_lines.append("")
 
-    ENV_FILE.write_text("\n".join(lines), encoding="utf-8")
+    # 3) 拼接:自己区段在前,其他 keys 在后
+    final = "\n".join(own_lines) + "\n" + "\n".join(preserved_lines)
+
+    ENV_FILE.write_text(final, encoding="utf-8")
 
 
 def active_to_ui() -> Dict[str, Any]:

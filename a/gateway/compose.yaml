@@ -4,7 +4,7 @@ services:
     image: openclaw-channel-gateway-standalone:0.1.0
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     ports:
       - "127.0.0.1:8787:8787"
     volumes:

@@ -1,6 +1,6 @@
 {
   "server": {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 8787,
     "apiKey": "${CG_API_KEY}",
     "maxBodyBytes": 1048576,
@@ -24,14 +24,14 @@
     "feishu": {
       "enabled": true,
       "accounts": {
-        "P8": {
+        "P8P9": {
           "maxSkewSeconds": 300,
           "timeoutMs": 15000,
           "maxResponseBytes": 1048576,
-          "domain": "${FEISHU_P8_DOMAIN}",
-          "appId": "${FEISHU_P8_APP_ID}",
-          "appSecret": "${FEISHU_P8_APP_SECRET}",
-          "verificationToken": "${FEISHU_P8_VERIFICATION_TOKEN}"
+          "domain": "${FEISHU_DOMAIN}",
+          "appId": "${FEISHU_APP_ID}",
+          "appSecret": "${FEISHU_APP_SECRET}",
+          "verificationToken": "${FEISHU_VERIFICATION_TOKEN}"
         }
       }
     }

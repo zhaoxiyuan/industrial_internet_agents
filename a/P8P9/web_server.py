@@ -36,7 +36,9 @@ except ImportError:
     raise ImportError("需要 flask：`pip install flask`")
 
 from P8P9 import agent_interface, business_actions
-from P8P9.services.card_render import send_event_card_for_web
+from P8P9.services.card_render import (
+    send_event_card_for_web, card_callback_context, start_card_update_worker,
+)
 # 2026-09-17：强制 import audit_scheduler 以触发 _register_self()，
 # 否则 business_actions._audit_scheduler 永远 None → submit_rectification_materials
 # 末尾的 _trigger_audit(job_id) 静默 return，P9 真审核 agent 不会被调用。
@@ -60,6 +62,10 @@ logger = logging.getLogger("P8P9.web_server")
 
 app = Flask(__name__)
 
+# 注册 upload Blueprint(2026-09-20 方案 B)
+from P8P9.upload_routes import upload_bp
+app.register_blueprint(upload_bp)
+
 
 # ─── 健康检查(Docker HEALTHCHECK / Nginx upstream 用)───────────────────────────
 # 2026-09-20:为 Docker 部署新增;不动业务路由
@@ -74,11 +80,18 @@ def _log_entry(method: str, path: str, **params: Any) -> None:
 
 
 def _log_payload(label: str, payload: Any) -> None:
-    """调试用：打印 payload 详情（生产环境去掉）。"""
+    """记录回调结构，但绝不把飞书校验 token 写入日志。"""
+    def redact(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: ("***" if k.lower() in {"token", "app_secret", "signature", "encrypt"}
+                        else redact(v)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [redact(v) for v in value]
+        return value
     try:
-        s = json.dumps(payload, ensure_ascii=False)[:2000]
+        s = json.dumps(redact(payload), ensure_ascii=False)[:2000]
     except Exception:
-        s = str(payload)[:2000]
+        s = "<unserializable>"
     logger.info(f"[DEBUG] {label} payload={s}")
 
 
@@ -134,31 +147,16 @@ def feishu_card_callback():
             route_card_callback,
             InvalidAction, InvalidOperator, CallbackError,
         )
-        result = route_card_callback(payload)
+        with card_callback_context():
+            result = route_card_callback(payload)
         _log_exit("POST", "/feishu/card/callback", 200, {"status": "ok", "result_keys": list(result.keys()) if isinstance(result, dict) else None})
-        # 构造飞书 Card 2.0 callback 响应：
-        # 官方只允许 toast + card 两个字段。多余字段（如 status/data）会被
-        # 飞书 reject 并报 200672「响应体格式错误」。
-        # - toast: 用户可见反馈
-        # - card: 新卡片 JSON（让飞书 client 用新卡片替换原 message，
-        #   避免 form_submit 后"切换又切换回去"问题）
         response_body: Dict[str, Any] = {
             "toast": {"type": "success", "content": "已记录您的处置"},
         }
-        if isinstance(result, dict) and result.get("_card_json"):
-            # 2026-09-17 修复：default=str 兜底循环引用；某些 state 含 callable /
-            # # 闭包 / Enum 等不可 JSON 化对象时，json.dumps 会 raise。
-            response_body["card"] = {
-                "type": "card_json",
-                "data": json.dumps(result["_card_json"], ensure_ascii=False, default=str),
-            }
-        elif isinstance(result, dict) and isinstance(result.get("state"), dict) \
-                and result["state"].get("_card_json"):
-            # 兜底：_trigger_card_update 路径偶尔把 card_json 嵌在 result["state"] 下
-            response_body["card"] = {
-                "type": "card_json",
-                "data": json.dumps(result["state"]["_card_json"], ensure_ascii=False, default=str),
-            }
+        # 同步响应给点击者，防止客户端在回调结束时恢复旧卡片；群内 CardKit
+        # 实体的持久更新由后台队列完成。回调卡片必须是 raw + 对象，不是 card_json。
+        if isinstance(result, dict) and isinstance(result.get("_card_json"), dict):
+            response_body["card"] = {"type": "raw", "data": result["_card_json"]}
         return jsonify(response_body), 200
     except InvalidAction as e:
         msg = str(e)
@@ -427,6 +425,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     logger.info(f"启动 P8P9 web server: http://{args.host}:{args.port}")
+    start_card_update_worker()
     app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
 
 

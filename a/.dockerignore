@@ -1,0 +1,51 @@
+# a/.dockerignore — Docker 构建时排除(只排除缓存/构建产物,保留 .env 和 data/)
+#
+# .env 和 data/ 必须保留在此文件中,让 Dockerfile 里的
+#   COPY .env    ./.env
+#   COPY data/   ./data/
+# 能成功。否则 docker build 会失败("not found")。
+#
+# 注意:这个文件与 .syncignore 用途不同:
+#   .dockerignore → docker build 自动读取
+#   .syncignore   → tar/rsync 同步代码时手动 --exclude-from=.syncignore
+# 后者要更严格,排除 .env 和 data/(它们应通过 compose volumes / env_file 注入,不是同步)
+
+# ─── Python 缓存 ────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.tox/
+
+# ─── Node (gateway/) ───────────────────────────────────
+gateway/node_modules/
+gateway/npm-debug.log
+
+# ─── Build artifacts ───────────────────────────────────
+deploy/a-p6-fixed.*
+deploy/industrial-agents-a-images.tar
+deploy/local-*.log
+deploy/local-*.out.log
+deploy/local-*.err.log
+deploy/p6-upload.*.log
+deploy/docker-anonymous-config.json
+
+# ─── Debug logs / scratch ──────────────────────────────
+*.log
+_pycompile_check.log
+_symbol_check.log
+_import_audit.log
+_aatest*.txt
+_psutil_install.txt
+
+# ─── IDE / OS ───────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ─── 同步用白名单文件(自己不能被排掉) ─────────────────
+# .syncignore 是另一个排除文件,build 不需要它
+.syncignore

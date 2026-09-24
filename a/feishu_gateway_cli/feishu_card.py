@@ -104,7 +104,8 @@ logger = logging.getLogger("server")
 # 路径常量 + .env 加载
 # ============================================================
 
-_ROOT = Path(__file__).resolve().parent.parent.parent  # 项目根
+# feishu_gateway_cli 位于 a/ 直属目录；数据必须落在 a/data（Docker 持久卷）。
+_ROOT = Path(__file__).resolve().parent.parent
 _AUDIT_LOG = _ROOT / "data" / "card_callbacks.jsonl"
 _CARD_INDEX = _ROOT / "data" / "feishu_card_index.json"
 
@@ -268,6 +269,26 @@ def _domain_base(domain: str) -> str:
     return "https://open.larksuite.com" if domain == "lark" else "https://open.feishu.cn"
 
 
+def resolve_card_account_id(account_id: Optional[str] = None) -> str:
+    """选定 CardKit 与 Gateway 共用的飞书账号，不在多账号环境中猜测。"""
+    explicit = (account_id or "").strip()
+    if explicit and explicit.lower() != "default":
+        return explicit
+    configured = os.environ.get("FEISHU_ACCOUNT_ID", "").strip()
+    if configured and configured.lower() != "default":
+        return configured
+    candidates = []
+    for key, value in os.environ.items():
+        if not key.startswith("FEISHU_") or not key.endswith("_APP_ID") or not value.strip():
+            continue
+        suffix = key[len("FEISHU_"):-len("_APP_ID")]
+        if suffix and os.environ.get(f"FEISHU_{suffix}_APP_SECRET", "").strip():
+            candidates.append(suffix)
+    if len(candidates) == 1:
+        return candidates[0]
+    return explicit or "default"
+
+
 def _resolve_account_credentials(
     account_id: Optional[str],
 ) -> tuple[str, str, str]:
@@ -292,13 +313,11 @@ def _resolve_account_credentials(
         FeishuCardkitError: 三级查找都拿不到 app_id 或 app_secret 时抛 503。
     """
     # 账户级 env var key（按 feishu_config_app._account_id_to_env_suffix 规则）
-    # send_message(account_id=None) 会由 Gateway 使用 CG_DEFAULT_ACCOUNT_ID；
+    # send_message(account_id=None) 会由 Gateway 使用 FEISHU_ACCOUNT_ID；
     # CardKit 创建/更新必须与消息发送使用同一个应用身份，因此这里采用同样默认值。
-    resolved_account_id = (account_id or "").strip()
-    if not resolved_account_id or resolved_account_id.lower() == "default":
-        configured_default = os.environ.get("CG_DEFAULT_ACCOUNT_ID", "").strip()
-        if configured_default and configured_default.lower() != "default":
-            resolved_account_id = configured_default
+    resolved_account_id = resolve_card_account_id(account_id)
+    if resolved_account_id.lower() == "default":
+        resolved_account_id = ""
 
     suffix: str = ""
     if resolved_account_id:
@@ -306,11 +325,17 @@ def _resolve_account_credentials(
         suffix = s.upper() if s else ""
 
     if suffix:
+        # CardKit 卡片实体必须与 Gateway 发送消息使用同一个账号应用。
+        # 变量名由 account_id 动态生成，不能回退到另一个账号的顶层凭证。
         acct_app_id = os.environ.get(f"FEISHU_{suffix}_APP_ID", "").strip()
         acct_app_secret = os.environ.get(f"FEISHU_{suffix}_APP_SECRET", "").strip()
         acct_domain = os.environ.get(f"FEISHU_{suffix}_DOMAIN", "").strip()
         if acct_app_id and acct_app_secret:
             return acct_app_id, acct_app_secret, acct_domain or "feishu"
+        raise FeishuCardkitError(
+            f"飞书账号 {resolved_account_id!r} 在项目根 .env 缺少专属 APP_ID 或 APP_SECRET",
+            http_status=503,
+        )
 
     # 顶层 fallback
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()

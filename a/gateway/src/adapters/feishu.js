@@ -6,8 +6,8 @@ import { normalizeTrustedInbound } from "../core/validation.js";
 
 // 2026-08-17：飞书 Card 按钮回调（card.action.trigger）业务端地址。
 // Gateway 收到 Card 事件后同步代理到这里，业务端把响应原样回给飞书（飞书要求 2s 内）。
-const CARD_CALLBACK_BUSINESS_HOST = "127.0.0.1";
-const CARD_CALLBACK_BUSINESS_PORT = 8080;
+const CARD_CALLBACK_BUSINESS_HOST = process.env.A_WEBUI_HOST ?? "127.0.0.1";
+const CARD_CALLBACK_BUSINESS_PORT = Number(process.env.A_WEBUI_PORT ?? 8080);
 const CARD_CALLBACK_BUSINESS_PATH = "/api/feishu/card-callback";
 const CARD_CALLBACK_PROXY_TIMEOUT_MS = 5_000;
 

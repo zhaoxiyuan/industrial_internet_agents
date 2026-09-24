@@ -230,7 +230,7 @@ curl http://127.0.0.1:8787/readyz
 ### 查看当前事件
 ```bash
 curl -sS "http://127.0.0.1:8787/v1/events?after_sequence=0" \
-  -H "Authorization: Bearer gateway-api-key-16chars!"
+  -H "Authorization: Bearer $CG_API_KEY"
 ```
 
 ### 查看 gateway-state.json
@@ -370,7 +370,7 @@ lark   → https://open.larksuite.com
 ```
 polling_test.py 发请求时：
 GET /v1/events
-Header: Authorization: Bearer gateway-api-key-16chars!
+Header: Authorization: Bearer <CG_API_KEY from a/.env>
 
 Gateway 收到请求后：
 1. 提取 Header 中的 Bearer token

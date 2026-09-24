@@ -9,7 +9,7 @@ import { createApplication } from "./src/app.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // 1. 加载 .env 到 process.env
-const envPath = resolve(__dirname, ".env");
+const envPath = resolve(__dirname, "../.env");
 const envContent = readFileSync(envPath, "utf8");
 for (const line of envContent.split("\n")) {
   const trimmed = line.trim();

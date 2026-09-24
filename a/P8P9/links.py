@@ -35,6 +35,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .state_machine import ClosureService, StateNotFound
+from .models import (
+    UPLOAD_TOKEN_PREFIX,
+    UPLOAD_TOKEN_TTL_MINUTES,
+)
 
 
 class LinkInvalid(Exception):
@@ -140,7 +144,8 @@ class ClosureLinkService:
             cur_links = dict(cur.get("links") or {})
             cur_links[token] = link_entry
             cur["links"] = cur_links
-            cur["version"] = cur.get("version", 0) + 1
+            # 不 bump version：链接簿记是基础设施操作，不影响业务乐观锁。
+            # bump 会让用户在「点上传链接 → 上传文件」期间失效按钮的 expected_version。
             cur["updated_at"] = now.isoformat()
             svc._atomic_write(job_id, cur)
 
@@ -208,7 +213,7 @@ class ClosureLinkService:
             })
             links[token] = entry_now
             cur["links"] = links
-            cur["version"] = cur.get("version", 0) + 1
+            # 不 bump version（基础设施簿记，非业务状态变更）
             cur["updated_at"] = datetime.now(timezone.utc).isoformat()
             svc._atomic_write(job_id, cur)
 
@@ -248,6 +253,199 @@ class ClosureLinkService:
             links = state.get("links") or {}
             if token in links:
                 return job_dir.name, links[token]
+        return None, None
+
+    # ─── Upload token（2026-09-20 方案 B）────────────────────────────────────
+
+    # upload token 与 attachment link 共用 _find_token，但存储字段独立。
+    # upload_links 是独立字典，避免和 attachment links 的 24h TTL 混淆。
+    def create_upload_token(
+        self,
+        job_id: str,
+        *,
+        actor: str,
+        target: str,
+        ttl_minutes: int = UPLOAD_TOKEN_TTL_MINUTES,
+        max_consume_count: int = 1,
+    ) -> Dict[str, Any]:
+        """创建短时 upload token（单次消费为默认）。
+
+        Args:
+            job_id: 作业 ID。
+            actor: 创建人 open_id（accepted_by / record_closure_review 决策人）。
+            target: 上传目标的语义标签 ∈ {"materials_submission", "risk_change"}。
+            ttl_minutes: 默认 30 分钟。
+            max_consume_count: 默认 1 次（一次性 token）。
+
+        Returns:
+            {
+                "token": "tk_xxxxxxxx",
+                "upload_url": "/api/closure/upload?token=tk_xxxxxxxx",
+                "expiry": ISO8601,
+                "ttl_minutes": int,
+                "max_consume_count": int,
+                "target": str,
+            }
+        """
+        if not isinstance(actor, str) or not actor:
+            raise ValueError("actor 必须是非空字符串 open_id")
+
+        svc = self._svc()
+        svc.get_state(job_id)  # StateNotFound if not exists
+        token = UPLOAD_TOKEN_PREFIX + _generate_token()
+        now = datetime.now(timezone.utc)
+        expiry = now + timedelta(minutes=ttl_minutes)
+
+        entry = {
+            "token": token,
+            "kind": "upload",  # 与 attachment 区分
+            "job_id": job_id,
+            "target": target,
+            "created_by": actor,
+            "created_at": now.isoformat(),
+            "expiry": expiry.isoformat(),
+            "max_consume_count": max_consume_count,
+            "consumed_count": 0,
+            "consumed_history": [],
+            "uploads": [],  # 上传成功后由 append_upload_to_token 填充 metadata
+        }
+
+        with svc._lock_for(job_id):
+            cur = svc.get_state(job_id)
+            # 独立字段 upload_links（不与 attachment links 混存）
+            upload_links = dict(cur.get("upload_links") or {})
+            upload_links[token] = entry
+            cur["upload_links"] = upload_links
+            # 不 bump version（基础设施簿记，非业务状态变更）
+            cur["updated_at"] = now.isoformat()
+            svc._atomic_write(job_id, cur)
+
+        return {
+            "token": token,
+            "upload_url": f"/api/closure/upload?token={token}",
+            "expiry": expiry.isoformat(),
+            "ttl_minutes": ttl_minutes,
+            "max_consume_count": max_consume_count,
+            "target": target,
+        }
+
+    def consume_upload_token(
+        self, token: str, actor_open_id: str,
+    ) -> Dict[str, Any]:
+        """消费 upload token。
+
+        校验：
+          1. token 存在且 kind == "upload"
+          2. actor_open_id == token.created_by
+          3. 未过期
+          4. consumed_count < max_consume_count
+
+        Returns:
+            {"job_id": ..., "target": ..., "upload_ids": [...]}
+        """
+        if not isinstance(token, str) or not token.startswith(UPLOAD_TOKEN_PREFIX):
+            raise LinkInvalid(f"token 格式非法: {token!r}")
+
+        job_id, entry = self._find_upload_token(token)
+        if entry is None:
+            raise LinkInvalid(f"upload token={token!r} 不存在")
+
+        # actor 一致性（防泄漏：只有创建人能消费）
+        if entry["created_by"] != actor_open_id:
+            raise LinkActorMismatch(
+                f"token={token!r} 绑定的 open_id={entry['created_by']!r} "
+                f"≠ 消费方={actor_open_id!r}"
+            )
+
+        expiry = datetime.fromisoformat(entry["expiry"])
+        if datetime.now(timezone.utc) > expiry:
+            raise LinkExpired(f"upload token={token!r} 已过期")
+
+        if entry["consumed_count"] >= entry["max_consume_count"]:
+            raise LinkExhausted(
+                f"upload token={token!r} 已达消费上限 {entry['max_consume_count']}"
+            )
+
+        # 原子递增 consumed_count
+        svc = self._svc()
+        with svc._lock_for(job_id):
+            cur = svc.get_state(job_id)
+            upload_links = dict(cur.get("upload_links") or {})
+            entry_now = dict(upload_links[token])
+            entry_now["consumed_count"] = entry_now.get("consumed_count", 0) + 1
+            entry_now["consumed_history"] = list(entry_now.get("consumed_history", []))
+            entry_now["consumed_history"].append({
+                "by": actor_open_id,
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+            upload_links[token] = entry_now
+            cur["upload_links"] = upload_links
+            # 不 bump version（基础设施簿记，非业务状态变更）
+            cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+            svc._atomic_write(job_id, cur)
+
+        return {
+            "job_id": entry["job_id"],
+            "target": entry["target"],
+            "uploads": list(entry.get("uploads") or []),
+        }
+
+    def append_upload_to_token(
+        self, token: str, upload_meta: Dict[str, Any],
+    ) -> None:
+        """上传成功后：把 upload metadata 追加到 token 的 uploads 列表。
+
+        upload_meta 来自 UploadService.build_metadata(...)。
+        让业务动作可以通过 consume_upload_token 拿到本次会话的全部 upload 元数据。
+        """
+        if not isinstance(token, str) or not token.startswith(UPLOAD_TOKEN_PREFIX):
+            raise LinkInvalid(f"token 格式非法: {token!r}")
+        if not isinstance(upload_meta, dict) or "upload_id" not in upload_meta:
+            raise ValueError("upload_meta 必须是 dict 且含 upload_id")
+
+        job_id, entry = self._find_upload_token(token)
+        if entry is None:
+            raise LinkInvalid(f"upload token={token!r} 不存在")
+
+        svc = self._svc()
+        with svc._lock_for(job_id):
+            cur = svc.get_state(job_id)
+            upload_links = dict(cur.get("upload_links") or {})
+            entry_now = dict(upload_links[token])
+            uploads = list(entry_now.get("uploads") or [])
+            if upload_meta["upload_id"] not in [u.get("upload_id") for u in uploads]:
+                uploads.append(upload_meta)
+            entry_now["uploads"] = uploads
+            upload_links[token] = entry_now
+            cur["upload_links"] = upload_links
+            # 不 bump version（基础设施簿记，非业务状态变更）
+            cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+            svc._atomic_write(job_id, cur)
+
+    # ─── Upload token 反查（独立字典）────────────────────────────────────────
+
+    def _find_upload_token(
+        self, token: str,
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """扫描 base_dir/<job_id>/closure_state.json 找 upload token。"""
+        if not self.base_dir.exists():
+            return None, None
+        for job_dir in self.base_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            if job_dir.name.startswith("_"):
+                continue
+            state_path = job_dir / "closure_state.json"
+            if not state_path.exists():
+                continue
+            try:
+                with state_path.open("r", encoding="utf-8") as f:
+                    state = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            upload_links = state.get("upload_links") or {}
+            if token in upload_links:
+                return job_dir.name, upload_links[token]
         return None, None
 
 

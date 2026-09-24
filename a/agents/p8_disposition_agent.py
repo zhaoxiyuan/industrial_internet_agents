@@ -1,7 +1,7 @@
 """P8: 人机协同处置（v2 混合版 = 蓝图版工具集 + P8P9 状态机卡片管线）
 
 按蓝图 § 6.1 / § 7 / § 11.3 重写：
-- 7 个工具，全部基于 LangGraph state reducer + P8ArchiveMiddleware + P8P9 状态机：
+- 8 个工具，基于 LangGraph state reducer + P8ArchiveMiddleware + P8P9 状态机：
     * update_job           — 写 P8 working_memory（旧工具，保留）
     * hitl_decide          — 进入 HITL 决策（旧工具，保留）
     * read_p7_events       — 读 P7 风险研判输出（旧工具，保留）
@@ -9,6 +9,7 @@
     * resend_current_card  — ★ 重发 P8P9 job 卡片（防网络波动导致卡片死掉）
     * list_active_p8_jobs  — 读 working_memory 列出 in-progress P8_job（旧工具，保留）
     * recall_jobs          — 长期记忆查询（旧工具，保留）
+    * lookup_feishu_directory — 只读查询已配置的飞书群/人映射
 - 2026-09-17 重构：notify_feishu → open_work_ticket + resend_current_card
     旧版 notify_feishu 调 feishu_gateway_cli 直推卡片（写 P8_job 表）
     v2 走 P8P9 状态机新管线（state_machine + cards + business_actions），
@@ -34,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional
 
+from dotenv import dotenv_values
 from langchain_core.tools import tool, InjectedToolCallId, InjectedToolArg
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain.agents import create_agent
@@ -61,6 +63,7 @@ from A7.schema import (
 from A7.middleware.p8_archive_middleware import P8ArchiveMiddleware
 
 logger = logging.getLogger("a7.p8_disposition_agent")
+_FEISHU_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 # ============================================================
@@ -1072,6 +1075,79 @@ def resend_current_card(
 
 
 # ============================================================
+# 工具：lookup_feishu_directory — 查询已配置的飞书群/人映射（只读）
+# ============================================================
+@tool(description=(
+    "只读查询根目录 .env 已配置的飞书群或人，不实时搜索飞书。"
+    "当用户询问群/人员信息或要按名称定位推送目标时，先调用本工具，不要直接索要 ID。"
+    "第一个参数 entity_type 必填：group（群）或 person（人）。"
+    "第二个参数 name 为群名/人名；第三个参数 id 为群 chat_id/人的 open_id。"
+    "name 与 id 只能填一个；都不填时列出所选类型的全部已配置名称和 ID。"
+    "按名称查询返回 ID，按 ID 查询返回名称；同名多项时返回歧义错误，需改用 ID。"
+))
+def lookup_feishu_directory(entity_type: str, name: str = "", id: str = "") -> str:
+    """查询 FEISHU_GROUP_MAP / FEISHU_USER_MAP，不修改配置或发送消息。"""
+    kind = (entity_type or "").strip().lower()
+    kind = {"群": "group", "人": "person"}.get(kind, kind)
+    command = "lookup_feishu_directory"
+    if kind not in ("group", "person"):
+        return json.dumps(make_error(
+            "INVALID_ARGUMENT", "entity_type 必须是 group（群）或 person（人）"
+        ), ensure_ascii=False)
+
+    name = (name or "").strip()
+    id = (id or "").strip()
+    if name and id:
+        return json.dumps(make_error(
+            "INVALID_ARGUMENT", "name 与 id 不允许同时输入；只填其中一个或都留空"
+        ), ensure_ascii=False)
+
+    key = "FEISHU_GROUP_MAP" if kind == "group" else "FEISHU_USER_MAP"
+    id_key = "chat_id" if kind == "group" else "open_id"
+    try:
+        raw = (dotenv_values(_FEISHU_ENV_FILE).get(key) or "").strip()
+        mapping = json.loads(raw) if raw else {}
+        if not isinstance(mapping, dict):
+            raise ValueError("映射顶层不是 JSON 对象")
+    except (OSError, ValueError) as exc:
+        logger.warning("%s 配置不可用: %s", key, exc)
+        return json.dumps(make_error(
+            "CONFIG_INVALID", f"{key} 配置不可用，请检查根目录 .env"
+        ), ensure_ascii=False)
+
+    rows = [
+        {id_key: key_id, "name": info["name"].strip()}
+        for key_id, info in mapping.items()
+        if isinstance(key_id, str) and isinstance(info, dict)
+        and isinstance(info.get("name"), str) and info["name"].strip()
+    ]
+    rows.sort(key=lambda row: (row["name"].casefold(), row[id_key]))
+
+    if id:
+        match = next((row for row in rows if row[id_key] == id), None)
+        if not match:
+            return json.dumps(make_error(
+                "NOT_FOUND", f"{key} 中找不到该 {id_key}"
+            ), ensure_ascii=False)
+        result = {"entity_type": kind, id_key: id, "name": match["name"]}
+    elif name:
+        matches = [row for row in rows if row["name"].casefold() == name.casefold()]
+        if not matches:
+            return json.dumps(make_error(
+                "NOT_FOUND", f"{key} 中找不到名称 {name!r}"
+            ), ensure_ascii=False)
+        if len(matches) > 1:
+            return json.dumps(make_error(
+                "AMBIGUOUS_NAME", f"名称 {name!r} 匹配多个条目，请改用 {id_key}",
+                details={id_key + "s": [row[id_key] for row in matches]},
+            ), ensure_ascii=False)
+        result = {"entity_type": kind, "name": matches[0]["name"], id_key: matches[0][id_key]}
+    else:
+        result = {"entity_type": kind, "count": len(rows), "items": rows}
+    return json.dumps(make_response(command, result), ensure_ascii=False)
+
+
+# ============================================================
 # 工具 5：list_active_p8_jobs — 读 working_memory（蓝图 § 7 工具 7）
 # ============================================================
 @tool(description=(
@@ -1293,7 +1369,8 @@ def create_disposition_agent(
     # 旧版 notify_feishu 调 feishu_gateway_cli 直推卡片；v2 走 P8P9 状态机新管线
     tools = [
         update_job, hitl_decide, read_p7_events,
-        open_work_ticket, resend_current_card, list_active_p8_jobs, recall_jobs,
+        open_work_ticket, resend_current_card, lookup_feishu_directory,
+        list_active_p8_jobs, recall_jobs,
     ]
 
     sys_prompt = (
@@ -1346,7 +1423,8 @@ def create_disposition_agent_with_hitl(
     # 旧版 notify_feishu 调 feishu_gateway_cli 直推卡片；v2 走 P8P9 状态机新管线
     tools = [
         update_job, hitl_decide, read_p7_events,
-        open_work_ticket, resend_current_card, list_active_p8_jobs, recall_jobs,
+        open_work_ticket, resend_current_card, lookup_feishu_directory,
+        list_active_p8_jobs, recall_jobs,
     ]
 
     hitl_middleware = HumanInTheLoopMiddleware(
@@ -1355,6 +1433,7 @@ def create_disposition_agent_with_hitl(
             "hitl_decide":         True,   # 进入 HITL 决策必须确认
             "open_work_ticket":    True,   # 2026-09-17 v2：开启 P8P9 作业票（发卡片）必须确认
             "resend_current_card": False,  # 2026-09-17 v2：重发卡片是幂等展示修复，不阻断（防网络波动）
+            "lookup_feishu_directory": False,  # 只读查询群/人配置
             "read_p7_events":      False,  # 只读放行
             "list_active_p8_jobs": False,  # 只读放行
             "recall_jobs":         False,  # 长期记忆只读放行

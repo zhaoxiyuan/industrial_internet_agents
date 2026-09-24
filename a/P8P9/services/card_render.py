@@ -17,8 +17,13 @@
 from __future__ import annotations
 import json
 import logging
+import os
+import re
 import sys
+import threading
 import time
+from contextvars import ContextVar
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -29,6 +34,67 @@ from ..cards import build_job_card
 
 
 logger = logging.getLogger("P8P9.services.card_render")
+_IN_CARD_CALLBACK: ContextVar[bool] = ContextVar("in_card_callback", default=False)
+_QUEUE_DIR = Path(__file__).resolve().parents[2] / "data" / "card_update_queue"
+_QUEUE_LOCK = threading.Lock()
+_WORKER_STARTED = False
+
+
+@contextmanager
+def card_callback_context():
+    """卡片点击只做状态转换和同步 raw 响应；CardKit IO 留给后台。"""
+    token = _IN_CARD_CALLBACK.set(True)
+    try:
+        yield
+    finally:
+        _IN_CARD_CALLBACK.reset(token)
+
+
+def _queue_card_update(job_id: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+        raise ValueError("invalid job_id for card update queue")
+    _QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    target = _QUEUE_DIR / f"{job_id}.json"
+    temporary = _QUEUE_DIR / f"{job_id}.{threading.get_ident()}.tmp"
+    payload = {"job_id": job_id, "queued_at": time.time(), "not_before": time.time() + 0.5}
+    with _QUEUE_LOCK:
+        temporary.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(temporary, target)
+
+
+def _card_update_worker() -> None:
+    while True:
+        try:
+            _QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+            for path in _QUEUE_DIR.glob("*.json"):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    if time.time() < float(payload.get("not_before", 0)):
+                        continue
+                    job_id = payload["job_id"]
+                    state = ClosureService().get_state(job_id)
+                    result = update_job_card(job_id, int(state.get("version", 0)))
+                    if result.get("status") not in ("updated", "skipped", "mock"):
+                        raise RuntimeError(str(result))
+                    with _QUEUE_LOCK:
+                        # 新点击可能已覆盖同名任务，不能删掉更新的版本。
+                        if path.exists() and json.loads(path.read_text(encoding="utf-8")) == payload:
+                            path.unlink()
+                except Exception:
+                    logger.exception("deferred card update failed: %s", path.name)
+                    time.sleep(1)
+        except Exception:
+            logger.exception("card update worker scan failed")
+        time.sleep(0.1)
+
+
+def start_card_update_worker() -> None:
+    global _WORKER_STARTED
+    with _QUEUE_LOCK:
+        if _WORKER_STARTED:
+            return
+        _WORKER_STARTED = True
+    threading.Thread(target=_card_update_worker, name="p8p9-card-update", daemon=True).start()
 
 
 # ─── 飞书 Gateway 模块延迟注入（避免循环 import） ────────────────────────────
@@ -82,6 +148,33 @@ def _dl_link_factory(job_id: str) -> callable:
     return factory
 
 
+def _upload_url_factory(job_id: str) -> callable:
+    """P8 附件上传 link_button 工厂（2026-09-20 方案 B）。
+
+    返回一个 (job_id, target) → URL 的 callable（open_id 由 cards.py 内部追加），
+    用于 cards.py 在 acknowledged / materials_in_audit / waiting_human_review /
+    ready_to_close 四个态渲染 "📎 上传附件" link_button。
+
+    URL 形如：
+      {base}/api/closure/upload/new?job_id={job_id}&target={target}
+
+    cards.py 会追加 &open_id={actor_open_id}（由 build_job_card 调用方传入），
+    服务端 upload_new() 会：
+      - 创建 tk_xxx token
+      - 302 → /api/closure/upload?token=tk_xxx（上传页 HTML）
+      - 业务校验：materials_submission 要求 accepted_by.open_id == open_id
+    """
+    import os
+    base = os.environ.get("P8P9_WEB_BASE_URL", "http://127.0.0.1:8089")
+
+    def factory(jid: str, target: str) -> str:
+        return (
+            f"{base}/api/closure/upload/new"
+            f"?job_id={jid}&target={target}"
+        )
+    return factory
+
+
 def _throttle() -> None:
     """§5.6 CardKit sequence 机制：0.2s 节流。"""
     time.sleep(CARD_SEND_THROTTLE_SECONDS)
@@ -95,6 +188,7 @@ def _build_card_json(state: Dict[str, Any], version: int, *, actor_open_id: Opti
         entry_url=_entry_url(job_id),
         actor_open_id=actor_open_id,
         dl_link_factory=_dl_link_factory(job_id),
+        upload_url_factory=_upload_url_factory(job_id),
     )
 
 
@@ -107,7 +201,8 @@ def update_job_card(
 
     card_binding is None → skip（no-op）。
     """
-    _throttle()
+    if not _IN_CARD_CALLBACK.get():
+        _throttle()
     svc = ClosureService()
     try:
         state = svc.get_state(job_id)
@@ -130,20 +225,28 @@ def update_job_card(
     alert_id = binding["alert_id"]
     new_card_json = _build_card_json(state, version, actor_open_id=actor_open_id)
 
+    if _IN_CARD_CALLBACK.get():
+        _queue_card_update(job_id)
+        return {"status": "queued", "job_id": job_id, "version": version,
+                "card_json": new_card_json}
+
     # 反查 sequence
     entry = feishu_card.lookup_card_id(alert_id) or {}
+    account_id = feishu_card.resolve_card_account_id(
+        binding.get("account_id") or entry.get("account_id")
+    )
     sequence = int(entry.get("sequence") or 0) + 1
 
     try:
         feishu_card.update_card_entity(
             card_id, new_card_json,
             sequence=sequence,
-            account_id=binding.get("account_id"),
+            account_id=account_id,
         )
         # 落盘新 sequence
         feishu_card.register_card(
             alert_id, card_id,
-            account_id=binding.get("account_id"),
+            account_id=account_id,
             message_id=entry.get("message_id"),
             sequence=sequence,
             card_json=new_card_json,
@@ -253,6 +356,7 @@ def _send_event_card(
     # alert_id = f"P8P9-{job_id}-{risk_event_id}"（保证唯一）
     alert_id = f"P8P9-{job_id}-{risk_event_id}"
 
+    account_id = feishu_card.resolve_card_account_id(account_id)
     try:
         card_id = feishu_card.create_card_entity(card_json, account_id=account_id)
     except Exception as e:

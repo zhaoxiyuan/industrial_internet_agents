@@ -153,6 +153,51 @@ ARCHIVE_FINAL_MARKER: str = "archived_to_lt"
 ARCHIVE_MAX_RETRY_BACKOFF: int = 60 * 60  # 1 小时持续重试
 
 
+# ─── Upload 附件常量（2026-09-20 方案 B）────────────────────────────────────
+
+# 单文件大小上限（20MB，与飞书一致）
+UPLOAD_MAX_FILE_SIZE: int = 20 * 1024 * 1024
+
+# 单 job 累计附件大小上限（100MB）
+UPLOAD_MAX_JOB_SIZE: int = 100 * 1024 * 1024
+
+# 允许的扩展名（白名单）
+UPLOAD_ALLOWED_EXTENSIONS: FrozenSet[str] = frozenset({
+    "jpg", "jpeg", "png",
+    "pdf",
+    "doc", "docx",
+    "xls", "xlsx",
+    "ppt", "pptx",
+    "mp4",
+})
+
+# 允许的 MIME 类型（MIME 与扩展名双重校验）
+UPLOAD_ALLOWED_MIME_TYPES: FrozenSet[str] = frozenset({
+    "image/jpeg", "image/jpg", "image/png",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "video/mp4",
+})
+
+# upload_id 格式：up_ + 8 字符 base62
+UPLOAD_ID_PREFIX: str = "up_"
+UPLOAD_ID_LEN: int = 8
+
+# upload token 格式：tk_ + 8 字符 base62
+UPLOAD_TOKEN_PREFIX: str = "tk_"
+
+# upload token 有效期（分钟）
+UPLOAD_TOKEN_TTL_MINUTES: int = 30
+
+# 附件下载 token 有效期（分钟）
+ATTACHMENT_DOWNLOAD_TTL_MINUTES: int = 5
+
+
 # ─── 公共 API ────────────────────────────────────────────────────────────────
 
 __all__ = [
@@ -176,4 +221,14 @@ __all__ = [
     "CARD_SEND_THROTTLE_SECONDS",
     "ARCHIVE_FINAL_MARKER",
     "ARCHIVE_MAX_RETRY_BACKOFF",
+    # Upload（2026-09-20）
+    "UPLOAD_MAX_FILE_SIZE",
+    "UPLOAD_MAX_JOB_SIZE",
+    "UPLOAD_ALLOWED_EXTENSIONS",
+    "UPLOAD_ALLOWED_MIME_TYPES",
+    "UPLOAD_ID_PREFIX",
+    "UPLOAD_ID_LEN",
+    "UPLOAD_TOKEN_PREFIX",
+    "UPLOAD_TOKEN_TTL_MINUTES",
+    "ATTACHMENT_DOWNLOAD_TTL_MINUTES",
 ]

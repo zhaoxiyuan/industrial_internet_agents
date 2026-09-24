@@ -125,7 +125,16 @@ export class GatewayHttpServer {
       // 安全性：P8P9 端 route_card_callback 自身有 action 路由表 + operator.open_id 校验。
       // 失败兜底：业务端挂了也要回 200 + toast（飞书会重试轰炸 4xx/5xx）。
       if (request.method === "POST" && url.pathname === "/feishu/card/callback") {
-        const { rawBody } = await this.jsonRequest(request);
+        const { rawBody, body } = await this.jsonRequest(request);
+        const accounts = this.config.channels?.feishu?.accounts ?? {};
+        const accountId = body?.header?.app_id
+          ? Object.keys(accounts).find((id) => accounts[id].appId === body.header.app_id)
+          : (Object.keys(accounts).length === 1 ? Object.keys(accounts)[0] : null);
+        const verificationToken = accountId && accounts[accountId].verificationToken;
+        const suppliedToken = body?.header?.token ?? body?.token;
+        if (!verificationToken || !constantTimeEqual(verificationToken, suppliedToken)) {
+          throw new GatewayError("FEISHU_TOKEN_INVALID", "Feishu card callback token does not match", { status: 401 });
+        }
         try {
           const businessReply = await proxyToP8P9Callback(rawBody, this.logger);
           sendJson(response, 200, businessReply);
@@ -386,8 +395,8 @@ async function proxyToP8P9Callback(rawBody, logger) {
     const body = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
     const req = http.request(
       {
-        host: "127.0.0.1",
-        port: 8089,
+        host: process.env.A_P8P9_HOST ?? "127.0.0.1",
+        port: Number(process.env.A_P8P9_PORT ?? 8089),
         method: "POST",
         path: "/feishu/card/callback",
         headers: {

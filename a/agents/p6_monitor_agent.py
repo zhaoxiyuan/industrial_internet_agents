@@ -374,6 +374,16 @@ input[disabled] { background:#1e293b !important; color:#94a3b8 !important; }
 </div><!-- #app -->
 
 <script>
+// P6 is mounted below /admin/p6/ in production. Its legacy UI uses absolute
+// /api/* URLs, so scope only those browser requests to this mounted path.
+const _p6Fetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+  if (typeof input === "string" && input.startsWith("/api/")) {
+    input = "/admin/p6" + input;
+  }
+  return _p6Fetch(input, init);
+};
+
 let _scenarioRunning = false;
 let _agentRunning = false;
 let _currentSecond = 0;

@@ -1,20 +1,20 @@
-# a/deploy/docker-compose.yml — a/ 子项目 7 服务编排(Nginx + 6 后端 + chat_reply 宿主机跑)
-#
-# 启动顺序:docker compose 按 networks/depends_on 解析;
-#   - nginx depends_on: [gateway, p6, p8p9, app_config, feishu_cfg, webui]
-#   - webui 用 network_mode: host(详见 Dockerfile.webui 说明)
-#   - gateway 复用 a/gateway/Dockerfile(自带 HEALTHCHECK)
-#   - chat_reply 不在本 compose 里,继续宿主机跑 aaaseverstart.py start chat_reply
-
+# Apple Silicon/macOS Docker Desktop deployment.
+# Run from a/deploy:
+# docker compose -p industrial-agents-mac -f docker-compose.mac.yml up -d --build
 services:
   gateway:
-    # 复用 a/gateway/Dockerfile(node:22-alpine + npm 装的 OpenClaw Channel Gateway)
     build:
       context: ../gateway
     image: a-gateway:latest
     container_name: a-gateway
     restart: unless-stopped
+    # 所有运行时凭证来自项目根 .env。
     env_file: ../.env
+    environment:
+      A_WEBUI_HOST: webui
+      A_WEBUI_PORT: "8080"
+      A_P8P9_HOST: p8p9
+      A_P8P9_PORT: "8089"
     # 2026-09-21: Dockerfile 硬编码 --config config/config.container.json,
     # 但 container.json 里 feishu.enabled=false,导致表单保存的 P8P9 账号永远进不来,
     # /webhooks/feishu/* 全部 CHANNEL_DISABLED 拦截飞书 url_verification,
@@ -22,16 +22,16 @@ services:
     # 这里用 command 强制让 gateway 加载表单保存的 config.feishu.local.json
     # (form 写 channels.feishu.*;基础 host/port/storage 从 local.json 默认)。
     command: ["node", "src/index.js", "--config", "/app/config/config.feishu.local.json"]
+    # 2026-09-21: 把 8787 暴露给宿主机 loopback,让宿主机 chat_reply daemon
+    # 能直连 gateway /v1/events(轮询入站事件)和 /v1/messages/reply(回写飞书)。
+    # 仅绑 127.0.0.1,不走公网;CG_API_KEY 仍守住 /v1/* 接口。
+    ports:
+      - "127.0.0.1:8787:8787"
     volumes:
-      # gateway 的 /app/data 持久化(原 Dockerfile 已声明 VOLUME)
       - ../data:/app/data
       # 2026-09-21: 挂载 config/ 让 feishu_cfg 表单保存的 config.feishu.local.json 实时生效
-      # (ro:容器不能写,host 永远是真相;/app/src 等其他文件仍用镜像内)
       - ../gateway/config:/app/config:ro
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
   p6:
     build:
@@ -45,9 +45,38 @@ services:
       - ../data:/srv/app/data
       - ../A5/logs:/srv/app/A5/logs
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
+
+  # P8 飞书私聊回复消费者。复用 p6 镜像内已安装的 Python/LLM 依赖，
+  # 通过 Docker DNS 访问 gateway，避免 Mac 宿主机 Python 3.9 的依赖缺失。
+  chat_reply:
+    image: a-p6:latest
+    container_name: a-chat-reply
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      GATEWAY_HOST: http://gateway:8787
+    working_dir: /srv/app
+    command:
+      - python
+      - -m
+      - A7.adapters.chat_reply
+      - run
+      - --account-id
+      - P8P9
+      - --initial-sequence
+      - "4"
+      - --interval
+      - "1"
+    volumes:
+      # 配置页可在运行期间切换模型；P8 每次调用都从根 .env 读取最新值。
+      - ../.env:/srv/app/.env:ro
+      - ../data:/srv/app/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    networks: [internal]
 
   p8p9:
     build:
@@ -60,9 +89,6 @@ services:
     volumes:
       - ../data:/srv/app/data
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
   app_config:
     build:
@@ -78,9 +104,6 @@ services:
       - ../.env:/srv/app/.env
       - ../agent_config:/srv/app/agent_config
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
   feishu_cfg:
     build:
@@ -90,21 +113,18 @@ services:
     container_name: a-feishu-cfg
     restart: unless-stopped
     env_file: ../.env
+    environment:
+      # 容器内的 127.0.0.1 是 feishu_cfg 自己；监听功能应通过 Docker DNS
+      # 连接同一 internal 网络中的 Gateway。
+      GATEWAY_HOST: http://gateway:8787
     volumes:
-      # feishu_cfg 写 .env + gateway/.env + gateway/config/*.json
-      # 三个都要挂出去,否则容器里写的不会反映到宿主机,下次重启丢失
       - ../.env:/srv/app/.env
       - ../agent_config:/srv/app/agent_config
       - ../feishu_gateway_cli:/srv/app/feishu_gateway_cli
       - ../gateway:/srv/app/gateway
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
   webui:
-    # ⚠ 用 host 网络:web/server.py 写死 127.0.0.1,不改代码的唯一选择
-    # 副作用:8080 端口被宿主机独占;其他服务别再用 8080
     build:
       context: ..
       dockerfile: deploy/Dockerfile.webui
@@ -113,36 +133,24 @@ services:
     restart: unless-stopped
     env_file: ../.env
     environment:
-      # 默认 127.0.0.1:8089 在容器内不通;必须改成 service 名
-      - A_P8P9_BASE_URL=http://p8p9:8089
-      - A_WEBUI_PORT=8080
+      A_WEBUI_HOST: 0.0.0.0
+      A_WEBUI_PORT: "8080"
+      A_P8P9_BASE_URL: http://p8p9:8089
     volumes:
       - ../data:/srv/app/data
       - ../agent_config:/srv/app/agent_config
-    network_mode: host
-    extra_hosts:
-      # 让容器内能用 host.docker.internal 访问宿主机(chat_reply 等)
-      - "host.docker.internal:host-gateway"
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
+    networks: [internal]
 
   nginx:
     image: nginx:1.27-alpine
     container_name: a-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      # ngrok Agent 仅从宿主机回连此端口，绝不直接暴露公网。
-      # 8080 已由 webui 的 host 网络占用，故使用独立的 18080。
       - "127.0.0.1:18080:18080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/conf.d/mac-ngrok.conf:/etc/nginx/conf.d/agent.conf:ro
       - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
-      # 复用宿主机 certbot 申请的证书(标准路径)
-      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - gateway
       - p6
@@ -151,11 +159,7 @@ services:
       - feishu_cfg
       - webui
     networks: [internal]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
 networks:
   internal:
     driver: bridge
-    # 不勾 external gateway,默认的内部网桥即可

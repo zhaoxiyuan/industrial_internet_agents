@@ -309,15 +309,16 @@ def _proxy_to_p8p9_card_callback(payload) -> dict:
 # ── main ─────────────────────────────────────────────────────────────
 
 PORT = int(os.environ.get("A_WEBUI_PORT", "8080"))
+HOST = os.environ.get("A_WEBUI_HOST", "127.0.0.1")
 
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    server = HTTPServer(("127.0.0.1", PORT), Handler)
+    server = HTTPServer((HOST, PORT), Handler)
 
-    print(f"a/web 服务已启动: http://localhost:{PORT}")
+    print(f"a/web 服务已启动: http://{HOST}:{PORT}")
     print(f"  飞书卡片回调入口:POST /api/feishu/card-callback → 转发 P8P9 {P8P9_BASE_URL}")
     print(f"  P8 工作记忆查询:GET  /api/jobs/{{job_id}}/working-memory")
     print(f"  飞书卡片索引:GET    /api/feishu/card-callbacks")

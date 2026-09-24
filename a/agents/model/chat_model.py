@@ -73,6 +73,8 @@ def create_chat_model(callbacks=None):
     """
     from .config import get_settings
     settings = get_settings()
+    if not settings.OPENAI_MODEL.strip():
+        raise ValueError("主模型名未配置：请在根目录 .env 设置 A5_LLM_MODEL，或在配置页激活主模型")
     llm = init_chat_model(
         model=settings.OPENAI_MODEL,
         api_key=settings.OPENAI_API_KEY,

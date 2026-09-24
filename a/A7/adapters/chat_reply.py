@@ -177,15 +177,6 @@ _LLM_ERROR_FALLBACK = (
     "（本次错误已记录到日志，event_id={event_id}）"
 )
 
-# 2026-08-19：appid 防御（多 app 场景下只处理发给 P8 的消息）。
-#   - Gateway feishu.js:228 把飞书 header.app_id 存到 event.metadata.appId
-#   - .env 里 FEISHU_P8_APP_ID 是当前 P8 应用 bot 的 app_id（与
-#     a/gateway/config/config.feishu.local.json 的
-#     channels.feishu.accounts.P8.appId 一致）
-#   - 缺失 / 不匹配 → 跳过（多 daemon 各自处理自己 app 的消息时，这条消息
-#     应当由对应 app 的 daemon 处理，而不是这个 P8 daemon）
-# .env 缺失时不报错（视为 "未配置 = 接受所有 app"，向后兼容过渡版）
-_P8_APP_ID = os.environ.get("FEISHU_P8_APP_ID", "").strip() or None
 
 # 标识本模块日志的 prefix（避免与 feishu_gateway_cli 混淆）
 LOG_TAG = "chat_reply"
@@ -704,22 +695,6 @@ def chat_reply_handler(event: Dict[str, Any]) -> None:
         logger.info(
             "[%s] chat_reply_handler 跳过终态 event_id=%s status=%s",
             LOG_TAG, event_id, delivery_status,
-        )
-        return
-
-    # 2026-08-19：appid 防御（多 app 场景下只处理发给 P8 的消息）。
-    #   - 多 daemon 部署时：A daemon 处理 A app，B daemon 处理 B app
-    #   - .env 未配置 FEISHU_P8_APP_ID 时跳过校验（向后兼容过渡版）
-    #   - 跳过时**不调 ack**（保持 status=pending；让匹配 app 的其他 daemon 能拉到）
-    #     → 多 daemon 路由场景下，每 tick 都可能拉到非本 daemon 的消息，
-    #       所以这行日志降为 DEBUG（默认不刷屏；排查时开 DEBUG 可见）
-    metadata = event.get("metadata") or {}
-    event_app_id = metadata.get("appId") or metadata.get("app_id")
-    if _P8_APP_ID and event_app_id and event_app_id != _P8_APP_ID:
-        logger.debug(
-            "[%s] chat_reply_handler 跳过非 P8 app 消息 event_id=%s "
-            "event_app_id=%s expected=%s",
-            LOG_TAG, event_id, event_app_id, _P8_APP_ID,
         )
         return
 

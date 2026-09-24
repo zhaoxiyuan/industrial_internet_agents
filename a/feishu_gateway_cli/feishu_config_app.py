@@ -111,9 +111,7 @@ except ImportError:
         sys.path.insert(0, str(PKG_DIR))
     from start_gateway import GATEWAY_DIR  # type: ignore[no-redef]
 
-# 多账户：Gateway 子进程的相关路径
-GATEWAY_ENV_FILE: Path = GATEWAY_DIR / ".env"
-GATEWAY_ENV_BACKUP_FILE: Path = GATEWAY_DIR / ".env.bak"
+# 多账户：Gateway 配置文件路径。运行时环境变量只来自项目根 .env。
 FEISHU_CONFIG_FILE: Path = GATEWAY_DIR / "config" / "config.feishu.local.json"
 FEISHU_CONFIG_BACKUP_FILE: Path = GATEWAY_DIR / "config" / "config.feishu.local.json.bak"
 
@@ -162,6 +160,9 @@ DEFAULTS: Dict[str, str] = {
     "GATEWAY_HOST": "http://127.0.0.1:8787",
     "FEISHU_DOMAIN": "feishu",
 }
+
+# Gateway 内部 REST 鉴权以根目录 .env 为准，不允许由飞书配置页修改。
+# 不把实际密钥写入源码或镜像仓库。
 
 
 # ====== 受管 key 子集 ======
@@ -252,6 +253,15 @@ def parse_env_file(env_path: Path) -> List[Tuple[str, str, List[str]]]:
     return out
 
 
+def _gateway_internal_api_key() -> str:
+    """从根目录 .env 读取已有 Gateway 密钥，避免配置页保存时覆盖它。"""
+    values = {key: value for key, value, _ in parse_env_file(ENV_FILE)}
+    key = (values.get("CG_API_KEY") or values.get("CHANNEL_GATEWAY_API_KEY") or "").strip()
+    if not key:
+        raise ValueError("根目录 .env 缺少 CG_API_KEY / CHANNEL_GATEWAY_API_KEY")
+    return key
+
+
 def serialize_env_file(entries: List[Tuple[str, str, List[str]]]) -> str:
     """把 (key, value, [comment_lines]) 列表反向序列化为 .env 文本。
 
@@ -340,6 +350,36 @@ def _is_account_env_key(key: str) -> Optional[Tuple[str, str]]:
     return middle.lower(), matched_suffix
 
 
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """原子写文件，bind-mount 上 EBUSY 时自动 fallback。
+
+    背景：Docker Desktop macOS 把单个文件 bind-mount 进容器后，
+    `os.replace` / `rename` 在跨 mountpoint 时会返回 EBUSY（errno 16）：
+    temp 文件与 target 不在同一文件系统，rename 拒绝执行。
+
+    策略：
+      1. 先写到 /tmp 临时文件（同 fs 的最快路径），再 `os.replace` 替换 target
+      2. 跨 fs 抛 OSError 时，回退到直接覆盖 target（非原子，但保证成功）
+         - 故障窗口：进程崩溃在覆盖中途 → target 留半截内容
+         - 实际触发概率极低（< 2KB 文件 + 短写），可接受
+    """
+    import tempfile as _tempfile
+    fd, tmp_str = _tempfile.mkstemp(prefix=".tmp.", suffix=path.suffix or ".tmp")
+    tmp = Path(tmp_str)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            # 跨 fs / bind-mount(单文件)/device busy 的兜底
+            path.write_text(content, encoding=encoding)
+            tmp.unlink(missing_ok=True)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
     """读 .env → {key: raw_value} dict（不保留 comments/顺序）。
 
@@ -400,9 +440,8 @@ def _write_simple_env_file(
             lines.append(f'{k}="{escaped}"')
         else:
             lines.append(f"{k}={v}")
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    # 2026-09-21: bind-mount 上 os.replace 触发 EBUSY,改用 _atomic_write_text
+    _atomic_write_text(path, "\n".join(lines) + "\n")
     return backup_path
 
 
@@ -412,7 +451,7 @@ def _load_accounts_from_env(
     """从项目根 .env 解析 FEISHU_ACCOUNTS JSON → {account_id: meta}。
 
     meta = {description, domain, app_id, verification_token} (不含 secrets;
-    secrets 由 _load_gateway_account_env 从 gateway .env 提供)。
+    secrets 由项目根 .env 的账户变量提供)。
 
     容错:JSON 损坏 / 不存在 → 返回 {}。
     """
@@ -443,13 +482,10 @@ def _load_accounts_from_env(
 
 
 def _load_gateway_account_env(account_id: str) -> Dict[str, str]:
-    """从 gateway .env 读 FEISHU_<SUCC>_<FIELD> 四个变量 → 字典 {ui_field_key, raw_value}。
-
-    缺哪个返哪个(空字符串);不存在 gateway .env 视为全部空。
-    """
-    if not GATEWAY_ENV_FILE.exists():
+    """从项目根 .env 读取账户凭证。"""
+    if not ENV_FILE.exists():
         return {}
-    kv = _read_simple_env_file(GATEWAY_ENV_FILE)
+    kv = _read_simple_env_file(ENV_FILE)
     out: Dict[str, str] = {}
     for env_suffix, ui_key, _ in ACCOUNT_FIELD_SPECS:
         env_key = _account_env_key(account_id, env_suffix)
@@ -462,7 +498,7 @@ def _build_gateway_env_kv(
 ) -> Dict[str, str]:
     """把 accounts 列表展开成 {FEISHU_<SUCC>_<FIELD>: value} 字典。
 
-    仅含多账户相关的 4N 个键;调用方负责与原 gateway .env 中其他键合并。
+    仅含多账户相关的 4N 个键;调用方负责写入项目根 .env。
     """
     out: Dict[str, str] = {}
     for acc in accounts:
@@ -480,10 +516,10 @@ def _upsert_gateway_accounts_env(
     *,
     deleted_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """重写 gateway .env 中的多账户键。
+    """重写项目根 .env 中的多账户键。
 
     行为:
-        1. 读 gateway .env 全部 {key: value}
+        1. 读项目根 .env 全部 {key: value}
         2. 删除所有现有的 FEISHU_<SUCC>_<FIELD>（N*4 个）
         3. 删除 deleted_ids（兼容旧名 / 多余 ID）的 4 个键
         4. 用 new_accounts 重建账户键
@@ -493,7 +529,7 @@ def _upsert_gateway_accounts_env(
         {"ok": True, "backup": "...", "written_keys": [...], "removed_keys": [...]}
     """
     deleted_ids = deleted_ids or []
-    existing_kv = _read_simple_env_file(GATEWAY_ENV_FILE)
+    existing_kv = _read_simple_env_file(ENV_FILE)
     # 清掉现有的多账户键
     removed_keys: List[str] = []
     for k in list(existing_kv.keys()):
@@ -512,7 +548,14 @@ def _upsert_gateway_accounts_env(
     new_kv = _build_gateway_env_kv(new_accounts)
     existing_kv.update(new_kv)
     written_keys = sorted(new_kv.keys())
-    backup_path = _write_simple_env_file(GATEWAY_ENV_FILE, existing_kv)
+    changes = [(key, "") for key in removed_keys]
+    changes.extend(new_kv.items())
+    changes.extend([
+        ("CG_API_KEY", _gateway_internal_api_key()),
+        ("CHANNEL_GATEWAY_API_KEY", _gateway_internal_api_key()),
+    ])
+    result = upsert_env_entries(changes)
+    backup_path = result["backup"]
     return {
         "ok": True,
         "backup": backup_path,
@@ -532,7 +575,7 @@ def _upsert_feishu_config_accounts(
         3. 顶层 server/storage/delivery/其他 channels 原样保留
         4. 写前备份 .bak,atomic write
 
-    每个账户的 JSON 块用 ${FEISHU_<SUCC>_<FIELD>} 引用 gateway .env。
+    每个账户的 JSON 块用 ${FEISHU_<SUCC>_<FIELD>} 引用项目根 .env。
     """
     cfg: Dict[str, Any] = {}
     if FEISHU_CONFIG_FILE.exists():
@@ -592,12 +635,11 @@ def _upsert_feishu_config_accounts(
             backup_path = None
 
     # atomic write
-    tmp_path = FEISHU_CONFIG_FILE.with_suffix(FEISHU_CONFIG_FILE.suffix + ".tmp")
-    tmp_path.write_text(
+    # 2026-09-21: bind-mount 上 os.replace 触发 EBUSY,改用 _atomic_write_text
+    _atomic_write_text(
+        FEISHU_CONFIG_FILE,
         json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
-    os.replace(tmp_path, FEISHU_CONFIG_FILE)
     return {
         "ok": True,
         "backup": backup_path,
@@ -608,12 +650,12 @@ def _upsert_feishu_config_accounts(
 def _resolve_account_secrets(
     accounts: List[Dict[str, str]],
 ) -> None:
-    """就地处理 accounts 列表中的 `***` 占位符 → 从 gateway .env 读回原值。
+    """就地处理 accounts 列表中的 `***` 占位符 → 从根 .env 读回原值。
 
     仅对敏感字段（app_secret / verification_token）生效。
     输入 accounts 形如:[{account_id, app_secret, verification_token, ...}]
     """
-    if not GATEWAY_ENV_FILE.exists():
+    if not ENV_FILE.exists():
         return
     for acc in accounts:
         gw = _load_gateway_account_env(acc["account_id"])
@@ -725,9 +767,7 @@ def get_managed_view() -> Dict[str, Any]:
             })
     legacy_group_overrides.sort(key=lambda x: x["key"])
 
-    # 多账户（FEISHU_ACCOUNTS JSON + gateway .env 中的 secrets）
-    # 合并两份数据:UI 字段(描述/domain/app_id/verification_token)来自 FEISHU_ACCOUNTS JSON,
-    # 敏感字段(app_secret/verification_token 真值)来自 gateway .env。
+    # 账户元数据及凭证均来自项目根 .env，敏感字段只返回遮罩。
     accounts_dict = _load_accounts_from_env(ENV_FILE)
     accounts_list: List[Dict[str, Any]] = []
     for aid in sorted(accounts_dict.keys()):
@@ -839,10 +879,8 @@ def upsert_env_entries(new_entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             logger.warning("备份 .env 失败（继续写）: %s", exc)
             backup_path = None
 
-    # 原子写
-    tmp_path = ENV_FILE.with_suffix(".env.tmp")
-    tmp_path.write_text(serialize_env_file(new_entries_list), encoding="utf-8")
-    os.replace(tmp_path, ENV_FILE)
+    # 2026-09-21: bind-mount 上 os.replace 触发 EBUSY,改用 _atomic_write_text
+    _atomic_write_text(ENV_FILE, serialize_env_file(new_entries_list))
 
     return {
         "ok": True,
@@ -1300,6 +1338,9 @@ def api_save_config():
         existing = {k: v for k, v, _ in parse_env_file(ENV_FILE)}
         new_entries: List[Tuple[str, str]] = []
         for key in MANAGED_KEYS_ORDER:
+            if key in {"CG_API_KEY", "CHANNEL_GATEWAY_API_KEY"}:
+                new_entries.append((key, _gateway_internal_api_key()))
+                continue
             user_val = (managed_in.get(key) or "").strip()
             if key in SENSITIVE_KEYS and user_val == "***":
                 # 保留原值
@@ -1413,7 +1454,7 @@ def api_save_config():
                 "error": "accounts validation: " + "; ".join(account_errors),
             }), 400
 
-        # 处理 "***" 占位符 → 从 gateway .env 读回原值
+        # 处理 "***" 占位符 → 从根 .env 读回原值
         _resolve_account_secrets(validated_accounts)
 
         # 写 FEISHU_ACCOUNTS JSON(不含 secrets) → .env
@@ -1423,7 +1464,7 @@ def api_save_config():
                 "description": acc["description"],
                 "domain": acc["domain"],
                 "app_id": acc["app_id"],
-                # 仅为 UI 展示完整性记录;真实 secrets 在 gateway .env
+                # 仅为 UI 展示完整性记录；真实 secrets 在根 .env 的账户变量中
                 "verification_token": acc["verification_token"],
             }
         if accounts_json:
@@ -1452,26 +1493,6 @@ def api_save_config():
                 ("FEISHU_DOMAIN", ""),
             ])
 
-        # 2026-08-18：业务端 cardkit 路径需要按 account_id 拿凭证。
-        # 之前 feishu_config_app 只写 gateway/.env 的 FEISHU_<UPPER>_* 字段；
-        # 业务端项目根 .env 同步写一份，让 feishu_gateway_cli/feishu_card._resolve_account_credentials
-        # 直接按账户级 fallback 拿到 secret。
-        # 注意：仅写 APP_ID / APP_SECRET / DOMAIN（业务端调 OpenAPI 需要的最小集）；
-        # 不写 verification_token（仅 gateway 鉴权用，业务端不需要）。
-        for acc in validated_accounts:
-            aid = acc["account_id"]
-            if aid == "default":
-                continue  # default 走顶层字段,不在这里重复
-            s = re.sub(r"[^a-z0-9]+", "_", aid.strip().lower()).strip("_")
-            if not s:
-                continue
-            suffix = s.upper()
-            if acc.get("app_id"):
-                new_entries.append((f"FEISHU_{suffix}_APP_ID", acc["app_id"]))
-            if acc.get("app_secret"):
-                new_entries.append((f"FEISHU_{suffix}_APP_SECRET", acc["app_secret"]))
-            new_entries.append((f"FEISHU_{suffix}_DOMAIN", acc.get("domain") or "feishu"))
-
         # 3. 顺手清理旧的 FEISHU_CONVERSATION_MAP / FEISHU_GROUP_<ROLE>
         if "FEISHU_CONVERSATION_MAP" in existing:
             new_entries.append(("FEISHU_CONVERSATION_MAP", ""))
@@ -1482,19 +1503,18 @@ def api_save_config():
         # 4. 写盘（项目根 .env）
         result = upsert_env_entries(new_entries)
 
-        # 5. 同步写 gateway .env 与 config.feishu.local.json（多账户运行时配置）
+        # 5. 写入根 .env 的账号凭证与 Gateway JSON 配置
         gateway_result: Optional[Dict[str, Any]] = None
         config_result: Optional[Dict[str, Any]] = None
         try:
             gateway_result = _upsert_gateway_accounts_env(validated_accounts)
         except Exception as gw_exc:
             logger.exception(
-                "[POST] /api/feishu/config: 写 gateway .env 失败: %s", gw_exc,
+                "[POST] /api/feishu/config: 写根 .env 账号凭证失败: %s", gw_exc,
             )
             return jsonify({
                 "ok": False,
-                "error": f"accounts pass 写 gateway .env 失败: {gw_exc}。"
-                          "已写入项目根 .env,但 gateway 配置未同步;请重试保存。",
+                "error": f"accounts pass 写根 .env 账号凭证失败: {gw_exc}。请重试保存。",
             }), 500
         try:
             config_result = _upsert_feishu_config_accounts(validated_accounts)
@@ -1505,7 +1525,7 @@ def api_save_config():
             return jsonify({
                 "ok": False,
                 "error": f"accounts pass 写 config.feishu.local.json 失败: {cfg_exc}。"
-                          "已写入项目根 .env 和 gateway .env,但 JSON 配置未同步;请重试保存。",
+                "已写入项目根 .env,但 JSON 配置未同步;请重试保存。",
             }), 500
 
         logger.info(
@@ -1600,7 +1620,12 @@ def api_listener_start():
     try:
         # 1. 前置检查：① ② 必须已配
         existing = {k: v for k, v, _ in parse_env_file(ENV_FILE)}
-        host = existing.get("GATEWAY_HOST", "").strip()
+        # Docker 部署时由 compose 注入 http://gateway:8787；它必须优先于
+        # 根 .env 的宿主机地址，避免容器把 127.0.0.1 误认为 Gateway。
+        host = (
+            os.environ.get("GATEWAY_HOST", "").strip()
+            or existing.get("GATEWAY_HOST", "").strip()
+        )
         api_key = existing.get("CG_API_KEY", "").strip() or existing.get("CHANNEL_GATEWAY_API_KEY", "").strip()
         missing = []
         if not host:

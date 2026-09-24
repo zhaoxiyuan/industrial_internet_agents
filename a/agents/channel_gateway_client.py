@@ -57,7 +57,7 @@ REST 接口，提供三个核心能力：
 - ``GATEWAY_HOST``              网关地址，默认 ``http://127.0.0.1:8787``
 - ``CG_API_KEY`` / ``CHANNEL_GATEWAY_API_KEY`` 网关 REST API Key
 - ``CG_DEFAULT_CHANNEL``        主动发送 / 默认回复的通道名，默认 ``"feishu"``
-- ``CG_DEFAULT_ACCOUNT_ID``     主动发送 / 默认回复的账号 ID，默认 ``"default"``。
+- ``FEISHU_ACCOUNT_ID``         主动发送 / 默认回复的飞书账号 ID，默认 ``"default"``。
     必须与 ``a/gateway/config/*.json`` 里 channels.<channel>.accounts
     注册的 key 一致；不一致会触发 ``CHANNEL_ACCOUNT_NOT_FOUND`` (HTTP 404)
 - ``FEISHU_APP_ID``          可选，飞书 App ID（仅在直接调用飞书 API 时使用）
@@ -156,7 +156,7 @@ class GatewayConfig:
             host=host.rstrip("/"),
             api_key=api_key,
             default_channel=os.getenv("CG_DEFAULT_CHANNEL", "feishu"),
-            default_account_id=os.getenv("CG_DEFAULT_ACCOUNT_ID", "default"),
+            default_account_id=os.getenv("FEISHU_ACCOUNT_ID", "default"),
             timeout=float(os.getenv("CG_TIMEOUT", "15")),
         )
 

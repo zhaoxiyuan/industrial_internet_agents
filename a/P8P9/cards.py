@@ -253,12 +253,86 @@ def _risk_basis_inline(events: List[Dict[str, Any]], *, max_inline: int = 3) -> 
     return "\n\n".join(lines)
 
 
+def _uploads_to_markdown(uploads: List[Dict[str, Any]], *, max_inline: int = 10) -> str:
+    """§7 方案 B：把 uploads metadata 列表渲染为 markdown 行。
+
+    每行格式：`📎 {filename} ({size_human}) · upload_id={upload_id}`
+    """
+    if not uploads:
+        return ""
+    lines: List[str] = []
+    for u in uploads[:max_inline]:
+        filename = u.get("filename") or "?"
+        size_b = u.get("size_bytes") or 0
+        if size_b < 1024:
+            size_h = f"{size_b} B"
+        elif size_b < 1024 * 1024:
+            size_h = f"{size_b / 1024:.1f} KB"
+        else:
+            size_h = f"{size_b / (1024 * 1024):.1f} MB"
+        uid = u.get("upload_id", "?")
+        by = u.get("uploaded_by_name") or u.get("uploaded_by") or "?"
+        lines.append(f"📎 `{filename}` ({size_h}) · 上传人: {by} · id=`{uid}`")
+    if len(uploads) > max_inline:
+        lines.append(f"…等 {len(uploads) - max_inline} 个附件已折叠")
+    return "\n\n".join(lines)
+
+
+def _all_uploads(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """§7 方案 B：从 state 收集全部 uploads 列表（materials.submissions + risk_changes）。
+
+    去重（按 upload_id），保留首次出现顺序。
+    """
+    seen: Dict[str, Dict[str, Any]] = {}
+    # 1. materials.submissions[].uploads
+    submissions = (state.get("materials") or {}).get("submissions") or []
+    for sub in submissions:
+        for u in sub.get("uploads") or []:
+            uid = u.get("upload_id")
+            if uid and uid not in seen:
+                seen[uid] = u
+    # 2. risk_changes[].uploads
+    for rc in state.get("risk_changes") or []:
+        for u in rc.get("uploads") or []:
+            uid = u.get("upload_id")
+            if uid and uid not in seen:
+                seen[uid] = u
+    return list(seen.values())
+
+
+def _upload_link_button(
+    label: str, state: Dict[str, Any], target: str,
+    upload_url_factory: Optional[Callable[[str, str], str]],
+    actor_open_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """§7 方案 B：生成"📎 上传附件"link_button。
+
+    upload_url_factory(job_id, target) → URL（含 actor_open_id 校验）；
+    无 factory 或参数缺失 → 返回 None（不渲染按钮）。
+    """
+    if upload_url_factory is None:
+        return None
+    job_id = state.get("job_id") or ""
+    if not job_id:
+        return None
+    # accepted_by 默认值（同 _actor_match 兜底）
+    if not actor_open_id:
+        accepted = state.get("accepted_by") or {}
+        actor_open_id = accepted.get("open_id")
+    base_url = upload_url_factory(job_id, target)
+    # 把 open_id 作为 query 参数追加
+    sep = "&" if "?" in base_url else "?"
+    url = f"{base_url}{sep}open_id={actor_open_id or ''}"
+    return link_button(label, url, button_type="default")
+
+
 # ─── 主入口：build_job_card ──────────────────────────────────────────────────
 
 def build_job_card(
     state: Dict[str, Any], version: int, entry_url: str, *,
     actor_open_id: Optional[str] = None,
     dl_link_factory: Optional[Callable[[str], str]] = None,
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> Dict[str, Any]:
     """§2.4 主入口：按 job_status 路由到具体构造器。
 
@@ -268,6 +342,10 @@ def build_job_card(
         entry_url: Web 详情页 URL（link_button 跳转用）
         actor_open_id: 当前查看者 open_id（用于按钮 enable/disable）
         dl_link_factory: 附件下载链接工厂（closed 态用）
+        upload_url_factory: §7 方案 B 上传入口 URL 工厂；
+            签名 upload_url_factory(job_id, target) -> str
+            返回形如 `/api/closure/upload/new?job_id=X&target=Y&open_id=Z` 的 URL，
+            卡片 link_button 直接跳转，服务端会生成 fresh upload token 并 302 到上传页。
 
     Returns:
         Card 2.0 dict（schema + header + body.elements）
@@ -291,10 +369,13 @@ def build_job_card(
         entry_url=entry_url,
         actor_open_id=actor_open_id,
         dl_link_factory=dl_link_factory,
+        upload_url_factory=upload_url_factory,
     )
 
     return {
         "schema": CARD_SCHEMA_VERSION,
+        # 群内所有成员必须看到同一份作业状态；否则交互后的更新可能仅对操作人可见。
+        "config": {"update_multi": True},
         "header": {
             "template": color,
             "title": {"tag": "plain_text", "content": title},
@@ -308,6 +389,7 @@ def build_job_card(
 def _build_open(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.1：「接取任务」primary 按钮。"""
     elements: List[Dict[str, Any]] = [
@@ -343,6 +425,7 @@ def _build_open(
 def _build_acknowledged(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.2：「提交/补充材料」+「退接」按钮（仅 accepted_by 本人 enable）。"""
     elements: List[Dict[str, Any]] = [
@@ -355,6 +438,14 @@ def _build_acknowledged(
         hr(),
         markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))),
     ]
+
+    # §7 方案 B：接取时附带的附件（如接取说明 / 初步证据）
+    accepted_uploads = ((state.get("accepted_by") or {}).get("uploads") or [])
+    if accepted_uploads:
+        md = _uploads_to_markdown(accepted_uploads)
+        if md:
+            elements.append(hr())
+            elements.append(markdown("**📎 接取时附带材料**\n\n" + md))
 
     if state.get("materials", {}).get("submissions"):
         elements.append(hr())
@@ -411,6 +502,18 @@ def _build_acknowledged(
     # 退接 form
     elements.append(markdown("**退接任务**（请填理由后点提交按钮）："))
     elements.append(relinquish_form)
+
+    # §7 方案 B：上传附件入口 link_button（仅 accepted_by 本人可见）
+    if can_relinquish:
+        up_btn = _upload_link_button(
+            "📎 上传附件", state, "materials_submission",
+            upload_url_factory, actor_open_id,
+        )
+        if up_btn is not None:
+            elements.append(hr())
+            elements.append(markdown("**补充附件**（先上传，再到上方表单提交说明）："))
+            elements.append(up_btn)
+
     elements.append(hr())
     elements.append(link_button("查看详情", entry_url, button_type="default"))
 
@@ -420,6 +523,7 @@ def _build_acknowledged(
 def _build_rectifying(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.2.5：仅信息展示（驳回后回到此态）。"""
     elements: List[Dict[str, Any]] = [
@@ -448,6 +552,7 @@ def _build_rectifying(
 def _build_materials_in_audit(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.3：v2.1（2026-09-17）—— 业务按钮 + P9 审核进度。
 
@@ -490,11 +595,21 @@ def _build_materials_in_audit(
             "**📋 提交材料**\n\n" +
             (state.get("materials", {}).get("latest_review_text", "") or "_（无）_")[:300]
         ),
-        hr(),
-        markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))),
-        hr(),
-        markdown("**P9 仅提供参考意见；决策权归人工 — 请点击下方按钮终审**"),
     ]
+
+    # §7 方案 B：本次提交材料附带的附件
+    submissions = (state.get("materials") or {}).get("submissions") or []
+    latest_uploads = (submissions[-1].get("uploads") if submissions else []) or []
+    if latest_uploads:
+        md = _uploads_to_markdown(latest_uploads)
+        if md:
+            elements.append(hr())
+            elements.append(markdown("**📎 本次提交附件**\n\n" + md))
+
+    elements.append(hr())
+    elements.append(markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))))
+    elements.append(hr())
+    elements.append(markdown("**P9 仅提供参考意见；决策权归人工 — 请点击下方按钮终审**"))
 
     # v2.1 业务按钮：人工终审（approved → ready_to_close → closed；rejected → rectifying + 清材料）
     #
@@ -541,6 +656,17 @@ def _build_materials_in_audit(
     elements.append(approved_form)
     elements.append(rejected_form)
 
+    # §7 方案 B：上传补充材料 link_button（仅 accepted_by 本人可见）
+    can_act = _actor_match(actor_open_id, state)
+    if can_act:
+        up_btn = _upload_link_button(
+            "📎 上传补充材料", state, "materials_submission",
+            upload_url_factory, actor_open_id,
+        )
+        if up_btn is not None:
+            elements.append(hr())
+            elements.append(up_btn)
+
     elements.append(column_set([column([
         link_button("查看详情", entry_url, button_type="default")
     ], weight=1)]))
@@ -550,6 +676,7 @@ def _build_materials_in_audit(
 def _build_waiting_human_review(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.4：input textarea + 「审核通过」/「驳回」/「升级风险」/「降级风险」。"""
     elements: List[Dict[str, Any]] = [
@@ -621,6 +748,16 @@ def _build_waiting_human_review(
         ],
         button_type="default",
     ))
+
+    # §7 方案 B：上传审核材料 link_button
+    up_btn = _upload_link_button(
+        "📎 上传审核材料", state, "risk_change",
+        upload_url_factory, actor_open_id,
+    )
+    if up_btn is not None:
+        elements.append(hr())
+        elements.append(up_btn)
+
     elements.append(column_set([column([
         link_button("查看详情", entry_url, button_type="default")
     ], weight=1)]))
@@ -630,6 +767,7 @@ def _build_waiting_human_review(
 def _build_ready_to_close(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.5：input textarea + 「确认关闭」+ 升级/降级。"""
     elements: List[Dict[str, Any]] = [
@@ -688,6 +826,16 @@ def _build_ready_to_close(
         ],
         button_type="default",
     ))
+
+    # §7 方案 B：上传最终材料 link_button
+    up_btn = _upload_link_button(
+        "📎 上传最终材料", state, "risk_change",
+        upload_url_factory, actor_open_id,
+    )
+    if up_btn is not None:
+        elements.append(hr())
+        elements.append(up_btn)
+
     elements.append(column_set([column([
         link_button("查看详情", entry_url, button_type="default")
     ], weight=1)]))
@@ -697,6 +845,7 @@ def _build_ready_to_close(
 def _build_closed(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
+    upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """§2.4.6：只读 + 「查看附件」link_button（dl_link_factory）。"""
     review = state.get("review") or {}
@@ -716,9 +865,18 @@ def _build_closed(
         markdown(
             "**📎 提交材料**\n\n" + (materials.get("latest_review_text") or "_（无）_")[:300]
         ),
-        hr(),
-        markdown("**📊 风险事件终态**\n\n" + _risk_basis_inline(state.get("events", []), max_inline=10)),
     ]
+
+    # §7 方案 B：所有 attachments（materials.submissions + risk_changes）
+    all_uploads = _all_uploads(state)
+    if all_uploads:
+        md = _uploads_to_markdown(all_uploads)
+        if md:
+            elements.append(hr())
+            elements.append(markdown(f"**📎 全部附件（{len(all_uploads)}）**\n\n" + md))
+
+    elements.append(hr())
+    elements.append(markdown("**📊 风险事件终态**\n\n" + _risk_basis_inline(state.get("events", []), max_inline=10)))
     # 附件链接按钮
     if dl_link_factory:
         for ev in state.get("events", []):
