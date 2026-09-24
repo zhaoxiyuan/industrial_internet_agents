@@ -349,6 +349,37 @@ def test_record_review_approve_with_bohui_word_flips(mock_card_renderer, closure
     assert state["job_status"] == "rectifying"
 
 
+def test_record_review_rejects_directly_from_materials_in_audit(
+    mock_card_renderer, mock_audit_scheduler, closure_service,
+):
+    svc = closure_service
+    job_id = "JOB-REV-AUDIT-REJECT"
+    actor = {"open_id": "ou_rv", "name": "R"}
+    svc.initialize_job(job_id, actor="test", events=[event_by_level(2)])
+    business_actions.acknowledge_disposition(job_id, actor=actor, expected_version=0)
+    submitted = business_actions.submit_rectification_materials(
+        job_id,
+        review_text="已提交整改材料，请人工审核。",
+        submissions=[], actor=actor, expected_version=1,
+    )
+    assert submitted["job_status"] == "materials_in_audit"
+
+    state = business_actions.record_closure_review(
+        job_id,
+        decision="rejected",
+        comment="整改证据不足，请补充材料后重新提交。",
+        actor=actor, expected_version=submitted["version"],
+    )
+
+    assert state["job_status"] == "rectifying"
+    assert state["materials"]["submissions"] == []
+    assert state["review"]["last_decision"] == "rejected"
+    assert [(entry["from"], entry["to"]) for entry in state["job_status_history"][-2:]] == [
+        ("materials_in_audit", "waiting_human_review"),
+        ("waiting_human_review", "rectifying"),
+    ]
+
+
 def test_record_review_short_comment_rejected(mock_card_renderer, closure_service):
     svc = closure_service
     svc.initialize_job("JOB-REV-004", actor="test", events=[event_by_level(3)])

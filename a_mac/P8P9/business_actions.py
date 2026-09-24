@@ -693,6 +693,12 @@ def record_closure_review(
     else:
         # rejected → waiting_human_review → rectifying
         # 状态机 §3.3：waiting_human_review → {closed, rectifying}
+        if current == "materials_in_audit":
+            intermediate = svc.set_job_status(
+                job_id, "waiting_human_review",
+                actor=actor, expected_version=expected_version,
+            )
+            expected_version = intermediate["version"]
         fields["materials"] = {"submissions": []}
         state = svc.set_job_status(
             job_id, "rectifying",
