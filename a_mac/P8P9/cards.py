@@ -426,18 +426,30 @@ def _build_acknowledged(
     *, state: Dict[str, Any], version: int, entry_url: str,
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
     upload_url_factory: Optional[Callable[[str, str], str]] = None,
+    is_rectifying: bool = False,
 ) -> List[Dict[str, Any]]:
-    """§2.4.2：「提交/补充材料」+「退接」按钮（仅 accepted_by 本人 enable）。"""
+    """§2.4.2：已接取/整改中共用提交材料与退接操作区。"""
+    status_text = "⚠️ 已驳回 · 整改中" if is_rectifying else "已接取 · 处置中"
     elements: List[Dict[str, Any]] = [
         markdown(
             f"**告警ID**：`{state.get('job_id')}`\n"
             f"**接取人**：{(state.get('accepted_by') or {}).get('name', '?')}\n"
             f"**接取时间**：{(state.get('accepted_by') or {}).get('accepted_at', '?')}\n"
-            f"**状态**：已接取 · 处置中"
+            f"**状态**：{status_text}"
         ),
+    ]
+    if is_rectifying:
+        elements.extend([
+            markdown(f"**驳回记录**：{len((state.get('review') or {}).get('history', []))} 条"),
+            hr(),
+            markdown("**📋 上次驳回意见**\n\n" + (
+                (state.get("review") or {}).get("last_comment") or "_（无）_"
+            )[:300]),
+        ])
+    elements.extend([
         hr(),
         markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))),
-    ]
+    ])
 
     # §7 方案 B：接取时附带的附件（如接取说明 / 初步证据）
     accepted_uploads = ((state.get("accepted_by") or {}).get("uploads") or [])
@@ -525,28 +537,12 @@ def _build_rectifying(
     actor_open_id: Optional[str], dl_link_factory: Optional[Callable[[str], str]],
     upload_url_factory: Optional[Callable[[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
-    """§2.4.2.5：仅信息展示（驳回后回到此态）。"""
-    elements: List[Dict[str, Any]] = [
-        markdown(
-            f"**告警ID**：`{state.get('job_id')}`\n"
-            f"**状态**：⚠️ 已驳回 · 整改中\n"
-            f"**驳回记录**：{len((state.get('review') or {}).get('history', []))} 条"
-        ),
-        hr(),
-        markdown(
-            "**📋 上次驳回意见**\n\n" + (
-                (state.get("review") or {}).get("last_comment") or "_（无）_"
-            )[:300]
-        ),
-        hr(),
-        markdown("**风险事件概览**\n\n" + _risk_basis_inline(state.get("events", []))),
-        hr(),
-        markdown("**⏳ 处置人正在重新准备材料中…**"),
-        column_set([column([
-            link_button("查看详情", entry_url, button_type="default")
-        ], weight=1)]),
-    ]
-    return elements
+    """驳回后保留驳回意见，并恢复处置人的提交、退接及附件入口。"""
+    return _build_acknowledged(
+        state=state, version=version, entry_url=entry_url,
+        actor_open_id=actor_open_id, dl_link_factory=dl_link_factory,
+        upload_url_factory=upload_url_factory, is_rectifying=True,
+    )
 
 
 def _build_materials_in_audit(

@@ -94,10 +94,11 @@ def test_acknowledged_card_relinquish_only_for_accepted_user():
         state, version=state["version"], entry_url="http://x",
         actor_open_id="ou_test_user_001",
     )
-    buttons_ok = _find_buttons(card_ok["body"]["elements"])
-    # 应该有 relinquish_job 这个 form 按钮（form_action）
+    buttons_ok = [button for form in card_ok["body"]["elements"]
+                  if form.get("tag") == "form" for button in form["elements"]
+                  if button.get("tag") == "button"]
     has_relinquish = any(
-        (b.get("form_action") or {}).get("on_action", {}).get("action") == "relinquish_job"
+        b.get("value", {}).get("action") == "relinquish_job" and not b.get("disabled")
         for b in buttons_ok
     )
     assert has_relinquish, "accepted_by 一致时应有 relinquish_job 按钮"
@@ -107,13 +108,49 @@ def test_acknowledged_card_relinquish_only_for_accepted_user():
         state, version=state["version"], entry_url="http://x",
         actor_open_id="ou_someone_else",
     )
-    buttons_bad = _find_buttons(card_bad["body"]["elements"])
-    import json
+    buttons_bad = [button for form in card_bad["body"]["elements"]
+                   if form.get("tag") == "form" for button in form["elements"]
+                   if button.get("tag") == "button"]
     has_disabled = any(
-        json.loads(b.get("value", "{}")).get("action") == "relinquish_job_disabled"
+        b.get("value", {}).get("action") == "relinquish_job" and b.get("disabled")
         for b in buttons_bad
     )
     assert has_disabled, "actor 不一致时应显示 disabled 退接按钮"
+
+
+def test_rectifying_card_restores_submit_and_relinquish_after_rejection():
+    state = {
+        **SAMPLE_STATES["rectifying"],
+        "review": {"history": [{"decision": "rejected"}], "last_comment": "证据不足，请重新提交。"},
+    }
+    card = build_job_card(
+        state, version=state["version"], entry_url="http://x",
+        actor_open_id="ou_test_user_001",
+        upload_url_factory=lambda job_id, target: f"http://x/{job_id}/{target}",
+    )
+    elements = card["body"]["elements"]
+    forms = [element for element in elements if element.get("tag") == "form"]
+    actions = {
+        button["value"]["action"]: button
+        for form in forms for button in form["elements"]
+        if button.get("tag") == "button"
+    }
+    assert set(actions) == {"submit_rectification_materials", "relinquish_job"}
+    assert all(not button.get("disabled") for button in actions.values())
+    assert all(button["value"]["expected_version"] == state["version"] for button in actions.values())
+    assert any("证据不足，请重新提交" in element.get("content", "") for element in elements)
+    assert any("上传附件" in str(element) for element in elements)
+
+    other_user_card = build_job_card(
+        state, version=state["version"], entry_url="http://x",
+        actor_open_id="ou_someone_else",
+    )
+    other_forms = [element for element in other_user_card["body"]["elements"] if element.get("tag") == "form"]
+    assert all(
+        button.get("disabled")
+        for form in other_forms for button in form["elements"]
+        if button.get("tag") == "button"
+    )
 
 
 def test_waiting_human_review_has_form_buttons():
