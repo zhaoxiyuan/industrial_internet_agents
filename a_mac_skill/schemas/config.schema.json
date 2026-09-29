@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "siteId",
+    "p6BaseUrl",
+    "p8p9BaseUrl",
+    "gatewayBaseUrl",
+    "gatewayTokenSecretRef",
+    "modelSecretRef"
+  ],
+  "properties": {
+    "siteId": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    },
+    "p6BaseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    },
+    "p8p9BaseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    },
+    "gatewayBaseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    },
+    "gatewayTokenSecretRef": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": true
+    },
+    "modelSecretRef": {
+      "type": "string",
+      "minLength": 1,
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": true
+    },
+    "mcpUrl": {
+      "type": "string",
+      "pattern": "^https?://.+/mcp$",
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    },
+    "mcpTokenEnv": {
+      "type": "string",
+      "pattern": "^(AMAC|SKILL)_[A-Z0-9_]+$",
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": true
+    },
+    "feishuAccount": {
+      "type": "string",
+      "default": "P8P9",
+      "x-scope": "instance",
+      "x-apply": "restart",
+      "x-sensitive": false
+    }
+  }
+}

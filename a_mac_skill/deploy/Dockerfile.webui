@@ -1,0 +1,21 @@
+# a/deploy/Dockerfile.webui — 飞书卡片回调入口(stdlib http.server :8080)
+#
+# WebUI 使用 A_WEBUI_HOST 控制绑定地址。macOS Docker Desktop 使用
+# 0.0.0.0 并通过内部 bridge 网络供 Gateway 调用。
+
+FROM a-deploy-base
+
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+# 只用 stdlib,不需额外依赖
+COPY web/               ./web/
+COPY P8P9/              ./P8P9/
+COPY A7/                ./A7/
+COPY feishu_gateway_cli/ ./feishu_gateway_cli/
+COPY data/              ./data/
+COPY agent_config/      ./agent_config/
+
+EXPOSE 8080
+CMD ["python", "-m", "web.server"]

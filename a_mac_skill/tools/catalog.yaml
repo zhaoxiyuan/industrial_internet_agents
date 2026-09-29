@@ -1,0 +1,357 @@
+tools:
+- name: read_p7_events
+  description: 读取 P7 阶段产出的风险事件列表。
+  inputSchema: schemas/requests/read_p7_events.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: read_p7_events
+    status: ready
+  services:
+  - p8p9
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId + job_id; timeout query before retry
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  - threadId
+  permission: industrial.operator
+- name: open_work_ticket
+  description: 开启 P8P9 作业票（v2：发 P8P9 状态机新版的飞书卡片）。
+  inputSchema: schemas/requests/open_work_ticket.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: open_work_ticket
+    status: ready
+  services:
+  - p8p9
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId + job_id; timeout query before retry
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  - threadId
+  permission: industrial.operator
+- name: resend_current_card
+  description: 重发当前 P8P9 job 的飞书卡片。
+  inputSchema: schemas/requests/resend_current_card.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: resend_current_card
+    status: ready
+  services:
+  - p8p9
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId + job_id; timeout query before retry
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  - threadId
+  permission: industrial.operator
+- name: lookup_feishu_directory
+  description: 查询 FEISHU_GROUP_MAP / FEISHU_USER_MAP，不修改配置或发送消息。
+  inputSchema: schemas/requests/lookup_feishu_directory.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: lookup_feishu_directory
+    status: ready
+  services:
+  - p8p9
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId + job_id; timeout query before retry
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  - threadId
+  permission: industrial.operator
+- name: recall_jobs
+  description: 从长期记忆查询历史 job（罗盘长期记忆 LLM 工具入口）。
+  inputSchema: schemas/requests/recall_jobs.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: recall_jobs
+    status: ready
+  services:
+  - p8p9
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId + job_id; timeout query before retry
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  - threadId
+  permission: industrial.operator
+- name: monitor_start
+  description: 启动监测并在指定延迟后播放 mock 数据
+  inputSchema: schemas/requests/monitor_start.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: monitor_start
+    status: ready
+  services:
+  - p6
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: monitor_stop
+  description: 停止指定作业监测
+  inputSchema: schemas/requests/monitor_stop.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: monitor_stop
+    status: ready
+  services:
+  - p6
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: monitor_status
+  description: 查询监测状态
+  inputSchema: schemas/requests/monitor_status.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: monitor_status
+    status: ready
+  services:
+  - p6
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: p6_events
+  description: 读取监测事件 JSON 记录
+  inputSchema: schemas/requests/p6_events.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: p6_events
+    status: ready
+  services:
+  - p6
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: p7_records
+  description: 读取风险研判记录
+  inputSchema: schemas/requests/p7_records.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: p7_records
+    status: ready
+  services:
+  - p6
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: closure_get
+  description: 查询工单闭环状态
+  inputSchema: schemas/requests/closure_get.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: closure_get
+    status: ready
+  services:
+  - p8p9
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: feishu_events
+  description: 拉取飞书入站消息
+  inputSchema: schemas/requests/feishu_events.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: feishu_events
+    status: ready
+  services:
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: read
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: feishu_reply
+  description: 按原事件回复飞书会话
+  inputSchema: schemas/requests/feishu_reply.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: feishu_reply
+    status: ready
+  services:
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: feishu_send
+  description: 向指定飞书会话发送消息
+  inputSchema: schemas/requests/feishu_send.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: feishu_send
+    status: ready
+  services:
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+- name: feishu_ack
+  description: 确认已经处理的飞书事件
+  inputSchema: schemas/requests/feishu_ack.json
+  outputSchema: schemas/requests/result.json
+  adapter:
+    kind: mcp
+    sourceFile: scripts/mcp_server.py
+    symbol: feishu_ack
+    status: ready
+  services:
+  - gateway
+  timeoutSeconds: 60
+  concurrency: 1
+  effect: write
+  retry:
+    maxAttempts: 1
+  idempotency: requestId; query before retry on timeout
+  context:
+  - tenant
+  - site
+  - actor
+  - runId
+  permission: industrial.operator
+

@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A6 风险研判看板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: #16213e;
+            padding: 16px 24px;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 20px;
+            color: #e94560;
+        }
+        .header .status {
+            font-size: 14px;
+            color: #888;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        .tab-btn {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 14px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover {
+            color: #e0e0e0;
+        }
+        .tab-btn.active {
+            color: #e94560;
+            border-bottom-color: #e94560;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+            padding: 24px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Card */
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+        .card-title {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Stats */
+        .stats {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #e94560;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        /* Table */
+        .table-container {
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #0f3460;
+        }
+        th {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        tr:hover {
+            background: #1f2937;
+        }
+
+        /* Risk Badge */
+        .risk-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .risk-1 { background: #22c55e; color: #000; }
+        .risk-2 { background: #eab308; color: #000; }
+        .risk-3 { background: #f97316; color: #000; }
+        .risk-4 { background: #ef4444; color: #fff; }
+        .risk-5 { background: #dc2626; color: #fff; }
+
+        /* Detail Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 1px solid #0f3460;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .modal-header h2 {
+            font-size: 18px;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 24px;
+        }
+        .modal-close:hover {
+            color: #e0e0e0;
+        }
+
+        /* Form */
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 300px;
+            background: #0f3460;
+            border: 1px solid #1e3a5f;
+            border-radius: 8px;
+            padding: 12px;
+            color: #e0e0e0;
+            font-family: "Consolas", monospace;
+            font-size: 13px;
+            resize: vertical;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #e94560;
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: #d63d56;
+        }
+        .btn-secondary {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+        .btn-secondary:hover {
+            background: #1e4a7a;
+        }
+        .btn-danger {
+            background: #d63b56;
+            color: #fff;
+        }
+        .btn-danger:hover {
+            background: #b82d42;
+        }
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        /* Filter */
+        .filter-bar {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filter-bar input, .filter-bar select {
+            background: #0f3460;
+            border: 1px solid #1e3a5f;
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        .filter-bar input:focus, .filter-bar select:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        /* Event detail fields */
+        .detail-row {
+            display: flex;
+            padding: 12px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .detail-label {
+            width: 120px;
+            color: #888;
+            font-size: 13px;
+        }
+        .detail-value {
+            flex: 1;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #888;
+        }
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>A6 风险研判看板</h1>
+        <span class="status" id="status">就绪</span>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="assessments">研判看板</button>
+        <button class="tab-btn" data-tab="prompts">提示词编辑</button>
+    </div>
+
+    <!-- Tab: 研判看板 -->
+    <div id="tab-assessments" class="tab-content active">
+        <!-- Filter -->
+        <div class="filter-bar">
+            <input type="date" id="filter-date" placeholder="日期">
+            <select id="filter-risk">
+                <option value="">全部风险等级</option>
+                <option value="1">轻微(1)</option>
+                <option value="2">一般(2)</option>
+                <option value="3">较重(3)</option>
+                <option value="4">严重(4)</option>
+                <option value="5">危急(5)</option>
+            </select>
+            <button class="btn btn-primary" onclick="loadAssessments()">刷新</button>
+            <button class="btn btn-danger" onclick="clearLogs()">清理日志</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="card">
+            <div class="card-title">统计概览</div>
+            <div class="stats" id="stats">
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-total">-</div>
+                    <div class="stat-label">今日研判</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-risk3">-</div>
+                    <div class="stat-label">较重(3级)</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-risk4">-</div>
+                    <div class="stat-label">严重(4级)</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-risk5">-</div>
+                    <div class="stat-label">危急(5级)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Assessment List -->
+        <div class="card">
+            <div class="card-title">研判列表</div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>时间范围</th>
+                            <th>事件类型</th>
+                            <th>涉及人员</th>
+                            <th>风险等级</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="assessments-table">
+                        <tr>
+                            <td colspan="5" class="empty-state">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: 提示词编辑 -->
+    <div id="tab-prompts" class="tab-content">
+        <div class="card">
+            <div class="card-title">提示词编辑</div>
+            <div class="form-group">
+                <label>提示词类型</label>
+                <select id="prompt-type" onchange="loadPrompt()">
+                    <option value="risk_classification">风险分级系统提示词</option>
+                    <option value="risk_user_template">风险分级用户模板</option>
+                    <option value="aggregation">事件聚合提示词</option>
+                    <option value="aggregation_user_template">聚合用户模板</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>提示词内容</label>
+                <textarea id="prompt-content"></textarea>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="savePrompt()">保存</button>
+                <button class="btn btn-secondary" onclick="resetPrompt()">重置为默认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="modal" id="detail-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>研判详情</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="detail-content">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ Global State ============
+        let currentAssessments = [];
+
+        // ============ Tab Navigation ============
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        // ============ Clear Logs ============
+        async function clearLogs() {
+            if (!confirm('确定要清理 A6/logs 下的全部日志文件吗？此操作不可恢复。')) return;
+            try {
+                const resp = await fetch('/api/a6/clear_logs', { method: 'POST' });
+                const data = await resp.json();
+                if (data.ok) {
+                    alert('已清理 ' + data.cleared + ' 个文件/目录');
+                    loadAssessments();
+                }
+            } catch (err) {
+                alert('清理失败: ' + err);
+            }
+        }
+
+        // ============ Load Assessments ============
+        async function loadAssessments() {
+            const date = document.getElementById('filter-date').value;
+            const riskLevel = document.getElementById('filter-risk').value;
+
+            document.getElementById('status').textContent = '加载中...';
+            document.getElementById('assessments-table').innerHTML = '<tr><td colspan="5" class="loading">加载中...</td></tr>';
+
+            try {
+                let url = '/api/a6/assessments?limit=100';
+                if (date) url += '&start=' + date + 'T00:00:00&end=' + date + 'T23:59:59';
+                if (riskLevel) url += '&risk_level=' + riskLevel;
+
+                const resp = await fetch(url);
+                const data = await resp.json();
+
+                currentAssessments = data.items || [];
+                renderAssessments(currentAssessments);
+                updateStats(currentAssessments);
+                document.getElementById('status').textContent = '共 ' + currentAssessments.length + ' 条记录';
+            } catch (err) {
+                console.error('Failed to load assessments:', err);
+                document.getElementById('assessments-table').innerHTML =
+                    '<tr><td colspan="5" class="empty-state">加载失败: ' + err.message + '</td></tr>';
+                document.getElementById('status').textContent = '加载失败';
+            }
+        }
+
+        function renderAssessments(items) {
+            const tbody = document.getElementById('assessments-table');
+
+            if (!items || items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><div class="icon">📋</div>暂无研判记录</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = items.map(item => {
+                const firstSeen = formatTime(item.first_seen);
+                const lastSeen = formatTime(item.last_seen);
+                const duration = item.duration_sec ? item.duration_sec.toFixed(0) + '秒' : '-';
+                const persons = item.involved_persons ? item.involved_persons.join(', ') : '-';
+
+                return `
+                    <tr>
+                        <td>${firstSeen} ~ ${lastSeen}<br><small style="color:#888">${duration}</small></td>
+                        <td>${item.event_type || '-'}</td>
+                        <td>${persons}</td>
+                        <td><span class="risk-badge risk-${item.risk_level}">${item.risk_level_name}(${item.risk_level})</span></td>
+                        <td><button class="btn btn-secondary" onclick="showDetail('${item.a6_event_id}')">查看</button></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateStats(items) {
+            const total = items.length;
+            const risk3 = items.filter(i => i.risk_level === 3).length;
+            const risk4 = items.filter(i => i.risk_level === 4).length;
+            const risk5 = items.filter(i => i.risk_level === 5).length;
+
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('stat-risk3').textContent = risk3;
+            document.getElementById('stat-risk4').textContent = risk4;
+            document.getElementById('stat-risk5').textContent = risk5;
+        }
+
+        // ============ Show Detail ============
+        async function showDetail(a6EventId) {
+            try {
+                const resp = await fetch('/api/a6/assessments/' + a6EventId);
+                if (!resp.ok) throw new Error('获取详情失败');
+
+                const data = await resp.json();
+                const modal = document.getElementById('detail-modal');
+                const content = document.getElementById('detail-content');
+
+                const firstSeen = formatTime(data.first_seen);
+                const lastSeen = formatTime(data.last_seen);
+                const duration = data.duration_sec ? data.duration_sec.toFixed(1) + '秒' : '-';
+                const persons = data.involved_persons ? data.involved_persons.join(', ') : '-';
+                const suggestions = data.suggestions ? data.suggestions.map((s, i) => `${i+1}. ${s}`).join('<br>') : '-';
+
+                content.innerHTML = `
+                    <div class="detail-row">
+                        <div class="detail-label">聚合事件ID</div>
+                        <div class="detail-value">${data.a6_event_id || '-'}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">事件类型</div>
+                        <div class="detail-value">${data.event_type || '-'}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">涉及人员</div>
+                        <div class="detail-value">${persons}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">时间范围</div>
+                        <div class="detail-value">${firstSeen} ~ ${lastSeen} (${duration})</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">风险等级</div>
+                        <div class="detail-value">
+                            <span class="risk-badge risk-${data.risk_level}">${data.risk_level_name}(${data.risk_level})</span>
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">等级依据</div>
+                        <div class="detail-value" style="white-space: pre-wrap;">${data.risk_basis || '-'}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">处理建议</div>
+                        <div class="detail-value">${suggestions}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">推理过程</div>
+                        <div class="detail-value" style="white-space: pre-wrap; max-height: 200px; overflow-y: auto;">${data.reasoning || '-'}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">来源事件</div>
+                        <div class="detail-value">${(data.aggregated_from || []).join(', ')}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">研判时间</div>
+                        <div class="detail-value">${formatTime(data.timestamp)}</div>
+                    </div>
+                `;
+
+                modal.classList.add('active');
+            } catch (err) {
+                alert('加载详情失败: ' + err.message);
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('detail-modal').classList.remove('active');
+        }
+
+        // ============ Prompt Management ============
+        async function loadPrompt() {
+            const promptName = document.getElementById('prompt-type').value;
+            document.getElementById('status').textContent = '加载提示词...';
+
+            try {
+                const resp = await fetch('/api/a6/prompts/' + promptName);
+                const data = await resp.json();
+                document.getElementById('prompt-content').value = data.content || '';
+                document.getElementById('status').textContent = '提示词已加载';
+            } catch (err) {
+                console.error('Failed to load prompt:', err);
+                document.getElementById('status').textContent = '加载失败';
+            }
+        }
+
+        async function savePrompt() {
+            const promptName = document.getElementById('prompt-type').value;
+            const content = document.getElementById('prompt-content').value;
+
+            document.getElementById('status').textContent = '保存中...';
+
+            try {
+                // 先更新内存
+                await fetch('/api/a6/prompts/' + promptName, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({content})
+                });
+
+                // 再保存到文件
+                const resp = await fetch('/api/a6/prompts/' + promptName + '/save', {
+                    method: 'POST'
+                });
+
+                if (!resp.ok) throw new Error('保存失败');
+
+                document.getElementById('status').textContent = '保存成功';
+            } catch (err) {
+                console.error('Failed to save prompt:', err);
+                document.getElementById('status').textContent = '保存失败: ' + err.message;
+            }
+        }
+
+        async function resetPrompt() {
+            const promptName = document.getElementById('prompt-type').value;
+
+            if (!confirm('确定要重置为默认提示词吗？')) return;
+
+            document.getElementById('status').textContent = '重置中...';
+
+            try {
+                const resp = await fetch('/api/a6/prompts/' + promptName + '/reset', {
+                    method: 'POST'
+                });
+
+                if (!resp.ok) throw new Error('重置失败');
+
+                await loadPrompt();
+                document.getElementById('status').textContent = '已重置为默认';
+            } catch (err) {
+                console.error('Failed to reset prompt:', err);
+                document.getElementById('status').textContent = '重置失败';
+            }
+        }
+
+        // ============ Utilities ============
+        function formatTime(isoString) {
+            if (!isoString) return '-';
+            try {
+                const d = new Date(isoString);
+                return d.toLocaleString('zh-CN', {
+                    month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            } catch {
+                return isoString;
+            }
+        }
+
+        // ============ Init ============
+        document.addEventListener('DOMContentLoaded', () => {
+            // 设置默认日期为今天
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('filter-date').value = today;
+
+            // 加载初始数据
+            loadAssessments();
+            loadPrompt();
+        });
+
+        // Close modal on outside click
+        document.getElementById('detail-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>

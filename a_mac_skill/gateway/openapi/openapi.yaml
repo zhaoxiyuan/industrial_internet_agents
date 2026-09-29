@@ -1,0 +1,1055 @@
+openapi: 3.1.0
+info:
+  title: OpenClaw Channel Gateway Standalone API
+  version: 0.1.0
+  summary: Standalone messaging channel gateway for external agent runtimes
+  description: |
+    Receives platform webhooks, normalizes and persists channel events, exposes
+    REST/SSE consumption APIs, and sends or replies to messages through channel adapters.
+    This is an independent implementation informed by OpenClaw's Channel/Gateway boundary;
+    it is not the OpenClaw Gateway or Plugin SDK.
+servers:
+  - url: http://127.0.0.1:8787
+security:
+  - bearerAuth: []
+tags:
+  - name: Health
+  - name: Webhooks
+  - name: Metadata
+  - name: Inbound
+  - name: Outbound
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Process is responding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /readyz:
+    get:
+      tags: [Health]
+      operationId: readiness
+      security: []
+      responses:
+        '200':
+          description: State store is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: State store is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /webhooks/{channel}:
+    post:
+      tags: [Webhooks]
+      operationId: receiveWebhookDefaultAccount
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ChannelPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Webhook handled; accountId defaults to default
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WebhookAcceptedResponse'
+                  - type: object
+                    additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /webhooks/{channel}/{accountId}:
+    post:
+      tags: [Webhooks]
+      operationId: receiveWebhook
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ChannelPath'
+        - $ref: '#/components/parameters/AccountIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Webhook handled or platform challenge answered
+          headers:
+            X-Channel-Gateway-Delivery-Accepted:
+              schema:
+                type: string
+              description: persisted when one or more new events were written to the state file
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WebhookAcceptedResponse'
+                  - type: object
+                    additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /v1/meta:
+    get:
+      tags: [Metadata]
+      operationId: getMeta
+      responses:
+        '200':
+          description: Service metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, version, store]
+                properties:
+                  service:
+                    type: string
+                  version:
+                    type: string
+                  upstream_reference:
+                    type: string
+                  store:
+                    $ref: '#/components/schemas/StoreStats'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/channels:
+    get:
+      tags: [Metadata]
+      operationId: listChannels
+      responses:
+        '200':
+          description: Registered channel adapters
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [channels]
+                properties:
+                  channels:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChannelDescriptor'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/inbound:
+    post:
+      tags: [Inbound]
+      operationId: ingestTrustedInbound
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrustedInboundRequest'
+      responses:
+        '202':
+          description: New event persisted
+          headers:
+            X-Channel-Gateway-Delivery-Accepted:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrustedInboundResponse'
+        '200':
+          description: Duplicate event resolved to existing record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrustedInboundResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/events:
+    get:
+      tags: [Inbound]
+      operationId: listEvents
+      parameters:
+        - name: after_sequence
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: channel
+          in: query
+          schema:
+            type: string
+        - name: session_key
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Events ordered by ascending sequence
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/events/stream:
+    get:
+      tags: [Inbound]
+      operationId: streamEvents
+      parameters:
+        - name: after_sequence
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: Server-sent event stream; ready and replay-complete delimit persistent inbound replay, followed by live inbound, event-status, outbound, receipt, and heartbeat comments
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/events/{eventId}:
+    get:
+      tags: [Inbound]
+      operationId: getEvent
+      parameters:
+        - $ref: '#/components/parameters/EventIdPath'
+      responses:
+        '200':
+          description: Event record
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/events/{eventId}/ack:
+    post:
+      tags: [Inbound]
+      operationId: acknowledgeEvent
+      parameters:
+        - $ref: '#/components/parameters/EventIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [acked, ignored]
+                  default: acked
+                details:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/events/{eventId}/retry:
+    post:
+      tags: [Inbound]
+      operationId: retryEvent
+      parameters:
+        - $ref: '#/components/parameters/EventIdPath'
+      responses:
+        '202':
+          description: Event returned to pending state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/dead-letters:
+    get:
+      tags: [Inbound]
+      operationId: listDeadLetters
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: Dead-letter events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/dead-letters/{eventId}/retry:
+    post:
+      tags: [Inbound]
+      operationId: retryDeadLetter
+      parameters:
+        - $ref: '#/components/parameters/EventIdPath'
+      responses:
+        '202':
+          description: Dead-letter event returned to pending state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/InboundEvent'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/messages/send:
+    post:
+      tags: [Outbound]
+      operationId: sendMessage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutboundMessageRequest'
+      responses:
+        '201':
+          description: New outbound message accepted by platform
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '200':
+          description: Existing idempotent result replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '502':
+          $ref: '#/components/responses/Error502'
+  /v1/messages/reply:
+    post:
+      tags: [Outbound]
+      operationId: replyToEvent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplyRequest'
+      responses:
+        '201':
+          description: New reply accepted by platform
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '200':
+          description: Existing idempotent result replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '502':
+          $ref: '#/components/responses/Error502'
+  /v1/outbound/intents:
+    get:
+      tags: [Outbound]
+      operationId: listOutboundIntents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [created, sending, sent, failed, unknown]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: Outbound intents, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  intents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OutboundIntent'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /v1/outbound/intents/{intentId}:
+    get:
+      tags: [Outbound]
+      operationId: getOutboundIntent
+      parameters:
+        - $ref: '#/components/parameters/IntentIdPath'
+      responses:
+        '200':
+          description: Outbound intent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  intent:
+                    $ref: '#/components/schemas/OutboundIntent'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/outbound/intents/{intentId}/retry:
+    post:
+      tags: [Outbound]
+      operationId: retryOutboundIntent
+      parameters:
+        - $ref: '#/components/parameters/IntentIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Required to replay an unknown send; may create a duplicate platform message
+      responses:
+        '201':
+          description: Retry completed as a new platform send
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '200':
+          description: Existing sent result replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundResult'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '502':
+          $ref: '#/components/responses/Error502'
+  /v1/receipts:
+    get:
+      tags: [Outbound]
+      operationId: listReceipts
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: Platform acceptance receipts, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  receipts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Receipt'
+        '401':
+          $ref: '#/components/responses/Error401'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ChannelPath:
+      name: channel
+      in: path
+      required: true
+      schema:
+        type: string
+    AccountIdPath:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+    EventIdPath:
+      name: eventId
+      in: path
+      required: true
+      schema:
+        type: string
+    IntentIdPath:
+      name: intentId
+      in: path
+      required: true
+      schema:
+        type: string
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 512
+  responses:
+    Error400:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error401:
+      description: Unauthorized or invalid webhook signature
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error404:
+      description: Resource, channel, or account not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error409:
+      description: Idempotency conflict, send in progress, or unknown send protected from replay
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error502:
+      description: Platform or upstream call failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error503:
+      description: Required channel configuration is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, time]
+      properties:
+        status:
+          type: string
+          const: ok
+        time:
+          type: string
+          format: date-time
+    ReadinessResponse:
+      type: object
+      required: [status, store]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        store:
+          $ref: '#/components/schemas/StoreStats'
+    StoreStats:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        events:
+          type: object
+          additionalProperties:
+            type: integer
+        outbound:
+          type: object
+          additionalProperties:
+            type: integer
+        receipts:
+          type: integer
+        nextSequence:
+          type: integer
+        stateFile:
+          type: string
+    ChannelDescriptor:
+      type: object
+      required: [id, label, aliases, enabled, accounts, capabilities]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        accounts:
+          type: array
+          items:
+            type: string
+        capabilities:
+          type: object
+          additionalProperties: true
+    Sender:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: string
+        name:
+          type: [string, 'null']
+        type:
+          type: string
+    Conversation:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        threadId:
+          type: [string, 'null']
+        parentId:
+          type: [string, 'null']
+    MediaItem:
+      type: object
+      properties:
+        kind:
+          type: string
+        url:
+          type: [string, 'null']
+        contentType:
+          type: [string, 'null']
+        name:
+          type: [string, 'null']
+        platformId:
+          type: [string, 'null']
+        size:
+          type: [number, 'null']
+    Message:
+      type: object
+      required: [type, text, mentions, media]
+      properties:
+        id:
+          type: [string, 'null']
+        type:
+          type: string
+        text:
+          type: string
+        replyToId:
+          type: [string, 'null']
+        mentions:
+          type: array
+          items: {}
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/MediaItem'
+    Session:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+    DeliveryState:
+      type: object
+      required: [status, attempts]
+      properties:
+        status:
+          type: string
+          enum: [pending, processing, acked, ignored, dead_letter]
+        attempts:
+          type: integer
+        nextAttemptAt:
+          type: [integer, 'null']
+        claimedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        lastError:
+          oneOf:
+            - $ref: '#/components/schemas/SerializedError'
+            - type: 'null'
+        outcome:
+          type: [object, 'null']
+          additionalProperties: true
+    TrustedInboundRequest:
+      type: object
+      required: [channel, sender, conversation, message]
+      properties:
+        platformEventId:
+          type: string
+        platform_event_id:
+          type: string
+        channel:
+          type: string
+        accountId:
+          type: string
+          default: default
+        account_id:
+          type: string
+        kind:
+          type: string
+          default: message
+        occurredAt:
+          type: string
+          format: date-time
+        occurred_at:
+          type: string
+          format: date-time
+        sender:
+          $ref: '#/components/schemas/Sender'
+        conversation:
+          $ref: '#/components/schemas/Conversation'
+        message:
+          $ref: '#/components/schemas/Message'
+        raw: {}
+        metadata:
+          type: object
+          additionalProperties: true
+    InboundEvent:
+      allOf:
+        - $ref: '#/components/schemas/TrustedInboundRequest'
+        - type: object
+          required: [id, sequence, receivedAt, session, delivery]
+          properties:
+            id:
+              type: string
+            sequence:
+              type: integer
+            receivedAt:
+              type: string
+              format: date-time
+            session:
+              $ref: '#/components/schemas/Session'
+            delivery:
+              $ref: '#/components/schemas/DeliveryState'
+    WebhookAcceptedResponse:
+      type: object
+      required: [accepted, event_ids, duplicates, ignored]
+      properties:
+        accepted:
+          type: boolean
+        event_ids:
+          type: array
+          items:
+            type: string
+        duplicates:
+          type: array
+          items:
+            type: string
+        ignored:
+          type: boolean
+        ignored_reason:
+          type: [string, 'null']
+    TrustedInboundResponse:
+      type: object
+      required: [accepted, duplicate, event]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        duplicate:
+          type: boolean
+        event:
+          $ref: '#/components/schemas/InboundEvent'
+    OutboundTarget:
+      type: object
+      required: [conversationId]
+      properties:
+        conversationId:
+          type: string
+        conversation_id:
+          type: string
+        receiveIdType:
+          type: string
+        receive_id_type:
+          type: string
+    OutboundMessageRequest:
+      type: object
+      required: [channel, to, text]
+      properties:
+        channel:
+          type: string
+        accountId:
+          type: string
+          default: default
+        account_id:
+          type: string
+        to:
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/OutboundTarget'
+        text:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        replyToId:
+          type: string
+        reply_to_id:
+          type: string
+        threadId:
+          type: string
+        thread_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+          maxLength: 512
+        idempotency_key:
+          type: string
+          maxLength: 512
+    ReplyRequest:
+      type: object
+      required: [text]
+      anyOf:
+        - required: [eventId]
+        - required: [event_id]
+      properties:
+        eventId:
+          type: string
+        event_id:
+          type: string
+        channel:
+          type: string
+        accountId:
+          type: string
+        account_id:
+          type: string
+        to:
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/OutboundTarget'
+        text:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        replyToId:
+          type: string
+        reply_to_id:
+          type: string
+        threadId:
+          type: string
+        thread_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+        idempotency_key:
+          type: string
+    OutboundIntent:
+      type: object
+      required: [id, request, status, attempts, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        idempotencyKey:
+          type: [string, 'null']
+        request:
+          $ref: '#/components/schemas/OutboundMessageRequest'
+        status:
+          type: string
+          enum: [created, sending, sent, failed, unknown]
+        attempts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lastError:
+          oneOf:
+            - $ref: '#/components/schemas/SerializedError'
+            - type: 'null'
+        receiptId:
+          type: [string, 'null']
+    Receipt:
+      type: object
+      required: [id, status, channel, accountId, intentId, platformMessageId, createdAt]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          const: sent
+        channel:
+          type: string
+        accountId:
+          type: string
+        intentId:
+          type: string
+        idempotencyKey:
+          type: string
+        platformMessageId:
+          type: string
+        conversationId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        evidence:
+          type: string
+        raw: {}
+    OutboundResult:
+      type: object
+      required: [intent, replayed]
+      properties:
+        intent:
+          $ref: '#/components/schemas/OutboundIntent'
+        receipt:
+          oneOf:
+            - $ref: '#/components/schemas/Receipt'
+            - type: 'null'
+        replayed:
+          type: boolean
+    SerializedError:
+      type: object
+      required: [code, message, retryable, ambiguous]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        ambiguous:
+          type: boolean
+        details: {}
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id, retryable, ambiguous]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            retryable:
+              type: boolean
+            ambiguous:
+              type: boolean
+            details: {}

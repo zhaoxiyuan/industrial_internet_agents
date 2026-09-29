@@ -1,0 +1,45 @@
+# LangChain 核心
+langchain>=1.3.14
+langchain-core>=1.5.3
+langchain-community>=0.4.2
+langchain-openai>=1.4.1
+
+# OpenAI
+openai>=1.0.0
+
+# 向量化与嵌入
+numpy>=1.26.0
+tiktoken>=0.7.0
+
+# 日志与配置
+pyyaml>=6.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# 常用工具库
+requests>=2.31.0
+httpx>=0.27.0
+tenacity>=8.2.0
+orjson>=3.9.0
+cachetools>=5.3.0
+
+# 异步支持
+aiohttp>=3.9.0
+asyncio-throttle>=1.0.2
+websockets>=12.0
+
+# 调试与可观测性
+structlog>=24.0.0
+rich>=15.0.0
+
+# LangSmith 观测平台
+langsmith>=0.1.0
+
+# Gradio Web 前端
+gradio>=4.0.0
+pydub==0.25.1
+
+# CLI 框架
+click>=8.0.0
+rich>=15.0.0

@@ -1,0 +1,104 @@
+{
+  "event_id": "2026:08:20T15:03:14.341",
+  "wall_time": "2026:08:20T15:03:14.341",
+  "event_data": {
+    "wall_time": "2026:08:20T15:03:14.341",
+    "events": [
+      {
+        "is_event": true,
+        "type": "PPE缺失",
+        "person": {
+          "id": "P7",
+          "name": "张师傅",
+          "role": "焊工"
+        },
+        "evidence": {
+          "ppe_item": "helmet",
+          "violation_seconds": [
+            {
+              "wall_time": "2026-08-20T15:03:08.341",
+              "violation_frames": 25,
+              "total_frames": 25,
+              "ratio": "100%"
+            },
+            {
+              "wall_time": "2026-08-20T15:03:09.341",
+              "violation_frames": 25,
+              "total_frames": 25,
+              "ratio": "100%"
+            },
+            {
+              "wall_time": "2026-08-20T15:03:10.341",
+              "violation_frames": 25,
+              "total_frames": 25,
+              "ratio": "100%"
+            }
+          ],
+          "cv_summary": "*** 头盔缺失 ***"
+        },
+        "explanation": "P7(张师傅,焊工) 在 2026-08-20T15:03:08.341~2026-08-20T15:03:11.341 期间(共3秒,75帧中75帧未戴)持续未戴头盔,占比 100%,判定为 PPE 违规",
+        "status": "ongoing",
+        "wall_time": "2026-08-20T15:03:08.341",
+        "duration_sec": 3,
+        "end_wall_time": "2026-08-20T15:03:11.341",
+        "event_id": "A5-P7-1787209436769",
+        "first_seen": "2026:08:20T15:03:08.341",
+        "last_seen": "2026:08:20T15:03:14.341"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-150427-969",
+      "aggregated_from": [
+        "2026:08:20T15:03:14.341"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-08-20T15:03:08.341",
+      "last_seen": "2026-08-20T15:03:14.341",
+      "wall_time": "2026-08-20T15:03:14.341",
+      "duration_sec": 6.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 1,
+      "risk_level_name": "轻微",
+      "risk_basis": "单人头盔缺失，持续6秒（<10秒阈值），头盔缺失比例100%；未提供危险区域/传感器/监护人等附加信息，无等级加成因素",
+      "suggestions": [
+        "提醒张师傅(P7)立即佩戴好安全头盔",
+        "持续关注该人员后续是否再次出现PPE缺失",
+        "如该人员反复违规，应加强现场督导或安全教育"
+      ],
+      "reasoning": "根据聚合决策铁律：1) 用户提示中存在活跃违规记录A6-20260820-150219-206；2) 该记录violation_type为'PPE缺失'，与待研判事件event_type一致；3) 该记录person_id为P7，与待研判事件person_id一致。三项条件全部满足，必须执行 aggregation_decision='aggregate'，无需重新评估。关于风险等级：当前批次事件显示头盔缺失持续6秒，单人单次违规，缺失比例100%，持续时长未达10秒一般等级阈值；evidence中未提供is_in_danger_zone、sensor_status、guard_present等字段信息，无危险区域/环境叠加/管理失控加成，基础等级评定为1级（轻微）。",
+      "evidence": {
+        "ppe_item": "helmet",
+        "violation_seconds": [
+          {
+            "wall_time": "2026-08-20T15:03:08.341",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": "100%"
+          },
+          {
+            "wall_time": "2026-08-20T15:03:09.341",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": "100%"
+          },
+          {
+            "wall_time": "2026-08-20T15:03:10.341",
+            "violation_frames": 25,
+            "total_frames": 25,
+            "ratio": "100%"
+          }
+        ],
+        "cv_summary": "*** 头盔缺失 ***"
+      },
+      "timestamp": "2026-08-20T15:04:27.980799"
+    },
+    "tick_ms": 31225.64
+  },
+  "timestamp": "2026-08-20T15:04:28.002950"
+}

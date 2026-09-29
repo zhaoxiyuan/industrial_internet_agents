@@ -1,0 +1,100 @@
+{
+  "event_id": "2026:08:20T15:17:02.159",
+  "wall_time": "2026:08:20T15:17:02.159",
+  "event_data": {
+    "wall_time": "2026:08:20T15:17:02.159",
+    "events": [
+      {
+        "is_event": true,
+        "type": "传感器告警",
+        "person": null,
+        "evidence": {
+          "sensor_id": "gas_detector_03",
+          "sensor_type": "gas_detector",
+          "value": 1.0,
+          "unit": "%LEL",
+          "status": "alarm",
+          "previous_readings": [
+            {
+              "time": "2026:08:20T15:16:59.159",
+              "value": 0.7,
+              "status": "warning"
+            },
+            {
+              "time": "2026:08:20T15:17:00.159",
+              "value": 0.7,
+              "status": "warning"
+            },
+            {
+              "time": "2026:08:20T15:17:01.159",
+              "value": 0.7,
+              "status": "warning"
+            }
+          ]
+        },
+        "explanation": "gas_detector_03 在 2026:08:20T15:17:02.159~2026:08:20T15:17:03.159 期间可燃气体浓度从 0.7% LEL(warning)突升至 1.0% LEL,状态为 alarm,已超过业务规则规定的 1.0% LEL 立即停止作业阈值,判定为传感器告警",
+        "status": "ongoing",
+        "wall_time": "2026:08:20T15:17:02.159",
+        "duration_sec": 1,
+        "end_wall_time": "2026:08:20T15:17:03.159",
+        "event_id": "A5-?-1787210234196",
+        "first_seen": "2026:08:20T15:16:59.159",
+        "last_seen": "2026:08:20T15:17:02.159"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-151731-360",
+      "aggregated_from": [
+        "2026:08:20T15:17:02.159"
+      ],
+      "event_type": "传感器告警",
+      "first_seen": "2026-08-20T15:16:59.159",
+      "last_seen": "2026-08-20T15:17:02.159",
+      "wall_time": "2026-08-20T15:17:02.159",
+      "duration_sec": 3.0,
+      "involved_persons": [
+        "unknown"
+      ],
+      "risk_level": 2,
+      "risk_level_name": "一般",
+      "risk_basis": "gas_detector_03在3秒内由0.7% LEL警戒状态转为1.0% LEL报警状态，属于单一可燃气体传感器短时告警。持续时间未超过30秒，且无其他传感器、危险区域或人员违规信息，因此不触发持续时间、群体及管理失控加成，研判为一般风险。",
+      "suggestions": [
+        "立即核查gas_detector_03周边是否发生可燃气体泄漏或作业环境异常",
+        "持续监测读数；若继续升高或持续报警，应升级风险并组织人员排查",
+        "建议在可燃气体浓度和泄漏原因确认前，限制附近动火及其他点火作业"
+      ],
+      "reasoning": "该事件为传感器告警。虽然用户提供的活跃记录违规类型同为“传感器告警”，但未包含sensor_id，无法证明其与gas_detector_03属于同一物理传感器；实时查询当前活跃违规也未发现匹配记录，因此应新建研判。事件持续3秒，不适用2秒以内误报排除规则。鉴于当前仅有一个低浓度、短时气体报警，暂定为风险等级2。",
+      "evidence": {
+        "sensor_id": "gas_detector_03",
+        "sensor_type": "gas_detector",
+        "value": 1.0,
+        "unit": "%LEL",
+        "status": "alarm",
+        "previous_readings": [
+          {
+            "time": "2026:08:20T15:16:59.159",
+            "value": 0.7,
+            "status": "warning"
+          },
+          {
+            "time": "2026:08:20T15:17:00.159",
+            "value": 0.7,
+            "status": "warning"
+          },
+          {
+            "time": "2026:08:20T15:17:01.159",
+            "value": 0.7,
+            "status": "warning"
+          }
+        ]
+      },
+      "timestamp": "2026-08-20T15:17:31.361792"
+    },
+    "tick_ms": 17173.34
+  },
+  "timestamp": "2026-08-20T15:17:31.389720"
+}

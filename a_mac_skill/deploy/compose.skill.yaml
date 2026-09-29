@@ -1,0 +1,167 @@
+services:
+  gateway:
+    build:
+      context: ../gateway
+    image: a-gateway:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      A_WEBUI_HOST: webui
+      A_WEBUI_PORT: '8080'
+      A_P8P9_HOST: p8p9
+      A_P8P9_PORT: '8089'
+    command:
+    - node
+    - src/index.js
+    - --config
+    - /app/config/config.feishu.local.json
+    ports:
+    - 127.0.0.1:8787:8787
+    volumes:
+    - ../data:/app/data
+    - ../gateway/config:/app/config:ro
+    networks:
+    - internal
+  p6:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.p6
+    image: a-p6:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+    - ../data:/srv/app/data
+    - ../A5/logs:/srv/app/A5/logs
+    networks:
+    - internal
+  chat_reply:
+    image: a-p6:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      GATEWAY_HOST: http://gateway:8787
+    working_dir: /srv/app
+    command:
+    - python
+    - -m
+    - A7.adapters.chat_reply
+    - run
+    - --account-id
+    - P8P9
+    - --interval
+    - '1'
+    volumes:
+    - ../.env:/srv/app/.env:ro
+    - ../data:/srv/app/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    networks:
+    - internal
+  p8p9:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.p8p9
+    image: a-p8p9:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+    - ../.env:/srv/app/.env:ro
+    - ../data:/srv/app/data
+    networks:
+    - internal
+  app_config:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.app_config
+    image: a-app-config:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+    - ../.env:/srv/app/.env
+    - ../agent_config:/srv/app/agent_config
+    networks:
+    - internal
+  feishu_cfg:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.feishu_cfg
+    image: a-feishu-cfg:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      GATEWAY_HOST: http://gateway:8787
+    volumes:
+    - ../.env:/srv/app/.env
+    - ../agent_config:/srv/app/agent_config
+    - ../feishu_gateway_cli:/srv/app/feishu_gateway_cli
+    - ../gateway:/srv/app/gateway
+    networks:
+    - internal
+  webui:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.webui
+    image: a-webui:0.1.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      A_WEBUI_HOST: 0.0.0.0
+      A_WEBUI_PORT: '8080'
+      A_P8P9_BASE_URL: http://p8p9:8089
+    volumes:
+    - ../data:/srv/app/data
+    - ../agent_config:/srv/app/agent_config
+    networks:
+    - internal
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:18080:18080
+    volumes:
+    - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    - ./nginx/conf.d/mac-ngrok.conf:/etc/nginx/conf.d/agent.conf:ro
+    - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
+    depends_on:
+    - gateway
+    - p6
+    - p8p9
+    - app_config
+    - feishu_cfg
+    - webui
+    networks:
+    - internal
+  mcp_bridge:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.mcp
+    image: a-mcp-bridge:0.2.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      AMAC_MCP_HOST: 0.0.0.0
+      AMAC_MCP_PORT: '8090'
+      AMAC_DATA_DIR: /srv/app/data
+      AMAC_ENV_FILE: /srv/app/.env
+      P8P9_BASE_DIR: /srv/app/data/jobs
+      GATEWAY_HOST: http://gateway:8787
+      P6_BASE_URL: http://p6:5002
+      P8P9_BASE_URL: http://p8p9:8089
+      GATEWAY_BASE_URL: http://gateway:8787
+    ports:
+    - 127.0.0.1:8090:8090
+    volumes:
+    - ../.env:/srv/app/.env:ro
+    - ../data:/srv/app/data
+    depends_on:
+    - p6
+    - p8p9
+    - gateway
+    networks:
+    - internal
+networks:
+  internal:
+    driver: bridge

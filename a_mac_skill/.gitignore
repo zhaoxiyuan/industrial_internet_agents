@@ -1,0 +1,35 @@
+# Local credentials and runtime configuration (keep examples).
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/htpasswd
+**/ngrok.yml
+agent_config/saved_configs.json
+frontend/saved_configs.json
+
+# Runtime state, uploads, logs, caches.
+data/
+gateway/data/*
+!gateway/data/.gitkeep
+**/__pycache__/
+**/.pytest_cache/
+**/*.py[cod]
+**/*.log
+**/*.err
+**/*.out
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+gateway/node_modules/
+
+# Generated images and transferred/installable binaries.
+deploy/*.tar
+deploy/*.tar.gz
+deploy/*.tgz
+deploy/*.part.*
+deploy/ngrok/*.tgz
+*.dmg
+*.zip

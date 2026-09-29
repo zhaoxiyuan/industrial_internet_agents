@@ -1,0 +1,102 @@
+{
+  "event_id": "2026:08:20T15:08:33.964",
+  "wall_time": "2026:08:20T15:08:33.964",
+  "event_data": {
+    "wall_time": "2026:08:20T15:08:33.964",
+    "events": [
+      {
+        "is_event": true,
+        "type": "PPE缺失",
+        "person": {
+          "id": "P7",
+          "name": "张师傅",
+          "role": "焊工"
+        },
+        "evidence": {
+          "ppe_type": "helmet",
+          "violation_frames": 25,
+          "total_frames": 25,
+          "violation_ratio": "100%",
+          "ticks": [
+            {
+              "wall_time": "2026-08-20T15:08:31.964",
+              "violation_frames": 25,
+              "total_frames": 25
+            },
+            {
+              "wall_time": "2026-08-20T15:08:32.964",
+              "violation_frames": 25,
+              "total_frames": 25
+            },
+            {
+              "wall_time": "2026-08-20T15:08:33.964",
+              "violation_frames": 25,
+              "total_frames": 25
+            }
+          ]
+        },
+        "explanation": "P7 在 2026-08-20T15:08:31.964~2026-08-20T15:08:33.964 期间持续未戴头盔,3 个采样秒共 75 帧中 75 帧头盔缺失,占比 100%,判定为 PPE 违规",
+        "status": "ongoing",
+        "wall_time": "2026-08-20T15:08:31.964",
+        "duration_sec": 3,
+        "end_wall_time": "2026-08-20T15:08:33.964",
+        "event_id": "A5-P7-1787209737125",
+        "first_seen": "2026:08:20T15:08:31.964",
+        "last_seen": "2026:08:20T15:08:33.964"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-150947-938",
+      "aggregated_from": [
+        "2026:08:20T15:08:33.964"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-08-20T15:08:31.964",
+      "last_seen": "2026-08-20T15:08:33.964",
+      "wall_time": "2026-08-20T15:08:33.964",
+      "duration_sec": 2.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 0,
+      "risk_level_name": "无风险",
+      "risk_basis": "活跃违规记录已存在：P7同类型PPE缺失（头盔）事件处于ongoing追踪状态。该活跃记录当前 duration_sec=0（<2秒），首次研判时已触发快速排除规则（2秒以内误报），按规则'即使聚合后 duration > 2 秒也以首次判断为准'，本次延续事件维持首次判断结果。",
+      "suggestions": [
+        "无需告警推送",
+        "持续观测P7后续PPE佩戴状态",
+        "若P7再次出现持续性PPE缺失（>10秒）或叠加危险区域，应及时升级研判等级"
+      ],
+      "reasoning": "聚合决策：检查三条铁律——（1）输入中存在'当前已有的活跃违规记录'小节 ✓；（2）violation_type一致（均为PPE缺失）✓；（3）person_id一致（均为P7）✓。三条全部满足，铁律强制 aggregation_decision='aggregate'，不重新评估。\n\n风险等级：活跃记录 duration_sec=0，说明初次研判时该违规持续时长<2秒，已被快速排除规则归为risk_level=0。规则明确'即使聚合后 duration > 2 秒也以首次判断为准'，因此本次延续事件（当前批次2.0秒）应保持首次判断结果——risk_level=0，无风险。当前事件无危险区域、无传感器报警、无监护人缺失等叠加因素，无需触发等级加成。",
+      "evidence": {
+        "ppe_type": "helmet",
+        "violation_frames": 25,
+        "total_frames": 25,
+        "violation_ratio": "100%",
+        "ticks": [
+          {
+            "wall_time": "2026-08-20T15:08:31.964",
+            "violation_frames": 25,
+            "total_frames": 25
+          },
+          {
+            "wall_time": "2026-08-20T15:08:32.964",
+            "violation_frames": 25,
+            "total_frames": 25
+          },
+          {
+            "wall_time": "2026-08-20T15:08:33.964",
+            "violation_frames": 25,
+            "total_frames": 25
+          }
+        ]
+      },
+      "timestamp": "2026-08-20T15:09:47.948276"
+    },
+    "tick_ms": 50828.18
+  },
+  "timestamp": "2026-08-20T15:09:47.971033"
+}

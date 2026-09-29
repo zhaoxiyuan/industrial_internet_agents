@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P8 附件上传</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6f8;
+    margin: 0;
+    padding: 24px;
+    color: #1f2329;
+  }
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 32px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  }
+  h1 { font-size: 22px; margin: 0 0 8px 0; }
+  .sub { color: #646a73; font-size: 13px; margin-bottom: 24px; }
+  .hint {
+    background: #f0f7ff;
+    border-left: 4px solid #3370ff;
+    padding: 12px 16px;
+    margin-bottom: 24px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #1d2129;
+  }
+  .hint ul { margin: 4px 0 0 18px; padding: 0; }
+  .hint li { line-height: 1.6; }
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #fafbfc;
+    border: 1px solid #dee0e3;
+    border-radius: 6px;
+    margin-bottom: 8px;
+  }
+  .file-row .name { flex: 1; word-break: break-all; }
+  .file-row .size { color: #8f959e; font-size: 12px; }
+  .file-row .status { font-size: 12px; padding: 2px 8px; border-radius: 3px; }
+  .status.ok { background: #e8f5e9; color: #2e7d32; }
+  .status.err { background: #ffebee; color: #c62828; }
+  .status.pending { background: #fff8e1; color: #b45309; }
+  .progress {
+    width: 100%;
+    height: 4px;
+    background: #f0f1f3;
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: #3370ff;
+    transition: width 0.2s;
+  }
+  input[type=file] {
+    width: 100%;
+    padding: 12px;
+    border: 2px dashed #c9cdd4;
+    border-radius: 6px;
+    background: #fafbfc;
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  input[type=file]:hover { border-color: #3370ff; }
+  .btn-row {
+    margin-top: 24px;
+    display: flex;
+    gap: 12px;
+  }
+  button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .btn-primary { background: #3370ff; color: #fff; }
+  .btn-primary:hover { background: #245bdb; }
+  .btn-primary:disabled { background: #c9cdd4; cursor: not-allowed; }
+  .btn-secondary { background: #f0f1f3; color: #1f2329; }
+  .btn-secondary:hover { background: #e5e6eb; }
+  .upload-list { margin-top: 16px; }
+  .empty { color: #8f959e; font-size: 13px; padding: 12px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>📎 P8 附件上传</h1>
+    <p class="sub">Job ID: {{ job_id or token[:12] }}... · Token: <code>{{ token[:8] }}***</code></p>
+
+    <div class="hint">
+      <strong>使用提示</strong>
+      <ul>
+        <li>支持格式：jpg / jpeg / png / pdf / doc(x) / xls(x) / ppt(x) / mp4</li>
+        <li>单文件 ≤ 20MB；单作业累计 ≤ 100MB</li>
+        <li>上传完成后点击「完成并返回」回到飞书卡片提交表单</li>
+        <li>本页面 Token 有效期 30 分钟</li>
+      </ul>
+    </div>
+
+    <input type="file" id="file-input" multiple>
+
+    <div class="upload-list" id="upload-list">
+      <p class="empty">还没有文件。点击上方按钮选择本地文件。</p>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-primary" id="upload-btn" disabled>上传所选文件</button>
+      <button class="btn-secondary" id="done-btn" disabled>完成并返回</button>
+    </div>
+  </div>
+
+  <script>
+  const TOKEN = {{ token|tojson }};
+  let uploaded = [];   // {upload_id, filename, size_bytes}
+  let pending = [];    // File[] 待上传
+
+  const fileInput = document.getElementById('file-input');
+  const uploadBtn = document.getElementById('upload-btn');
+  const doneBtn = document.getElementById('done-btn');
+  const listEl = document.getElementById('upload-list');
+
+  fileInput.addEventListener('change', () => {
+    pending = Array.from(fileInput.files);
+    renderList();
+    uploadBtn.disabled = pending.length === 0;
+  });
+
+  uploadBtn.addEventListener('click', async () => {
+    uploadBtn.disabled = true;
+    for (let i = 0; i < pending.length; i++) {
+      const f = pending[i];
+      await uploadOne(f, i);
+    }
+    uploadBtn.disabled = false;
+    doneBtn.disabled = uploaded.length === 0;
+    pending = [];
+    fileInput.value = '';
+  });
+
+  async function uploadOne(file, idx) {
+    const row = ensureRow(file, idx);
+    row.querySelector('.status').className = 'status pending';
+    row.querySelector('.status').textContent = '上传中...';
+
+    const url = `/api/closure/upload?token=${encodeURIComponent(TOKEN)}`;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch(url, { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (!resp.ok) {
+        row.querySelector('.status').className = 'status err';
+        row.querySelector('.status').textContent = '❌ ' + (data.detail || data.error || '失败');
+        return;
+      }
+      row.querySelector('.status').className = 'status ok';
+      row.querySelector('.status').textContent = '✅ 已上传';
+      uploaded.push({ upload_id: data.upload_id, filename: data.filename, size_bytes: data.size_bytes });
+    } catch (e) {
+      row.querySelector('.status').className = 'status err';
+      row.querySelector('.status').textContent = '❌ ' + e.message;
+    }
+  }
+
+  function ensureRow(file, idx) {
+    let row = document.getElementById('row-' + idx);
+    if (row) return row;
+    // 重新渲染整个列表以包含新行
+    renderList();
+    row = document.getElementById('row-' + idx);
+    return row;
+  }
+
+  function renderList() {
+    listEl.innerHTML = '';
+    if (pending.length === 0 && uploaded.length === 0) {
+      listEl.innerHTML = '<p class="empty">还没有文件。点击上方按钮选择本地文件。</p>';
+      return;
+    }
+    pending.forEach((f, idx) => {
+      const row = document.createElement('div');
+      row.className = 'file-row';
+      row.id = 'row-' + idx;
+      row.innerHTML = `
+        <div class="name">📄 ${escapeHtml(f.name)}</div>
+        <div class="size">${formatSize(f.size)}</div>
+        <div class="status pending">等待</div>
+      `;
+      listEl.appendChild(row);
+    });
+  }
+
+  function formatSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    return (b/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  doneBtn.addEventListener('click', () => {
+    const ids = uploaded.map(u => u.upload_id).join(',');
+    const url = `/api/closure/upload/done?job_id=${encodeURIComponent(TOKEN.startsWith('tk_') ? '' : '')}&ids=${encodeURIComponent(ids)}`;
+    window.location.href = url;
+  });
+  </script>
+</body>
+</html>

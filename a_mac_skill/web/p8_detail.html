@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>P8 处置信息</title>
+  <style>
+    body{margin:0;background:#f5f6f8;color:#1f2329;font:14px/1.65 system-ui,"Microsoft YaHei",sans-serif}
+    main{max-width:820px;margin:32px auto;padding:0 16px}.card{background:#fff;border-radius:12px;padding:24px;box-shadow:0 2px 12px #0000000d}
+    h1{font-size:22px;margin:0 0 18px}.meta{color:#646a73;margin-bottom:18px}.grid{display:grid;grid-template-columns:140px 1fr;gap:10px 16px}
+    .key{color:#8f959e}.value{word-break:break-word}pre{white-space:pre-wrap;background:#f7f8fa;border-radius:8px;padding:14px;overflow:auto}
+    .status{display:inline-block;padding:2px 10px;border-radius:10px;background:#e8f7ed;color:#237b4b}.error{color:#c02c38}
+    @media(max-width:560px){main{margin:16px auto}.card{padding:18px}.grid{grid-template-columns:100px 1fr}}
+  </style>
+</head>
+<body><main><section class="card"><h1>P8 处置信息</h1><div id="content" class="meta">正在加载…</div></section></main>
+<script>
+const params=new URLSearchParams(location.search),jobId=params.get('job_id'),p8Id=params.get('p8_job_id'),el=document.getElementById('content');
+const esc=v=>String(v??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function render(job,source){
+  const labels={p8_job_id:'P8 Job ID',status:'状态',decision:'决策',max_level:'风险等级',channel:'通道',summary:'处置摘要',note:'备注',created_at:'创建时间',updated_at:'更新时间',archived_at:'归档时间'};
+  const rows=Object.entries(labels).map(([k,l])=>`<div class="key">${l}</div><div class="value">${k==='status'?`<span class="status">${esc(job[k])}</span>`:esc(job[k])}</div>`).join('');
+  el.innerHTML=`<div class="meta">作业：${esc(jobId)} · 数据来源：${source}</div><div class="grid">${rows}</div><h2>完整记录</h2><pre>${esc(JSON.stringify(job,null,2))}</pre>`;
+}
+if(!jobId||!p8Id){el.innerHTML='<span class="error">链接缺少 job_id 或 p8_job_id。</span>'}else{
+ fetch(`/api/jobs/${encodeURIComponent(jobId)}/working-memory`).then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json()}).then(data=>{
+   const working=(data.working_memory||[]).find(x=>x.p8_job_id===p8Id),archived=(data.archived_recent||[]).find(x=>x.p8_job_id===p8Id);
+   if(working)render(working,'工作记忆');else if(archived)render(archived,'长期记忆');else el.innerHTML=`<span class="error">未找到 ${esc(p8Id)} 的处置记录。</span>`;
+ }).catch(e=>el.innerHTML=`<span class="error">加载失败：${esc(e.message)}</span>`);
+}
+</script></body></html>

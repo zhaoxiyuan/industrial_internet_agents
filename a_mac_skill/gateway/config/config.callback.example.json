@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "apiKey": "${CHANNEL_GATEWAY_API_KEY}"
+  },
+  "storage": {
+    "directory": "../data"
+  },
+  "delivery": {
+    "callbackUrl": "http://127.0.0.1:8000/channel-events",
+    "callbackToken": "${AGENT_CALLBACK_TOKEN}",
+    "timeoutMs": 30000,
+    "concurrency": 4,
+    "maxAttempts": 5,
+    "autoAck": true
+  },
+  "channels": {
+    "loopback": {
+      "enabled": true,
+      "accounts": {
+        "default": {
+          "webhookToken": "${LOOPBACK_WEBHOOK_TOKEN}"
+        }
+      }
+    },
+    "generic": { "enabled": false, "accounts": {} },
+    "feishu": { "enabled": false, "accounts": {} }
+  }
+}

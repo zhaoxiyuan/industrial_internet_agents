@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "risk_basis": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "chat_id": {
+      "type": "string"
+    },
+    "group_name": {
+      "type": "string"
+    },
+    "account_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "events",
+    "job_id"
+  ],
+  "additionalProperties": false
+}

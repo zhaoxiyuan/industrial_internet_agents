@@ -1,0 +1,15 @@
+[Unit]
+Description=ngrok tunnel for industrial agents
+After=network-online.target docker.service mihomo.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# 未指定 --url 时，免费账户会自动分配 HTTPS 开发域名。
+ExecStart=/usr/local/bin/ngrok http http://127.0.0.1:18080 --config /etc/ngrok/ngrok.yml --log stdout --log-level info
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

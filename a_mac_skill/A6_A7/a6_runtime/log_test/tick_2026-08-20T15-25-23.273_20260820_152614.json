@@ -1,0 +1,78 @@
+{
+  "event_id": "2026:08:20T15:25:23.273",
+  "wall_time": "2026:08:20T15:25:23.273",
+  "event_data": {
+    "wall_time": "2026:08:20T15:25:23.273",
+    "events": [
+      {
+        "is_event": true,
+        "type": "PPE缺失",
+        "person": {
+          "id": "P7",
+          "name": "张师傅",
+          "role": "焊工"
+        },
+        "evidence": {
+          "ppe_type": "helmet",
+          "missing_frames": 25,
+          "total_frames": 25,
+          "missing_ratio": 1.0,
+          "violation_seconds": [
+            "T1",
+            "T2",
+            "T3"
+          ]
+        },
+        "explanation": "P7 在 2026-08-20T15:25:17.273~2026-08-20T15:25:19.273 期间持续未戴头盔,每25帧中25帧头盔缺失,占比 100%,判定为 PPE 违规;T4起恢复佩戴,违规结束",
+        "status": "resolved",
+        "wall_time": "2026-08-20T15:25:17.273",
+        "duration_sec": 3,
+        "end_wall_time": "2026-08-20T15:25:19.273",
+        "event_id": "A5-P7-1787210759474",
+        "first_seen": "2026:08:20T15:25:17.273",
+        "last_seen": "2026:08:20T15:25:23.273"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260820-152614-482",
+      "aggregated_from": [
+        "2026:08:20T15:25:23.273"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-08-20T15:25:17.273",
+      "last_seen": "2026-08-20T15:25:23.273",
+      "wall_time": "2026-08-20T15:25:23.273",
+      "duration_sec": 6.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 2,
+      "risk_level_name": "一般",
+      "risk_basis": "聚合已有活跃违规记录（A6-20260820-152548-811）。聚合后持续时长约24秒（15:24:59 → 15:25:23），超过10秒，触发一般风险。证据显示P7张师傅头盔缺失比例1.0（25/25帧全缺失），PPE缺失持续存在。无危险区域、无传感器报警、无群体叠加信息，仅按持续时间判定。",
+      "suggestions": [
+        "立即通知P7张师傅佩戴安全头盔后再继续作业",
+        "持续追踪该违规是否继续，若超过30秒应升级关注",
+        "确认P7当前作业区域是否存在额外环境风险因素"
+      ],
+      "reasoning": "1. 聚合决策铁律检查：活跃记录存在（violation_type=PPE缺失, person_id=P7），与待研判事件完全一致（均为P7的PPE缺失/头盔缺失），violation_key稳定 → 必须返回 aggregate。\n2. 聚合后时间窗口：first_seen=15:24:59.273，last_seen=15:25:23.273，总持续时长约24秒。\n3. 等级判定：持续>10秒 → 基础等级2（一般）。无危险区域证据、无传感器叠加、无群体叠加、无监护人缺失信息，不触发任何加成。\n4. 最终等级 = 2（一般）。\n5. 注意：证据中缺失 location、is_in_danger_zone、sensor_status、guard_present 字段，无法评估区域和环境叠加风险，建议提醒现场关注。",
+      "evidence": {
+        "ppe_type": "helmet",
+        "missing_frames": 25,
+        "total_frames": 25,
+        "missing_ratio": 1.0,
+        "violation_seconds": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "timestamp": "2026-08-20T15:26:14.484790"
+    },
+    "tick_ms": 15025.58
+  },
+  "timestamp": "2026-08-20T15:26:14.509319"
+}

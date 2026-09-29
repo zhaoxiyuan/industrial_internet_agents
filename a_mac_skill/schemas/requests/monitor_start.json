@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "pattern": "^[0-9]{17}$"
+    },
+    "scenario": {
+      "enum": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "duration_sec": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "interval_sec": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "batch_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "play_delay_sec": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "additionalProperties": false
+}

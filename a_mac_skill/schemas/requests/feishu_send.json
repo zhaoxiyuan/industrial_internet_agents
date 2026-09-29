@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "channel": {
+      "const": "feishu"
+    },
+    "account_id": {
+      "type": "string"
+    },
+    "to": {
+      "type": "object",
+      "required": [
+        "conversation_id"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string"
+        },
+        "receive_id_type": {
+          "type": "string"
+        }
+      }
+    },
+    "text": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "channel",
+    "account_id",
+    "to",
+    "text"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,10 @@
+services:
+  skill-platform:
+    build: .
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - skill-data:/data
+    restart: unless-stopped
+volumes:
+  skill-data:

@@ -1,0 +1,485 @@
+apiVersion: industrial.ai/v1alpha1
+kind: IndustrialSkillPackage
+metadata:
+  name: industrial-workflow
+  version: 0.3.0
+  displayName: 工业作业闭环 a_mac
+spec:
+  skill:
+    entrypoint: SKILL.md
+  compatibility:
+    adapterContract: a-mac-v1
+    framework: langchain-langgraph
+    os:
+    - linux
+    architectures:
+    - amd64
+    - arm64
+  tools:
+    catalog: tools/catalog.yaml
+    mcp:
+      serviceRef: mcp_bridge
+      path: /mcp
+  configuration:
+    schema: schemas/config.schema.json
+    authority: service-owned
+  services:
+  - serviceId: gateway
+    purpose: 飞书消息网关
+    required: true
+    dependsOn: []
+    image:
+      repository: a-gateway
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 8787
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../data:/app/data
+      - ../gateway/config:/app/config:ro
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '8787'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: p6
+    purpose: 监测与 P7 研判
+    required: true
+    dependsOn: []
+    image:
+      repository: a-p6
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 5002
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../data:/srv/app/data
+      - ../A5/logs:/srv/app/A5/logs
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '5002'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: chat_reply
+    purpose: 飞书多轮对话消费者
+    required: false
+    dependsOn:
+    - gateway
+    image:
+      repository: a-p6
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: process
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports: []
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../.env:/srv/app/.env:ro
+      - ../data:/srv/app/data
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: process
+      target: consumer heartbeat
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: p8p9
+    purpose: 工单状态机与审批
+    required: true
+    dependsOn: []
+    image:
+      repository: a-p8p9
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 8089
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../.env:/srv/app/.env:ro
+      - ../data:/srv/app/data
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '8089'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: app_config
+    purpose: 模型配置页面
+    required: false
+    dependsOn: []
+    image:
+      repository: a-app-config
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 5000
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../.env:/srv/app/.env
+      - ../agent_config:/srv/app/agent_config
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '5000'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: feishu_cfg
+    purpose: 飞书配置页面
+    required: false
+    dependsOn: []
+    image:
+      repository: a-feishu-cfg
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 5003
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../.env:/srv/app/.env
+      - ../agent_config:/srv/app/agent_config
+      - ../feishu_gateway_cli:/srv/app/feishu_gateway_cli
+      - ../gateway:/srv/app/gateway
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '5003'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: webui
+    purpose: 业务监测看板
+    required: false
+    dependsOn: []
+    image:
+      repository: a-webui
+      supportedVersions:
+      - 0.1.0
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 8080
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ../data:/srv/app/data
+      - ../agent_config:/srv/app/agent_config
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '8080'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: nginx
+    purpose: 认证入口与反向代理
+    required: false
+    dependsOn:
+    - gateway
+    - p6
+    - p8p9
+    - app_config
+    - feishu_cfg
+    - webui
+    image:
+      repository: nginx
+      supportedVersions:
+      - 1.27-alpine
+      verifiedDigest: null
+      architectures:
+      - amd64
+      - arm64
+    contract:
+      protocol: http
+      version: a-mac-v1
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports:
+      - 18080
+      exposure: authenticated-internal
+    resources:
+      cpu: '1'
+      memory: 1Gi
+    storage:
+      paths:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d/mac-ngrok.conf:/etc/nginx/conf.d/agent.conf:ro
+      - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: service-owned
+      apply: restart
+    secrets:
+    - modelSecretRef
+    - gatewayTokenSecretRef
+    health:
+      type: tcp
+      target: '18080'
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles:
+    - existing
+    - local-source
+  - serviceId: mcp_bridge
+    purpose: 发布 a_mac HTTP 能力及 P8 文件与状态机工具
+    required: true
+    dependsOn: [p6, gateway, p8p9]
+    image:
+      repository: a-mcp-bridge
+      supportedVersions: [0.2.0]
+      verifiedDigest: null
+      architectures: [amd64, arm64]
+    contract:
+      protocol: mcp-streamable-http
+      version: '2025-11-25'
+    placement:
+      serviceScope: sameSite
+      agentAccess: remoteAllowed
+    network:
+      ports: [8090]
+      exposure: authenticated-internal
+    resources:
+      cpu: '0.5'
+      memory: 512Mi
+    storage:
+      paths:
+      - ../data:/srv/app/data
+      - ../.env:/srv/app/.env:ro
+      retainOnUninstall: true
+      backup: site-operator
+    config:
+      authority: platform-owned
+      apply: restart
+    secrets: [mcpTokenSecretRef]
+    health:
+      type: mcp-tools-list
+      target: /mcp
+    lifecycle:
+      ownership: external-or-managed
+      stop: drain-and-no-references
+    shareScope: instance
+    profiles: [existing, local-source]
+  deployment:
+    profiles:
+    - id: existing
+      mode: external
+    - id: local-source
+      mode: local-docker
+      bundleRef: deploy/compose.skill.yaml
+      releaseReady: false
+  dependencies:
+    channels:
+    - feishu
+    models:
+    - openai-compatible
+    skills: []
+  lifecycle:
+    disable: drain
+    retainBusinessData: true
+    upgrade: validate-and-switch-new-runs
+    rollback: compatible-version-only
+  checks:
+    required:
+    - package-integrity
+    - tool-contract
+    - config-schema
+    - service-health
+    - image-digest
+    - channel-ready
+  ui:
+  - id: configuration
+    type: schema-form
+  - id: monitor
+    type: service-page
+    serviceRef: p6
+    path: /
+    auth: platform-proxy

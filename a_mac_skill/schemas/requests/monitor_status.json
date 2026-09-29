@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "pattern": "^[0-9]{17}$"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "additionalProperties": false
+}

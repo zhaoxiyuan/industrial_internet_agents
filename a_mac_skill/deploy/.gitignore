@@ -1,0 +1,18 @@
+# 运行时产物(不入 git)
+nginx/htpasswd          # BasicAuth 凭证文件,真实密码自己生成
+
+# 日志 / 缓存
+*.log
+**/__pycache__/
+*.pyc
+*.pyo
+
+# 部署相关
+data/runtime/
+A5/logs/
+gateway/.env
+gateway/config/*.local.json
+
+# 本地 Docker 测试 override(不入生产)
+docker-compose.local.yml
+nginx/conf.d/agent.local.conf

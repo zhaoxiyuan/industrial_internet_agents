@@ -1,0 +1,82 @@
+{
+  "event_id": "2026:09:14T16:27:03.937",
+  "wall_time": "2026:09:14T16:27:03.937",
+  "event_data": {
+    "wall_time": "2026:09:14T16:27:03.937",
+    "events": [
+      {
+        "is_event": true,
+        "type": "PPE缺失",
+        "person": {
+          "id": "P7",
+          "name": "张师傅",
+          "role": "焊工"
+        },
+        "evidence": {
+          "ppe_type": "helmet",
+          "violation_frames": 25,
+          "total_frames": 25,
+          "violation_ratio": "100%",
+          "ticks_with_violation": [
+            "T5",
+            "T6",
+            "T7",
+            "T8",
+            "T9"
+          ]
+        },
+        "explanation": "P7(张师傅,焊工) 在 2026-09-14T16:26:59.937~2026-09-14T16:27:03.937 期间持续未戴头盔,每帧25帧均未戴头盔,占比 100%(连续5秒),判定为 PPE 头盔缺失违规。",
+        "status": "ongoing",
+        "wall_time": "2026-09-14T16:26:59.937",
+        "duration_sec": 5,
+        "end_wall_time": "2026-09-14T16:27:03.937",
+        "event_id": "A5-P7-1789374438741",
+        "first_seen": "2026:09:14T16:26:55.937",
+        "last_seen": "2026:09:14T16:27:03.937"
+      }
+    ]
+  },
+  "result": {
+    "status": "success",
+    "message": "研判完成",
+    "assessment": {
+      "a6_event_id": "A6-20260914-162732-867",
+      "aggregated_from": [
+        "2026:09:14T16:27:03.937"
+      ],
+      "event_type": "PPE缺失",
+      "first_seen": "2026-09-14T16:26:55.937",
+      "last_seen": "2026-09-14T16:27:03.937",
+      "wall_time": "2026-09-14T16:27:03.937",
+      "duration_sec": 8.0,
+      "involved_persons": [
+        "P7"
+      ],
+      "risk_level": 1,
+      "risk_level_name": "轻微",
+      "risk_basis": "P7(张师傅)头盔缺失100%持续8秒，单人违规，未超过10秒阈值，无危险区域、无环境报警、无监护人缺失等叠加因素，基础等级为轻微（1级）。",
+      "suggestions": [
+        "通过语音或广播提醒P7(张师傅)立即佩戴头盔",
+        "持续监控该人员是否在10秒内恢复佩戴，否则风险等级将提升至一般(2级)",
+        "若违规持续超过30秒或进入危险作业区，应升级响应"
+      ],
+      "reasoning": "1) 聚合决策：活跃违规记录A6-20260820-152614-482的person_id为P7、violation_type为PPE缺失，与待研判事件A5-P7-1789374438741在violation_key（person_id + violation_type）上完全一致，满足聚合铁律的三项条件，因此必须返回aggregation_decision=aggregate，将本次检测作为该活跃违规的延续事件合并。2) 风险等级判定：本次事件持续8秒，未超过10秒升级阈值；证据中未标注is_in_danger_zone=true，不触发危险区域加成；单人违规无群体加成；未提及sensor_status报警无环境叠加；未提及guard_present=false无管理失控加成。因此在基础等级（1级-轻微）上无任何加成，最终risk_level=1。",
+      "evidence": {
+        "ppe_type": "helmet",
+        "violation_frames": 25,
+        "total_frames": 25,
+        "violation_ratio": "100%",
+        "ticks_with_violation": [
+          "T5",
+          "T6",
+          "T7",
+          "T8",
+          "T9"
+        ]
+      },
+      "timestamp": "2026-09-14T16:27:32.871309"
+    },
+    "tick_ms": 14124.69
+  },
+  "timestamp": "2026-09-14T16:27:32.907300"
+}

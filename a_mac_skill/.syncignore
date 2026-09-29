@@ -1,0 +1,58 @@
+# a/.dockerignore — 同步代码时排除的文件(.gitignore 语法)
+#
+# 用途 1:`docker build` 自动读取(避免镜像里塞进 .env / data/)
+# 用途 2:`rsync --exclude-from=.dockerignore` 代码同步(避免运行时数据泄露)
+#
+# 双层排除策略:
+#   - 绝对不传:.env、data/、__pycache__/
+#   - 不传但保留必要:Mac daemon 配置、CI 文件等
+
+# ─── Secrets / 配置 ────────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.bak
+
+# ─── Runtime data (容器运行时写出,不能覆盖宿主机现有) ───
+data/
+
+# ─── Python 缓存 ────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.tox/
+
+# ─── Node (gateway/) ───────────────────────────────────
+gateway/node_modules/
+gateway/npm-debug.log
+
+# ─── Build artifacts(deploy/ 下一次性产物) ──────────────
+deploy/a-p6-fixed.*
+deploy/industrial-agents-a-images.tar
+deploy/local-*.log
+deploy/local-*.out.log
+deploy/local-*.err.log
+deploy/p6-upload.*.log
+deploy/docker-anonymous-config.json
+deploy/ngrok/ngrok-v3-stable-linux-amd64.tgz
+
+# ─── 调试日志 / 临时文件 ────────────────────────────────
+*.log
+_pycompile_check.log
+_symbol_check.log
+_import_audit.log
+_aatest*.txt
+_psutil_install.txt
+
+# ─── IDE / OS ───────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ─── 跨平台兼容(避免 Windows/Mac 路径错位) ────────────
+# 保留 .git/,Windows 上 git push 给 Mac 用
+# 保留 mac_ssh_setup.txt 等参考文档
