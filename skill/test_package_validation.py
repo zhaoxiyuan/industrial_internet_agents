@@ -4,12 +4,15 @@ import tempfile
 import unittest
 import base64
 import io
+import importlib.util
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
 from skill.package_validation import validate_package, write_lock
 from skill.package_store import inspect_source
+from skill.service_runtime import control
 
 
 def fixture(root):
@@ -17,10 +20,12 @@ def fixture(root):
     manifest = yaml.safe_load((Path(__file__).resolve().parent.parent/'a_mac_skill/skill-package.yaml').read_text(encoding='utf-8'))
     manifest['metadata']['name'] = 'demo-skill'
     spec = manifest['spec']
-    spec.update(services=[],ui=[],dependencies={})
-    spec['deployment']['profiles'] = [{'id':'existing','mode':'external'}]
+    spec.update(services=[next(s for s in spec['services'] if s['serviceId']=='mcp_bridge')],ui=[],dependencies={})
+    spec['services'][0]['dependsOn'] = []
+    spec['services'][0]['profiles'] = ['directory']
+    spec['deployment']['profiles'] = [{'id':'directory','mode':'directory','controlFile':'control.py'}]
     spec['tools']['catalog'] = 'tools.json'
-    spec['tools'].pop('mcp', None)
+    (root/'control.py').write_text('print("{\\"healthy\\": true}")\n',encoding='utf-8')
     spec['configuration']['schema'] = 'config.json'
     (root/'skill-package.yaml').write_text(yaml.safe_dump(manifest),encoding='utf-8')
     (root/'SKILL.md').write_text('---\nname: demo-skill\ndescription: Demo test\n---\nTest instructions.\n',encoding='utf-8')
@@ -31,6 +36,80 @@ def fixture(root):
 
 
 class ValidationTest(unittest.TestCase):
+    def test_docker_stop_passes_site_paths_to_compose(self):
+        source = Path(__file__).resolve().parent.parent/'a_mac_skill/deploy/service_control.py'
+        spec = importlib.util.spec_from_file_location('amac_stop_control_test', source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as folder:
+            site = Path(folder)
+            (site/'gateway/config').mkdir(parents=True)
+            (site/'.env').write_text('', encoding='utf-8')
+            (site/'gateway/.env').write_text('', encoding='utf-8')
+            (site/'gateway/config/config.feishu.local.json').write_text('{}', encoding='utf-8')
+            with patch.dict('os.environ', {'AMAC_SITE_ROOT': folder}):
+                with patch.object(module.subprocess, 'run') as run:
+                    run.return_value.returncode = 0
+                    module.main('stop', 'local-source')
+            environment = run.call_args.kwargs['env']
+            self.assertEqual(environment['AMAC_SITE_ENV_FILE'], str(site/'.env'))
+            self.assertEqual(environment['AMAC_SITE_NGINX_HTPASSWD'],
+                             str(site/'deploy/nginx/htpasswd'))
+            self.assertIn('stop', run.call_args.args[0])
+
+    def test_gateway_uses_its_own_site_environment(self):
+        source = Path(__file__).resolve().parent.parent/'a_mac_skill/deploy/service_control.py'
+        spec = importlib.util.spec_from_file_location('amac_service_control_test', source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as folder:
+            site = Path(folder)
+            (site/'gateway/config').mkdir(parents=True)
+            (site/'.env').write_text('BUSINESS=ready\n', encoding='utf-8')
+            (site/'gateway/.env').write_text('FEISHU_DOMAIN=feishu.cn\n', encoding='utf-8')
+            (site/'gateway/config/config.feishu.local.json').write_text(
+                '{"domain":"${FEISHU_DOMAIN}"}', encoding='utf-8')
+            with patch.dict('os.environ', {'AMAC_SITE_ROOT': folder}):
+                env_file, gateway_env, config = module.site_files()
+            self.assertEqual(env_file, site/'.env')
+            self.assertEqual(gateway_env, site/'gateway/.env')
+            module.check_gateway_config(gateway_env, config, {})
+            (site/'gateway/.env').write_text('', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'FEISHU_DOMAIN'):
+                module.check_gateway_config(gateway_env, config, {})
+
+    def test_declared_token_is_injected_into_controller(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = fixture(root)
+            with patch('skill.service_runtime.subprocess.run') as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = '{"healthy": true}'
+                control({'manifest': json.dumps(manifest), 'package_path': str(root)}, 'directory', 'start')
+            self.assertEqual(run.call_args.kwargs['env']['AMAC_MCP_TOKEN'],
+                             manifest['spec']['tools']['mcp']['auth']['token'])
+
+    def test_real_package_imports_from_project_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            workspace = Path(__file__).resolve().parent.parent
+            report, saved = inspect_source({'path': 'a_mac_skill'}, workspace,
+                                           Path(folder)/'packages', install=True)
+            self.assertTrue(report['valid'])
+            self.assertTrue(Path(saved, 'skill-package.yaml').is_file())
+
+    def test_mcp_and_control_file_are_required(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = fixture(root)
+            del manifest['spec']['tools']['mcp']
+            (root/'skill-package.yaml').write_text(yaml.safe_dump(manifest),encoding='utf-8')
+            write_lock(root)
+            self.assertFalse(validate_package(root)['valid'])
+            manifest = fixture(root)
+            (root/'control.py').unlink()
+            write_lock(root)
+            self.assertFalse(validate_package(root)['valid'])
+
     def test_zip_import_snapshot_and_path_escape(self):
         with tempfile.TemporaryDirectory() as folder:
             workspace = Path(folder)
@@ -75,7 +154,7 @@ class ValidationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             fixture(root)
-            self.assertTrue(validate_package(root,{})['deployable'])
+            self.assertTrue(validate_package(root,{})['valid'])
             (root/'SKILL.md').write_text((root/'SKILL.md').read_text()+'tamper',encoding='utf-8')
             self.assertFalse(validate_package(root,{})['valid'])
 

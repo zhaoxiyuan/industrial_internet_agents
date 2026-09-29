@@ -1,12 +1,14 @@
 # a/ — P6-P9 独立子项目
 
-## 工业 Skill MCP 入口（0.3.0）
+## 工业 Skill MCP 入口（0.3.2）
 
 `scripts/mcp_server.py` 发布 10 个监测、记录和飞书 HTTP 工具，以及 `read_p7_events`、`open_work_ticket`、`resend_current_card`、`lookup_feishu_directory`、`recall_jobs` 五个现有 P8 工具。平台读取清单并自动发现这 15 个 MCP 工具，无需前端逐项注册。`update_job` 和 `hitl_decide` 仍由原 LangGraph Agent 在其状态上下文中执行；`list_active_p8_jobs` 暂缓注册。
 
-本机启动前安装 `requirements.txt`、`mcp>=1.28,<2`、`uvicorn`，然后在本目录运行 `python -m scripts.mcp_server`。默认使用 `scripts/mcp_server.py` 中固定的 `LOCAL_DEV_MCP_TOKEN`；平台页面的“MCP 访问令牌”填写同一值即可。Compose 启动也使用该默认值。业务工具实际调用还需配置 `P6_BASE_URL`、`P8P9_BASE_URL`、`GATEWAY_BASE_URL` 和业务鉴权变量。默认监听 `127.0.0.1:8090/mcp`。正式跨节点部署应设置 `AMAC_MCP_TOKEN` 覆盖开发令牌，并通过受控网络入口和 TLS 暴露。`deploy/Dockerfile.mcp` 与 `deploy/compose.skill.yaml` 已声明该外围服务；托管部署仍需构建、锁定镜像并现场验收。
+本机启动前安装 `requirements.txt`、`mcp>=1.28,<2`、`uvicorn`。本包将原有固定开发令牌写在 `skill-package.yaml` 的 `spec.tools.mcp.auth.token`；平台读取它并注入目录或 Docker 服务，前端不填写或显示令牌。设置 `AMAC_MCP_TOKEN` 可覆盖固定值。选择运行方式并点击启动后，平台调用 `deploy/service_control.py` 启动必要服务、检查健康，再验证 MCP 工具。业务工具实际调用还需配置 `P6_BASE_URL`、`P8P9_BASE_URL`、`GATEWAY_BASE_URL` 和业务鉴权变量。默认监听 `127.0.0.1:8090/mcp`；跨节点部署应改用 Secret 环境变量和受控 TLS 地址，提升包版本并重新生成内容锁。托管部署仍需构建、锁定镜像并现场验收。
 
-新增的 P8 工具由 MCP 进程直接调用本副本现有业务函数。MCP 必须与 P6、P8P9、Gateway 共享同一现场 `data` 目录，且读取相同的飞书配置。Compose 将 `../data` 读写挂载到 `/srv/app/data`，把 `../.env` 只读挂载到 `/srv/app/.env`，并设置 `AMAC_DATA_DIR`、`P8P9_BASE_DIR`、`AMAC_ENV_FILE`。`../.env` 由现场创建，不随 Skill 包分发；MCP 访问令牌仍需单独给平台。非 Docker 启动时，将 `AMAC_DATA_DIR` 指向正在运行的 a_mac 服务共用的数据目录，`AMAC_ENV_FILE` 指向现场 `.env`；服务启动时自动加载该配置，并从 `AMAC_DATA_DIR` 推导 P8P9 作业目录。写操作需要真实 Feishu Gateway 可达；发送卡片失败会作为 MCP 工具错误返回。Compose 中的 MCP 服务具备数据读写权限，需限制令牌持有者和服务网络访问。
+目录与 Docker 启动都从现场目录读取配置：`a_mac/.env` 供业务服务使用，`a_mac/gateway/.env` 和 `a_mac/gateway/config/config.feishu.local.json` 供 Gateway 使用。仓库内可自动找到同级 `a_mac`；其他位置可设置 `AMAC_SITE_ROOT`。这些文件不复制到 Skill 包。启动前会检查 Gateway 配置引用的环境变量；失败时控制脚本返回缺失项或启动日志，而不是只报端口不健康。
+
+新增的 P8 工具由 MCP 进程直接调用本副本现有业务函数。MCP 必须与 P6、P8P9、Gateway 共享同一现场 `data` 目录，且读取相同的飞书配置。Compose 将 `../data` 读写挂载到 `/srv/app/data`，把 `../.env` 只读挂载到 `/srv/app/.env`，并设置 `AMAC_DATA_DIR`、`P8P9_BASE_DIR`、`AMAC_ENV_FILE`。`../.env` 由现场创建，不随 Skill 包分发；`AMAC_MCP_TOKEN` 应通过现场环境注入。非 Docker 启动时，将 `AMAC_DATA_DIR` 指向正在运行的 a_mac 服务共用的数据目录，`AMAC_ENV_FILE` 指向现场 `.env`。写操作需要真实 Feishu Gateway 可达；发送卡片失败会作为 MCP 工具错误返回。Compose 中的 MCP 服务具备数据读写权限，需限制令牌持有者和服务网络访问。
 
 这是从工业互联网边缘智能作业监测系统 (`../`) 剥离出的 **P6-P9 子集**,作为相对独立的项目工程,内部 import 完全自包含。
 

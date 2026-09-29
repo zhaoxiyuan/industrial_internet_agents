@@ -2,7 +2,7 @@ apiVersion: industrial.ai/v1alpha1
 kind: IndustrialSkillPackage
 metadata:
   name: industrial-workflow
-  version: 0.3.0
+  version: 0.3.5
   displayName: 工业作业闭环 a_mac
 spec:
   skill:
@@ -19,7 +19,11 @@ spec:
     catalog: tools/catalog.yaml
     mcp:
       serviceRef: mcp_bridge
-      path: /mcp
+      url: http://127.0.0.1:8090/mcp
+      auth:
+        type: bearer
+        secretEnv: AMAC_MCP_TOKEN
+        token: amac-local-dev-mcp-6f5294a908bd4ecaab7c18d031fc2e40
   configuration:
     schema: schemas/config.schema.json
     authority: service-owned
@@ -69,7 +73,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: p6
     purpose: 监测与 P7 研判
@@ -116,7 +120,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: chat_reply
     purpose: 飞书多轮对话消费者
@@ -163,7 +167,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: p8p9
     purpose: 工单状态机与审批
@@ -210,7 +214,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: app_config
     purpose: 模型配置页面
@@ -257,7 +261,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: feishu_cfg
     purpose: 飞书配置页面
@@ -306,7 +310,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: webui
     purpose: 业务监测看板
@@ -353,7 +357,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: nginx
     purpose: 认证入口与反向代理
@@ -407,7 +411,7 @@ spec:
       stop: drain-and-no-references
     shareScope: instance
     profiles:
-    - existing
+    - directory
     - local-source
   - serviceId: mcp_bridge
     purpose: 发布 a_mac HTTP 能力及 P8 文件与状态机工具
@@ -447,14 +451,16 @@ spec:
       ownership: external-or-managed
       stop: drain-and-no-references
     shareScope: instance
-    profiles: [existing, local-source]
+    profiles: [directory, local-source]
   deployment:
     profiles:
-    - id: existing
-      mode: external
+    - id: directory
+      mode: directory
+      controlFile: deploy/service_control.py
     - id: local-source
       mode: local-docker
       bundleRef: deploy/compose.skill.yaml
+      controlFile: deploy/service_control.py
       releaseReady: false
   dependencies:
     channels:
@@ -477,9 +483,34 @@ spec:
     - channel-ready
   ui:
   - id: configuration
-    type: schema-form
+    type: service-page
+    serviceRef: app_config
+    url: http://127.0.0.1:5000/
+    publicPath: /admin/config/
+    path: /
+    auth: service-direct
   - id: monitor
     type: service-page
     serviceRef: p6
+    url: http://127.0.0.1:5002/
+    publicPath: /admin/p6/
     path: /
-    auth: platform-proxy
+    auth: service-direct
+  - id: p7-risk
+    type: service-page
+    serviceRef: p6
+    url: http://127.0.0.1:5002/a6
+    publicPath: /admin/p7/
+    path: /a6
+    auth: service-direct
+  - id: feishu-configuration
+    type: service-page
+    serviceRef: feishu_cfg
+    url: http://127.0.0.1:5003/
+    publicPath: /admin/feishu-cfg/
+    path: /
+    auth: service-direct
+
+
+
+

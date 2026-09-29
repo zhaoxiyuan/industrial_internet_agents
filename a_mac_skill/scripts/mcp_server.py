@@ -1,8 +1,7 @@
 """MCP facade for the a_mac HTTP operations that already have service APIs.
 
 Local development: python -m scripts.mcp_server
-The fixed development token below is the default. An explicit AMAC_MCP_TOKEN
-overrides it when this service is deployed beyond the local proof of concept.
+The package's fixed development token is used unless AMAC_MCP_TOKEN overrides it.
 """
 import json
 import os
@@ -13,12 +12,12 @@ import sys
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
+LOCAL_DEV_MCP_TOKEN = 'amac-local-dev-mcp-6f5294a908bd4ecaab7c18d031fc2e40'
+
 if os.environ.get('AMAC_ENV_FILE'):
     load_dotenv(os.environ['AMAC_ENV_FILE'], override=False)
 if os.environ.get('AMAC_DATA_DIR'):
     os.environ.setdefault('P8P9_BASE_DIR', str(Path(os.environ['AMAC_DATA_DIR']).resolve() / 'jobs'))
-
-LOCAL_DEV_MCP_TOKEN = 'amac-local-dev-mcp-6f5294a908bd4ecaab7c18d031fc2e40'
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client import call

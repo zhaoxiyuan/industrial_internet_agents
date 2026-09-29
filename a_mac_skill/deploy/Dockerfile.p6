@@ -26,7 +26,6 @@ COPY A7/             ./A7/
 COPY P8P9/           ./P8P9/
 COPY feishu_gateway_cli/ ./feishu_gateway_cli/
 COPY frontend/       ./frontend/
-COPY data/           ./data/
 COPY agent_config/   ./agent_config/
 
 EXPOSE 5002

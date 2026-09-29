@@ -16,6 +16,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -26,10 +27,12 @@ try:
     from skill.package_store import inspect_source
     from skill.package_validation import validate_package, SCHEMA_PATH
     from skill.mcp_runtime import discover, langchain_tools
+    from skill.service_runtime import control, profiles
 except ImportError:
     from package_store import inspect_source
     from package_validation import validate_package, SCHEMA_PATH
     from mcp_runtime import discover, langchain_tools
+    from service_runtime import control, profiles
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("SKILL_DB_PATH", ROOT / "data" / "skill.db"))
@@ -49,6 +52,13 @@ def now():
 
 def uid():
     return uuid.uuid4().hex
+
+
+def public_report(report):
+    public = json.loads(json.dumps(report, ensure_ascii=False))
+    if isinstance(public.get('manifest'), dict):
+        public['manifest'].get('spec', {}).get('tools', {}).pop('mcp', None)
+    return public
 
 
 @contextmanager
@@ -260,8 +270,13 @@ class Handler(BaseHTTPRequestHandler):
                 agent.pop("api_key_env", None)
             skills = rows('skills')
             for skill in skills:
-                skill['mcp_token_configured'] = bool(skill.pop('mcp_token', '') or os.environ.get(
-                    json.loads(skill.get('runtime_config') or '{}').get('mcpTokenEnv', '')))
+                skill.pop('mcp_token', None)
+                public_manifest = json.loads(skill['manifest'])
+                mcp = public_manifest['spec']['tools'].pop('mcp', None)
+                skill['mcp_token_configured'] = bool(mcp and (os.environ.get(mcp['auth']['secretEnv']) or mcp['auth'].get('token')))
+                skill['manifest'] = json.dumps(public_manifest, ensure_ascii=False)
+                if skill.get('validation_report'):
+                    skill['validation_report'] = json.dumps(public_report(json.loads(skill['validation_report'])), ensure_ascii=False)
             return self.send(200, {"skills": skills, "agents": agents,
                                    "bindings": rows("bindings"), "sessions": rows("sessions"),
                                    "schedules": rows("schedules"), "runs": rows("runs")})
@@ -281,10 +296,19 @@ class Handler(BaseHTTPRequestHandler):
             matched, unavailable = discover(skill)
             return self.send(200, {'available': [tool['name'] for tool, _ in matched],
                                    'unavailable': unavailable, 'protocol': 'mcp'})
+        if method == 'GET' and len(parts) == 4 and parts[1] == 'skills' and parts[3] == 'status':
+            skill = get('skills', parts[2])
+            if not skill:
+                return self.send(404, {'error': 'Skill 不存在'})
+            profile_id = json.loads(skill.get('runtime_config') or '{}').get('deploymentProfile') or profiles(skill)[0]['id']
+            services = control(skill, profile_id, 'status')
+            matched, unavailable = discover(skill) if services['healthy'] else ([], [])
+            return self.send(200, {'services': services, 'mcpHealthy': bool(matched),
+                                   'availableTools': [t['name'] for t, _ in matched], 'unavailableTools': unavailable})
         data = self.body() if method in ("POST", "PATCH") else {}
         if method == 'POST' and parts == ['api','skills','validate']:
             report, _ = inspect_source(data, ROOT.parent, DB_PATH.parent/'packages')
-            return self.send(200, report)
+            return self.send(200, public_report(report))
         if method == 'POST' and len(parts) == 4 and parts[1] == 'skills' and parts[3] == 'validate':
             item = get('skills', parts[2])
             if not item or not item['package_path']:
@@ -292,24 +316,22 @@ class Handler(BaseHTTPRequestHandler):
             report = validate_package(item['package_path'], data.get('configuration'))
             with db() as conn:
                 conn.execute('UPDATE skills SET validation_report=?,enabled=0 WHERE id=?', (json.dumps(report,ensure_ascii=False),parts[2]))
-            return self.send(200,report)
+            return self.send(200, public_report(report))
         if method == "POST" and parts == ["api", "skills"]:
             report, package_path = inspect_source(data, ROOT.parent, DB_PATH.parent/'packages', install=True)
             if not report['valid']:
-                return self.send(422, {'error':'Skill 包校验失败', 'report':report})
+                return self.send(422, {'error':'Skill 包校验失败', 'report':public_report(report)})
             manifest = report['manifest']
             config = data.get('configuration') or {}
-            runtime_config = {key: config[key] for key in ('mcpUrl', 'mcpTokenEnv') if key in config}
-            token = data.get('mcp_token', '')
-            if token and (not isinstance(token, str) or len(token) < 24):
-                raise ValueError('MCP 访问令牌至少需要 24 个字符')
+            runtime_config = {}
+            token = ''
             item = (uid(), report['name'], report['version'], report['description'], json.dumps(manifest), now(),package_path,report['digest'],json.dumps(report,ensure_ascii=False),json.dumps(runtime_config),token)
             with db() as conn:
                 old = conn.execute('SELECT digest FROM skills WHERE name=? AND version=?',(report['name'],report['version'])).fetchone()
                 if old:
                     raise ValueError('同版本包已导入' if old['digest']==report['digest'] else '同版本内容不一致，请提升版本号')
                 conn.execute("INSERT INTO skills(id,name,version,description,manifest,created,package_path,digest,validation_report,runtime_config,mcp_token,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)", item)
-            return self.send(201, {"id": item[0], 'report':report})
+            return self.send(201, {"id": item[0], 'report':public_report(report)})
         if method == "POST" and parts == ["api", "agents"]:
             fields = validate_agent_config(data)
             item = (uid(), fields[0], fields[1], fields[2], now(), *fields[3:])
@@ -403,29 +425,32 @@ class Handler(BaseHTTPRequestHandler):
                 report = validate_package(skill['package_path'], data.get('configuration'))
                 if not report['valid']:
                     return self.send(409, {'error':'Skill 包结构校验失败', 'report':report})
+                if table == 'skills':
+                    profile_id = data.get('deployment_profile') or profiles(skill)[0]['id']
+                    control(skill, profile_id, 'start')
+                    with db() as conn:
+                        conn.execute('UPDATE skills SET runtime_config=? WHERE id=?',
+                                     (json.dumps({'deploymentProfile': profile_id}), parts[2]))
                 if json.loads(skill['manifest'])['spec']['tools'].get('mcp'):
-                    old_config = json.loads(skill.get('runtime_config') or '{}')
-                    supplied_config = data.get('runtime_config') if table == 'skills' else None
-                    config = {**old_config, **{key: supplied_config[key] for key in ('mcpUrl','mcpTokenEnv')
-                                             if isinstance(supplied_config, dict) and supplied_config.get(key)}}
-                    if not isinstance(config, dict):
-                        raise ValueError('需填写 MCP 运行配置')
-                    token = data.get('mcp_token', '') if table == 'skills' else ''
-                    if token and (not isinstance(token, str) or len(token) < 24):
-                        raise ValueError('MCP 访问令牌至少需要 24 个字符')
-                    candidate = dict(skill, runtime_config=json.dumps(config), mcp_token=token or skill.get('mcp_token', ''))
                     try:
-                        matched, unavailable = discover(candidate)
+                        matched, unavailable = discover(skill)
                     except Exception as exc:
+                        if table == 'skills':
+                            control(skill, profile_id, 'stop')
                         return self.send(409, {'error':'MCP 服务不可用：' + str(exc)})
                     if not matched:
+                        if table == 'skills':
+                            control(skill, profile_id, 'stop')
                         return self.send(409, {'error':'MCP 服务没有与 Skill 声明匹配的工具', 'unavailable':unavailable})
                     if table == 'skills':
                         with db() as conn:
-                            conn.execute('UPDATE skills SET runtime_config=?,mcp_token=?,validation_report=? WHERE id=?',
-                                         (json.dumps(config),candidate['mcp_token'],json.dumps(report,ensure_ascii=False),parts[2]))
-                elif not report['deployable']:
-                    return self.send(409, {'error':'依赖未就绪，不能启用', 'report':report})
+                            conn.execute('UPDATE skills SET validation_report=? WHERE id=?',
+                                         (json.dumps(report,ensure_ascii=False),parts[2]))
+            if table == 'skills' and data.get('enabled') is False:
+                skill = get('skills', parts[2])
+                profile_id = json.loads(skill.get('runtime_config') or '{}').get('deploymentProfile')
+                if profile_id:
+                    control(skill, profile_id, 'stop')
             with db() as conn:
                 conn.execute(f"UPDATE {table} SET enabled=? WHERE id=?", (int(bool(data.get("enabled"))), parts[2]))
             return self.send(200, {"ok": True})
@@ -458,11 +483,26 @@ class Handler(BaseHTTPRequestHandler):
             self.route(method)
         except (ValueError, sqlite3.IntegrityError) as e:
             self.send(400, {"error": str(e)})
-        except FileNotFoundError:
-            self.send(200, {"available": False, "error": "Docker CLI 未安装"})
+        except FileNotFoundError as e:
+            if urlparse(self.path).path == '/api/docker':
+                self.send(200, {"available": False, "error": "Docker CLI 未安装"})
+            else:
+                self.send(400, {"error": f"所需文件不存在：{e.filename or str(e)}"})
         except Exception as e:
-            print(f"请求失败：{type(e).__name__}")
-            self.send(500, {"error": "服务执行失败，请检查模型接口和服务端日志"})
+            traceback.print_exc()
+            path = urlparse(self.path).path
+            if path in ('/api/skills', '/api/skills/validate'):
+                self.send(500, {"error": f"Skill 包处理失败（{type(e).__name__}）：{e}"})
+            elif path.startswith('/api/agents/') and path.endswith('/test'):
+                kind = type(e).__name__
+                if kind == 'APIConnectionError':
+                    self.send(503, {"error": "无法连接模型接口；请检查平台进程的网络权限、代理和 Base URL"})
+                elif getattr(e, 'status_code', None):
+                    self.send(502, {"error": f"模型接口返回 HTTP {e.status_code}（{kind}）；请检查模型名称、API Key 和 Base URL"})
+                else:
+                    self.send(500, {"error": f"模型测试失败（{kind}）；请查看服务端日志"})
+            else:
+                self.send(500, {"error": "服务执行失败，请检查服务端日志"})
 
     def do_GET(self): self.handle_request("GET")
     def do_POST(self): self.handle_request("POST")

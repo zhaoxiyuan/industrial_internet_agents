@@ -23,12 +23,12 @@
           "os": {"type": "array", "minItems": 1, "items": {"type": "string"}},
           "architectures": {"type": "array", "minItems": 1, "items": {"enum": ["amd64", "arm64"]}}
         }},
-        "tools": {"type": "object", "required": ["catalog"], "properties": {"catalog": {"type": "string"}}},
+        "tools": {"type": "object", "required": ["catalog", "mcp"], "properties": {"catalog": {"type": "string"}, "mcp": {"type":"object", "required":["serviceRef","url","auth"], "properties":{"serviceRef":{"type":"string"},"url":{"type":"string","pattern":"^https?://.+/mcp$"},"auth":{"type":"object","required":["type","secretEnv"],"properties":{"type":{"const":"bearer"},"secretEnv":{"type":"string","pattern":"^[A-Z][A-Z0-9_]+$"},"token":{"type":"string","minLength":24}}}}}}},
         "configuration": {"type": "object", "required": ["schema", "authority"], "properties": {"schema": {"type": "string"}, "authority": {"type": "string"}}},
         "services": {"type": "array", "items": {"$ref": "#/$defs/service"}},
         "deployment": {"type": "object", "required": ["profiles"], "properties": {"profiles": {"type": "array", "minItems": 1, "items": {
-          "type": "object", "required": ["id", "mode"], "properties": {
-            "id": {"type": "string"}, "mode": {"enum": ["external", "local-docker", "kubernetes", "compose"]}, "bundleRef": {"type": "string"}
+          "type": "object", "required": ["id", "mode", "controlFile"], "properties": {
+            "id": {"type": "string"}, "mode": {"enum": ["directory", "local-docker", "kubernetes", "compose"]}, "bundleRef": {"type": "string"}, "controlFile":{"type":"string"}
           }
         }}}},
         "dependencies": {"type": "object"},

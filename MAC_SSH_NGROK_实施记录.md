@@ -1,5 +1,7 @@
 # Mac 单 ngrok 入口 SSH 接入实施记录
 
+> 2026-09-29 更新：本记录前半部分描述旧的单层 Docker Nginx 架构。当前入口已拆为 `/Users/edge_security/ssh_remote/` 下的宿主机 Nginx、独立 SSH 隧道容器和 `a_mac_skill` 内部 Docker Nginx。网络拓扑及运行位置见 `ssh_remote/README.md`。Windows 客户端的 ngrok 地址、`/sshws/`、本地 `10022` 端口和私钥登录步骤保持不变。
+
 日期：2026-09-24。所有新增部署文件位于根目录 `ngrok_ssh/`；`a_mac/` 原有代码与 Docker 配置未修改。Mac 项目目录为 `~/IndustrialAgents/a`，脚本同时支持本机副本的 `a_mac` 目录名。
 
 ## 链路

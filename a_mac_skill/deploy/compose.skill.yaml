@@ -4,7 +4,7 @@ services:
       context: ../gateway
     image: a-gateway:0.1.0
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_GATEWAY_ENV_FILE}
     environment:
       A_WEBUI_HOST: webui
       A_WEBUI_PORT: '8080'
@@ -18,26 +18,30 @@ services:
     ports:
     - 127.0.0.1:8787:8787
     volumes:
-    - ../data:/app/data
-    - ../gateway/config:/app/config:ro
+    - ${AMAC_SITE_DATA_DIR}:/app/data
+    - ${AMAC_SITE_GATEWAY_CONFIG_DIR}:/app/config:ro
     networks:
-    - internal
+      internal:
+        aliases: [skill_gateway]
   p6:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.p6
     image: a-p6:0.1.0
+    ports:
+    - 127.0.0.1:5002:5002
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     volumes:
-    - ../data:/srv/app/data
-    - ../A5/logs:/srv/app/A5/logs
+    - ${AMAC_SITE_DATA_DIR}:/srv/app/data
+    - ${AMAC_SITE_A5_LOG_DIR}:/srv/app/A5/logs
     networks:
-    - internal
+      internal:
+        aliases: [skill_p6]
   chat_reply:
     image: a-p6:0.1.0
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     environment:
       GATEWAY_HOST: http://gateway:8787
     working_dir: /srv/app
@@ -51,8 +55,8 @@ services:
     - --interval
     - '1'
     volumes:
-    - ../.env:/srv/app/.env:ro
-    - ../data:/srv/app/data
+    - ${AMAC_SITE_ENV_FILE}:/srv/app/.env:ro
+    - ${AMAC_SITE_DATA_DIR}:/srv/app/data
     depends_on:
       gateway:
         condition: service_healthy
@@ -65,66 +69,75 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.p8p9
     image: a-p8p9:0.1.0
+    ports:
+    - 127.0.0.1:8089:8089
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     volumes:
-    - ../.env:/srv/app/.env:ro
-    - ../data:/srv/app/data
+    - ${AMAC_SITE_ENV_FILE}:/srv/app/.env:ro
+    - ${AMAC_SITE_DATA_DIR}:/srv/app/data
     networks:
-    - internal
+      internal:
+        aliases: [skill_p8p9]
   app_config:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.app_config
     image: a-app-config:0.1.0
+    ports:
+    - 127.0.0.1:5000:5000
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     volumes:
-    - ../.env:/srv/app/.env
-    - ../agent_config:/srv/app/agent_config
+    - ${AMAC_SITE_ENV_FILE}:/srv/app/.env
+    - ${AMAC_SITE_AGENT_CONFIG_DIR}:/srv/app/agent_config
     networks:
-    - internal
+      internal:
+        aliases: [skill_app_config]
   feishu_cfg:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.feishu_cfg
     image: a-feishu-cfg:0.1.0
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     environment:
       GATEWAY_HOST: http://gateway:8787
+    ports:
+    - 127.0.0.1:5003:5003
     volumes:
-    - ../.env:/srv/app/.env
-    - ../agent_config:/srv/app/agent_config
+    - ${AMAC_SITE_ENV_FILE}:/srv/app/.env
+    - ${AMAC_SITE_AGENT_CONFIG_DIR}:/srv/app/agent_config
     - ../feishu_gateway_cli:/srv/app/feishu_gateway_cli
-    - ../gateway:/srv/app/gateway
+    - ${AMAC_SITE_GATEWAY_CONFIG_DIR}:/srv/app/gateway/config
     networks:
-    - internal
+      internal:
+        aliases: [skill_feishu_cfg]
   webui:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.webui
     image: a-webui:0.1.0
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     environment:
       A_WEBUI_HOST: 0.0.0.0
       A_WEBUI_PORT: '8080'
       A_P8P9_BASE_URL: http://p8p9:8089
     volumes:
-    - ../data:/srv/app/data
-    - ../agent_config:/srv/app/agent_config
+    - ${AMAC_SITE_DATA_DIR}:/srv/app/data
+    - ${AMAC_SITE_AGENT_CONFIG_DIR}:/srv/app/agent_config
     networks:
     - internal
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-    - 127.0.0.1:18080:18080
+    - 127.0.0.1:18081:18080
     volumes:
     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     - ./nginx/conf.d/mac-ngrok.conf:/etc/nginx/conf.d/agent.conf:ro
-    - ./nginx/htpasswd:/etc/nginx/htpasswd:ro
+    - ${AMAC_SITE_NGINX_HTPASSWD}:/etc/nginx/htpasswd:ro
     depends_on:
     - gateway
     - p6
@@ -140,8 +153,9 @@ services:
       dockerfile: deploy/Dockerfile.mcp
     image: a-mcp-bridge:0.2.0
     restart: unless-stopped
-    env_file: ../.env
+    env_file: ${AMAC_SITE_ENV_FILE}
     environment:
+      AMAC_MCP_TOKEN: ${AMAC_MCP_TOKEN}
       AMAC_MCP_HOST: 0.0.0.0
       AMAC_MCP_PORT: '8090'
       AMAC_DATA_DIR: /srv/app/data
@@ -154,8 +168,8 @@ services:
     ports:
     - 127.0.0.1:8090:8090
     volumes:
-    - ../.env:/srv/app/.env:ro
-    - ../data:/srv/app/data
+    - ${AMAC_SITE_ENV_FILE}:/srv/app/.env:ro
+    - ${AMAC_SITE_DATA_DIR}:/srv/app/data
     depends_on:
     - p6
     - p8p9

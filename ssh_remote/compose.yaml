@@ -1,0 +1,15 @@
+services:
+  ssh_tunnel:
+    image: ghcr.io/erebe/wstunnel:v10.5.1
+    container_name: ssh-remote-tunnel
+    restart: unless-stopped
+    command:
+      - /home/app/wstunnel
+      - server
+      - --restrict-config
+      - /etc/wstunnel/restrictions.yaml
+      - ws://0.0.0.0:18081
+    ports:
+      - 127.0.0.1:18082:18081
+    volumes:
+      - ./restrictions.yaml:/etc/wstunnel/restrictions.yaml:ro

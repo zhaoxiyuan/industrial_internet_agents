@@ -14,7 +14,6 @@ COPY web/               ./web/
 COPY P8P9/              ./P8P9/
 COPY A7/                ./A7/
 COPY feishu_gateway_cli/ ./feishu_gateway_cli/
-COPY data/              ./data/
 COPY agent_config/      ./agent_config/
 
 EXPOSE 8080

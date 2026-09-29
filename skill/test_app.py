@@ -25,6 +25,10 @@ class ApiSmokeTest(unittest.TestCase):
         cls.app.ROOT = Path(cls.temp.name)/'skill'
         fixture(Path(cls.temp.name)/'demo')
         cls.app.init_db()
+        cls.control_patch = patch.object(cls.app, 'control', return_value={'healthy': True})
+        cls.discover_patch = patch.object(cls.app, 'discover', return_value=([({'name':'sample'}, object())], []))
+        cls.control_patch.start()
+        cls.discover_patch.start()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -32,6 +36,8 @@ class ApiSmokeTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.control_patch.stop()
+        cls.discover_patch.stop()
         cls.server.shutdown()
         cls.server.server_close()
         cls.temp.cleanup()
@@ -42,6 +48,18 @@ class ApiSmokeTest(unittest.TestCase):
                       headers={"Content-Type": "application/json"})
         with urlopen(req) as response:
             return json.load(response)
+
+    def test_create_agent_with_model_config_in_one_request(self):
+        created = self.request('/api/agents', 'POST', {
+            'name': '页面内创建测试', 'node': 'local', 'model': 'test-model',
+            'base_url': 'https://example.invalid/v1', 'api_key': 'test-key-not-a-real-secret',
+            'system_prompt': '测试职责', 'temperature': 0.5, 'max_tokens': 1024})
+        saved = self.app.get('agents', created['id'])
+        self.assertEqual(saved['model'], 'test-model')
+        self.assertEqual(saved['api_key'], 'test-key-not-a-real-secret')
+        self.assertEqual(saved['system_prompt'], '测试职责')
+        overview = self.request('/api/overview')
+        self.assertNotIn('test-key-not-a-real-secret', json.dumps(overview))
 
     def test_create_bind_chat_and_schedule(self):
         skill = self.request("/api/skills", "POST", {"path":"demo", "configuration":{}})
@@ -96,7 +114,7 @@ class ApiSmokeTest(unittest.TestCase):
         self.assertTrue((source / "SKILL.md").exists())
         self.assertFalse(any(s["id"] == skill["id"] for s in self.request("/api/overview")["skills"]))
 
-    def test_mcp_token_is_saved_but_not_returned(self):
+    def test_mcp_token_is_not_accepted_from_frontend(self):
         source = Path(self.temp.name) / 'token-fixture'
         manifest = fixture(source)
         manifest['metadata']['name'] = 'token-fixture'
@@ -106,12 +124,13 @@ class ApiSmokeTest(unittest.TestCase):
         secret = 'test-mcp-token-at-least-24-characters'
         skill = self.request('/api/skills', 'POST', {'path':'token-fixture', 'mcp_token':secret})
         saved = self.app.get('skills', skill['id'])
-        self.assertEqual(saved['mcp_token'], secret)
+        self.assertEqual(saved['mcp_token'], '')
         overview = self.request('/api/overview')
         public = next(s for s in overview['skills'] if s['id'] == skill['id'])
         self.assertTrue(public['mcp_token_configured'])
         self.assertNotIn('mcp_token', public)
         self.assertNotIn(secret, json.dumps(overview))
+        self.assertNotIn(manifest['spec']['tools']['mcp']['auth']['token'], json.dumps(overview))
 
 
 if __name__ == "__main__":

@@ -35,7 +35,10 @@ def call(operation, args):
                 raise ValueError('缺少或非法 ' + key)
             route = route.replace('{'+key+'}', quote(value, safe=''))
     headers = {'Content-Type':'application/json'}
-    token = os.environ.get('GATEWAY_API_KEY' if env=='GATEWAY_BASE_URL' else 'AMAC_API_TOKEN')
+    if env == 'GATEWAY_BASE_URL':
+        token = os.environ.get('GATEWAY_API_KEY') or os.environ.get('CG_API_KEY')
+    else:
+        token = os.environ.get('AMAC_API_TOKEN')
     if token:
         headers['Authorization'] = 'Bearer ' + token
     body = None

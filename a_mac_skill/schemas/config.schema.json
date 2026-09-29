@@ -53,20 +53,6 @@
       "x-apply": "restart",
       "x-sensitive": true
     },
-    "mcpUrl": {
-      "type": "string",
-      "pattern": "^https?://.+/mcp$",
-      "x-scope": "instance",
-      "x-apply": "restart",
-      "x-sensitive": false
-    },
-    "mcpTokenEnv": {
-      "type": "string",
-      "pattern": "^(AMAC|SKILL)_[A-Z0-9_]+$",
-      "x-scope": "instance",
-      "x-apply": "restart",
-      "x-sensitive": true
-    },
     "feishuAccount": {
       "type": "string",
       "default": "P8P9",

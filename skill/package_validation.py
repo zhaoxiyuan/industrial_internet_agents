@@ -107,7 +107,7 @@ def validate_package(folder, configuration=None):
             if isinstance(value, dict):
                 for key, child in value.items():
                     label = field + '.' + key
-                    if key in ('entrypoint', 'catalog', 'schema', 'bundleRef', 'inputSchema', 'outputSchema', 'sourceFile'):
+                    if key in ('entrypoint', 'catalog', 'schema', 'bundleRef', 'controlFile', 'inputSchema', 'outputSchema', 'sourceFile'):
                         safe_file(root, child)
                     else:
                         refs(child, label)
@@ -136,6 +136,8 @@ def validate_package(folder, configuration=None):
         add('config.schema', 'passed', '配置 JSON Schema 有效')
         services = spec['services']
         by_id = {s['serviceId']: s for s in services}
+        if spec['tools']['mcp']['serviceRef'] not in by_id:
+            raise ValueError('MCP serviceRef 必须引用已声明服务')
         if len(by_id) != len(services):
             raise ValueError('外围服务 serviceId 重复')
         visited, active = set(), set()
@@ -198,6 +200,8 @@ def validate_package(folder, configuration=None):
                     symbols = {node.name for node in ast.walk(ast.parse(source.read_text(encoding='utf-8-sig'))) if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
                     if adapter['symbol'] not in symbols:
                         raise ValueError(f"工具源码找不到符号：{adapter['symbol']}")
+            if adapter.get('status') == 'ready' and adapter.get('kind') != 'mcp':
+                raise ValueError(f"工具 {tool['name']} 必须通过 MCP 调用")
             if adapter.get('status') != 'ready':
                 add('tool.adapter', 'blocked', adapter.get('reason','工具执行适配器未就绪'), tool['name'], 'deployment')
             else:
@@ -212,9 +216,14 @@ def validate_package(folder, configuration=None):
         for ui in spec.get('ui', []):
             if ui.get('serviceRef') and ui['serviceRef'] not in by_id:
                 raise ValueError('UI 引用未知服务')
+            if ui['type'] == 'service-page' and not re.fullmatch(r'https?://[^\s]+', ui.get('url', '')):
+                raise ValueError('service-page 必须声明可展示的 http(s) URL')
         for profile in spec['deployment']['profiles']:
-            if profile['mode'] != 'external' and not profile.get('bundleRef'):
+            if profile['mode'] != 'directory' and not profile.get('bundleRef'):
                 raise ValueError('托管部署模式缺少 bundleRef')
+            controller = safe_file(root, profile['controlFile'])
+            if controller.suffix != '.py':
+                raise ValueError('服务控制文件必须是包内 Python 文件')
             if profile['mode'] in ('compose','local-docker'):
                 compose = load_document(safe_file(root,profile['bundleRef']))
                 declared = compose.get('services',{})

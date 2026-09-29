@@ -19,18 +19,15 @@ def catalog_for(skill):
 
 
 def connection(skill):
-    config = json.loads(skill.get('runtime_config') or '{}')
-    url = config.get('mcpUrl', '')
-    ref = config.get('mcpTokenEnv', '')
+    manifest = json.loads(skill['manifest'])
+    mcp = manifest['spec']['tools']['mcp']
+    url = mcp['url']
+    ref = mcp['auth']['secretEnv']
     if not isinstance(url, str) or not url.startswith(('http://', 'https://')) or not url.endswith('/mcp'):
         raise ValueError('请配置以 /mcp 结尾的 MCP 服务地址')
-    token = skill.get('mcp_token') or ''
-    if not token and ref:
-        if not isinstance(ref, str) or not ref.startswith(('AMAC_', 'SKILL_')):
-            raise ValueError('MCP 令牌环境变量名无效')
-        token = os.environ.get(ref)
+    token = os.environ.get(ref) or mcp['auth'].get('token', '')
     if not token:
-        raise ValueError('请在页面填写 MCP 访问令牌，或设置已配置的令牌环境变量')
+        raise ValueError(f'服务端缺少 MCP 令牌环境变量 {ref}')
     return url, token
 
 
@@ -100,8 +97,15 @@ def langchain_tools(skill, binding_id, binding_is_active):
     result = []
     for declared, remote in matched:
         def execute(_declared=declared, **kwargs):
-            return invoke(skill, binding_id, _declared, kwargs, binding_is_active)
+            try:
+                return invoke(skill, binding_id, _declared, kwargs, binding_is_active)
+            except Exception as exc:
+                return json.dumps({'ok': False, 'error': f'工具执行未确认成功：{exc}'}, ensure_ascii=False)
         name = skill['name'].replace('-', '_') + '__' + declared['name']
+        schema = json.loads((Path(skill['package_path']) / declared['inputSchema']).read_text(encoding='utf-8'))
         result.append(StructuredTool(name=name, description=declared['description'],
-                                     args_schema=remote.inputSchema, func=execute))
+                                     args_schema=schema, func=execute,
+                                     handle_validation_error=lambda exc: json.dumps(
+                                         {'ok': False, 'error': f'工具参数不符合声明，操作未执行：{exc}'},
+                                         ensure_ascii=False)))
     return result, unavailable

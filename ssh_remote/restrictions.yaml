@@ -1,0 +1,12 @@
+# Default deny; allow only forward TCP to macOS sshd.
+restrictions:
+  - name: mac-ssh-only
+    match:
+      - !Any
+    allow:
+      - !Tunnel
+        protocol:
+          - Tcp
+        port:
+          - 22
+        host: '^host\.docker\.internal$'
