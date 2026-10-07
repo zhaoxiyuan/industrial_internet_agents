@@ -1,5 +1,5 @@
 ---
-name: ai-ready
+name: repo-ai-ready
 description: This skill should be used when the user asks to "show me the project knowledge base", "index modules", "find agents or tools", "look up how something works", "understand the codebase structure", "find a specific file or function", "see what tools are available", or needs to navigate/modify/verify code in this industrial_internet_agents project. Also use when the user wants to "modify", "edit", "change", "add", "update", "fix", or "implement" any agent, tool, workflow, or module in this project, or asks about where to make changes. Use when user mentions "P1-P10", "agent", "workflow", "HITL", "tools", "P1 Permit", "P8 Disposition", or any stage name, or wants to explore the project architecture.
 ---
 
@@ -25,10 +25,10 @@ description: This skill should be used when the user asks to "show me the projec
 
 | 模块 | 路径 | 说明 |
 |------|------|------|
-| [agents](#agents-模块) | `agents/` | P1-P10 Agent 实现 |
-| [web](#web-模块) | `web/` | Gradio Web 前端 |
-| [docs](#docs-文档) | `docs/` | 架构文档 |
-| [A5/A6/A7](#子系统) | `A5/`, `A6/`, `A7/` | 边缘智能子系统 |
+| [agents](#agents-模块) | `../agents` | P1-P10 Agent 实现 |
+| [web](#web-模块) | `../web` | Gradio Web 前端 |
+| [docs](#docs-文档) | `../docs` | 架构文档 |
+| [A5/A6/A7](#子系统) | `../A5`, `../A6`, `../A7` | 边缘智能子系统 |
 
 ---
 
@@ -128,9 +128,9 @@ data/jobs/{job_id}/
 
 | 子系统 | 路径 | 说明 |
 |--------|------|------|
-| A5 | `A5/` | 实时监控（摄像头/CV/传感器） |
-| A6 | `A6/` | 风险评估 Agent |
-| A7 | `A7/` | 长期记忆 + 飞书通知 |
+| A5 | `../A5` | 实时监控（摄像头/CV/传感器） |
+| A6 | `../A6` | 风险评估 Agent |
+| A7 | `../A7` | 长期记忆 + 飞书通知 |
 
 ---
 

@@ -726,11 +726,9 @@ function connectWebSocket(jobId) {
                     if (pending.length > 0) {
                         // 有待确认项，弹窗
                         addLog('⏸️ 等待人工确认: ' + pending.join(', '), 'warning');
-                        // P1 阶段：审批内容已在 step-modal 内渲染（合并窗口），不再触发独立 hitl-modal
-                        if (currentStage !== 'P1') {
-                            if (!document.getElementById('hitl-modal').classList.contains('active')) {
-                                showHitlModal(pending[0], data.pending_data[pending[0]]);
-                            }
+                        // 所有阶段（包括 P1）都在 hitl-modal 中展示人工确认内容
+                        if (!document.getElementById('hitl-modal').classList.contains('active')) {
+                            showHitlModal(pending[0], data.pending_data[pending[0]]);
                         }
                     } else if (data.status === 'completed') {
                         // 工作流完成
@@ -1168,16 +1166,19 @@ function applyStageStepsFromState() {
     if (!subSteps) return;
 
     if (subSteps.status === 'running') {
-        if (!stepModalShown) {
-            // 延迟 1 秒弹出（与原 P1 行为一致，让工作流图节点先亮起）
-            stepModalShown = true;
-            setTimeout(() => {
-                if (!stepModalShown) return;
-                showStepModal(currentStage);
+        // P1 阶段：不弹出 step-modal，执行信息在 hitl-modal 中展示
+        if (currentStage !== 'P1') {
+            if (!stepModalShown) {
+                // 延迟 1 秒弹出（与原 P1 行为一致，让工作流图节点先亮起）
+                stepModalShown = true;
+                setTimeout(() => {
+                    if (!stepModalShown) return;
+                    showStepModal(currentStage);
+                    updateStepModal(currentStage, subSteps);
+                }, 1000);
+            } else {
                 updateStepModal(currentStage, subSteps);
-            }, 1000);
-        } else {
-            updateStepModal(currentStage, subSteps);
+            }
         }
         stepModalCompleted = false;
     } else if (subSteps.status === 'completed' && stepModalShown && !stepModalCompleted) {
@@ -1507,52 +1508,429 @@ function showHitlModal(stage, data) {
         suggestionSection.style.display = 'none';
     }
 
-    // P1 阶段：渲染作业票详情 + JSA 分析
-    renderPermitApproval(baseStage, data);
+    // 各阶段内容渲染（传入 pendingInfo 以便使用）
+    renderStageModalContent(baseStage, data, pendingInfo);
 
     document.getElementById('hitl-modal').classList.add('active');
 }
 
-// ========== 作业票审批（P1 阶段） ==========
-function renderPermitApproval(baseStage, data) {
-    const section = document.getElementById('permit-approval-section');
-    if (!section) return;
+// ========== 阶段弹窗内容渲染 ==========
+function renderStageModalContent(stage, data, pendingInfo) {
+    const modalBody = document.querySelector('#hitl-modal .modal-body');
+    if (!modalBody) return;
 
-    // 仅 P1 阶段显示作业票审批 section
-    if (baseStage !== 'P1') {
-        section.style.display = 'none';
-        return;
+    // 获取阶段结果数据（从 state.workflowState.agents 或 data）
+    // 注意：pending_confirmation 的内容（bindings 等）保存在 agentData 层级或 data.pending 中
+    const agentData = state.workflowState && state.workflowState.agents && state.workflowState.agents[stage] || {};
+    const stageData = agentData.result || (agentData.bindings ? agentData : (data || {}));
+    pendingInfo = pendingInfo || data && data.pending || {};
+
+    // 根据阶段渲染内容
+    switch (stage) {
+        case 'P1':
+            renderP1ModalContent(data, pendingInfo);
+            return;
+        case 'P2':
+            modalBody.innerHTML = renderP2ModalContent(stageData, pendingInfo);
+            break;
+        case 'P3':
+            modalBody.innerHTML = renderP3ModalContent(stageData, pendingInfo);
+            break;
+        case 'P4':
+            modalBody.innerHTML = renderP4ModalContent(stageData, pendingInfo);
+            break;
+        case 'P5':
+            modalBody.innerHTML = renderP5ModalContent(stageData, pendingInfo);
+            break;
+        case 'P6':
+            modalBody.innerHTML = renderP6ModalContent(stageData, pendingInfo);
+            break;
+        case 'P7':
+            modalBody.innerHTML = renderP7ModalContent(stageData, pendingInfo);
+            break;
+        case 'P8':
+            modalBody.innerHTML = renderP8ModalContent(stageData, pendingInfo);
+            break;
+        case 'P9':
+            modalBody.innerHTML = renderP9ModalContent(stageData, pendingInfo);
+            break;
+        case 'P10':
+            modalBody.innerHTML = renderP10ModalContent(stageData, pendingInfo);
+            break;
+        default:
+            modalBody.innerHTML = `<div class="modal-info"><div class="modal-info-title">确认信息</div><div>${pendingInfo.message || '请确认'}</div></div>`;
     }
+}
 
-    // 优先从 data.permit_data 读取（新接口返回的数据）
+// ========== P1 阶段：作业预约、JSA分析与作业票 ==========
+function renderP1ModalContent(data, pendingInfo) {
+    const subSteps = state.workflowState && state.workflowState.agents && state.workflowState.agents.P1 && state.workflowState.agents.P1.sub_steps;
+    const stageSteps = STAGE_STEPS['P1'];
+    const items = (subSteps && subSteps.items) || stageSteps.items || [];
+
+    // 构建步骤 HTML
+    const stepsHtml = items.map((item, i) => `
+        ${i > 0 ? '<div class="step-arrow">→</div>' : ''}
+        <div class="step-item ${item.status || 'pending'}">
+            <div class="step-item-icon">
+                <span class="step-icon-inner">${getStageStepIcon(item.tool)}</span>
+                <span class="step-spinner"></span>
+            </div>
+            <div class="step-item-info">
+                <div class="step-item-name">${escapeHtml(item.label)}</div>
+                <div class="step-item-status">${item.status === 'completed' ? '完成' : item.status === 'running' ? '执行中' : '待执行'}</div>
+            </div>
+        </div>
+    `).join('');
+
+    const completedCount = items.filter(it => it.status === 'completed').length;
+    const total = items.length || 4;
+    const pct = total > 0 ? (completedCount / total) * 100 : 0;
+
+    // 获取作业票数据
     let permitData = data && data.permit_data;
-    // 兼容旧结构：data.pending 内部可能携带 permit_data
     if (!permitData && data && data.pending && data.pending.permit_data) {
         permitData = data.pending.permit_data;
     }
+    const permitDetailHtml = permitData ? buildPermitDetailHtml(permitData) : '<div class="permit-detail-card"><div class="permit-detail-value">作业票数据加载中...</div></div>';
+    const jsaDetailHtml = permitData ? buildJsaDetailHtml(permitData) : '<div class="permit-detail-card"><div class="permit-detail-value">JSA 数据加载中...</div></div>';
 
-    if (!permitData || (!permitData.application && !permitData.permit_content)) {
-        section.style.display = 'none';
-        return;
-    }
-
-    section.style.display = 'block';
-    document.getElementById('permit-detail-content').innerHTML = buildPermitDetailHtml(permitData);
-    document.getElementById('jsa-detail-content').innerHTML = buildJsaDetailHtml(permitData);
-
-    // 默认显示作业票 Tab
-    switchPermitTab('permit');
+    // 直接替换 modal-body 内容
+    const modalBody = document.querySelector('#hitl-modal .modal-body');
+    modalBody.innerHTML = `
+        <div class="step-items-container">${stepsHtml}</div>
+        <div class="step-progress">
+            <div class="progress-bar"><div class="progress-fill" style="width: ${pct}%"></div></div>
+            <div class="progress-text">${completedCount} / ${total} 步骤完成</div>
+        </div>
+        <div id="permit-approval-section">
+            <div class="permit-tabs">
+                <div class="permit-tab active" data-tab="permit" onclick="switchPermitTab('permit')">📋 作业票详情</div>
+                <div class="permit-tab" data-tab="jsa" onclick="switchPermitTab('jsa')">⚠️ JSA 分析</div>
+            </div>
+            <div class="permit-tab-content" id="permit-tab-permit">${permitDetailHtml}</div>
+            <div class="permit-tab-content" id="permit-tab-jsa" style="display: none;">${jsaDetailHtml}</div>
+        </div>
+    `;
 }
 
+// ========== P2 阶段：作业任务获取 ==========
+function renderP2ModalContent(stageData, pendingInfo) {
+    const taskInstance = stageData.task_instance || {};
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📌 任务实例信息</div>
+            <div class="permit-detail-card">
+                ${rowHtml('任务ID', taskInstance.task_id || '-')}
+                ${rowHtml('作业票ID', taskInstance.permit_id || '-')}
+                ${rowHtml('状态', taskInstance.status || '-')}
+                ${rowHtml('创建时间', taskInstance.created_at ? formatDateTime(taskInstance.created_at) : '-')}
+            </div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">是否将此作业纳入智能监测？</div>
+        </div>
+    `;
+}
+
+// ========== P3 阶段：作业上下文理解 ==========
+function renderP3ModalContent(stageData, pendingInfo) {
+    const context = stageData.context || {};
+    const missingFields = stageData.missing_fields || pendingInfo.fields || [];
+
+    let contextRows = '';
+    if (context.job_content) contextRows += rowHtml('作业内容', context.job_content);
+    if (context.region) contextRows += rowHtml('作业区域', context.region);
+    if (context.medium) contextRows += rowHtml('介质', context.medium);
+    if (context.time_range) {
+        const timeRange = context.time_range;
+        const start = timeRange.start ? formatDateTime(timeRange.start) : '-';
+        const end = timeRange.end ? formatDateTime(timeRange.end) : '-';
+        contextRows += rowHtml('作业时间', `${start} ~ ${end}`);
+    }
+    if (context.personnel && context.personnel.length) {
+        const names = context.personnel.map(p => `${p.name}(${p.badge_id})`).join(', ');
+        contextRows += rowHtml('作业人员', names);
+    }
+
+    let risksHtml = '';
+    if (context.risks && context.risks.length) {
+        risksHtml = context.risks.map(r => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label">${r.id}</div>
+                <div class="permit-detail-value">${r.description} <span class="risk-badge risk-${r.severity === '高' ? 'high' : r.severity === '中' ? 'medium' : 'low'}">${r.severity}</span></div>
+            </div>
+        `).join('');
+    }
+
+    let missingHtml = '';
+    if (missingFields.length) {
+        missingHtml = `
+            <div class="modal-info" style="background: #fff3e0; border-left: 3px solid #ff9800;">
+                <div class="modal-info-title" style="color: #e65100;">⚠️ 缺失字段</div>
+                <div class="permit-detail-value">${missingFields.join(', ')}</div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">🧠 作业上下文</div>
+            <div class="permit-detail-card">${contextRows || '<div class="permit-detail-value">暂无上下文数据</div>'}</div>
+        </div>
+        ${risksHtml ? `
+        <div class="modal-info">
+            <div class="modal-info-title">⚠️ 风险因素</div>
+            <div class="permit-detail-card">${risksHtml}</div>
+        </div>` : ''}
+        ${missingHtml}
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || '上下文存在缺失字段，需要人工确认'}</div>
+        </div>
+    `;
+}
+
+// ========== P4 阶段：摄像与数据关联 ==========
+function renderP4ModalContent(stageData, pendingInfo) {
+    const bindings = stageData.bindings || {};
+    const unmatched = stageData.unmatched_resources || [];
+
+    let bindingsHtml = '';
+    if (bindings && Object.keys(bindings).length) {
+        bindingsHtml = Object.entries(bindings).map(([type, items]) => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label">${type}</div>
+                <div class="permit-detail-value">${Array.isArray(items) ? items.join(', ') : items}</div>
+            </div>
+        `).join('');
+    } else {
+        bindingsHtml = '<div class="permit-detail-value">暂无绑定数据</div>';
+    }
+
+    let unmatchedHtml = '';
+    if (unmatched.length) {
+        unmatchedHtml = `
+            <div class="modal-info" style="background: #fff3e0; border-left: 3px solid #ff9800;">
+                <div class="modal-info-title" style="color: #e65100;">⚠️ 未匹配资源</div>
+                <div class="permit-detail-value">${unmatched.join(', ')}</div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📹 监测资源绑定</div>
+            <div class="permit-detail-card">${bindingsHtml}</div>
+        </div>
+        ${unmatchedHtml}
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || '请确认监测资源绑定是否正确'}</div>
+        </div>
+    `;
+}
+
+// ========== P5 阶段：作业前条件核验 ==========
+function renderP5ModalContent(stageData, pendingInfo) {
+    const verification = stageData.verification_result || {};
+    const recommendation = stageData.recommendation || pendingInfo.decision || {};
+
+    let itemsHtml = '';
+    if (verification.items) {
+        itemsHtml = verification.items.map(item => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label" style="min-width: 120px;">${item.label || item.name}</div>
+                <div class="permit-detail-value">
+                    <span class="status-badge ${item.status === '符合' ? 'status-completed' : item.status === '不符合' ? 'status-current' : 'status-pending'}">${item.status}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    let recHtml = '';
+    if (recommendation) {
+        const decision = recommendation.decision || recommendation;
+        const decisionClass = decision === '允许开工' ? 'status-completed' : decision === '整改后开工' ? 'status-current' : 'status-pending';
+        recHtml = `
+            <div class="modal-info">
+                <div class="modal-info-title">📋 开工建议</div>
+                <div class="permit-detail-card">
+                    ${rowHtml('决策', `<span class="status-badge ${decisionClass}">${decision}</span>`)}
+                    ${recommendation.reasons ? rowHtml('原因', recommendation.reasons) : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">✅ 核验清单</div>
+            <div class="permit-detail-card">${itemsHtml || '<div class="permit-detail-value">暂无核验数据</div>'}</div>
+        </div>
+        ${recHtml}
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || '请确认开工条件核验结果'}</div>
+        </div>
+    `;
+}
+
+// ========== P6 阶段：作业过程动态监测 ==========
+function renderP6ModalContent(stageData, pendingInfo) {
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📡 监测状态</div>
+            <div class="permit-detail-card">
+                ${rowHtml('状态', '执行中')}
+            </div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">ℹ️ 说明</div>
+            <div class="permit-detail-value">P6 阶段为自动监测阶段，持续监控作业过程，检测违章及条件变化。无需人工确认。</div>
+        </div>
+    `;
+}
+
+// ========== P7 阶段：风险动态研判 ==========
+function renderP7ModalContent(stageData, pendingInfo) {
+    const riskEvents = stageData.risk_events || [];
+    const highRiskCount = pendingInfo.count || riskEvents.filter(e => e.level === 'HIGH' || e.level === 'CRITICAL').length;
+
+    let eventsHtml = '';
+    if (riskEvents.length) {
+        eventsHtml = riskEvents.map(event => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label">${event.id || event.event_id}</div>
+                <div class="permit-detail-value">
+                    ${event.description || event.type}
+                    <span class="risk-badge risk-${event.level === 'HIGH' || event.level === 'CRITICAL' ? 'high' : event.level === 'MEDIUM' ? 'medium' : 'low'}">${event.level}</span>
+                </div>
+            </div>
+        `).join('');
+    } else {
+        eventsHtml = '<div class="permit-detail-value">暂无风险事件</div>';
+    }
+
+    if (highRiskCount > 0) {
+        return `
+            <div class="modal-info" style="background: #ffebee; border-left: 3px solid #f44336;">
+                <div class="modal-info-title" style="color: #c62828;">🚨 高风险预警</div>
+                <div class="permit-detail-value">检测到 ${highRiskCount} 个高风险事件，需要人工确认</div>
+            </div>
+            <div class="modal-info">
+                <div class="modal-info-title">📊 风险事件列表</div>
+                <div class="permit-detail-card">${eventsHtml}</div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📊 风险研判状态</div>
+            <div class="permit-detail-card">
+                ${rowHtml('风险事件', riskEvents.length + ' 个')}
+                ${rowHtml('高风险', highRiskCount + ' 个')}
+            </div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">ℹ️ 说明</div>
+            <div class="permit-detail-value">当前无高风险事件，P7 阶段持续监控中。</div>
+        </div>
+    `;
+}
+
+// ========== P8 阶段：处置方案生成 ==========
+function renderP8ModalContent(stageData, pendingInfo) {
+    const jobs = stageData.jobs || [];
+
+    let jobsHtml = '';
+    if (jobs.length) {
+        jobsHtml = jobs.map(job => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label">${job.id || job.job_id}</div>
+                <div class="permit-detail-value">${job.type || job.action || job.description || '处置任务'}</div>
+            </div>
+        `).join('');
+    } else {
+        jobsHtml = '<div class="permit-detail-value">暂无处置任务</div>';
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📋 处置任务</div>
+            <div class="permit-detail-card">${jobsHtml}</div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || 'P8 处置任务已创建，请确认'}</div>
+        </div>
+    `;
+}
+
+// ========== P9 阶段：作业闭环确认 ==========
+function renderP9ModalContent(stageData, pendingInfo) {
+    const report = stageData.report || {};
+    const verifyResult = stageData.verify_result || {};
+
+    let reportHtml = '';
+    if (report && Object.keys(report).length) {
+        reportHtml = Object.entries(report).map(([k, v]) => rowHtml(k, typeof v === 'object' ? JSON.stringify(v) : v)).join('');
+    } else {
+        reportHtml = '<div class="permit-detail-value">暂无报告数据</div>';
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">📝 关闭报告</div>
+            <div class="permit-detail-card">${reportHtml}</div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || '请确认是否关闭事件和作业'}</div>
+        </div>
+    `;
+}
+
+// ========== P10 阶段：归档与改进 ==========
+function renderP10ModalContent(stageData, pendingInfo) {
+    const suggestions = stageData.suggestions || [];
+
+    let suggestionsHtml = '';
+    if (suggestions.length) {
+        suggestionsHtml = suggestions.map((s, i) => `
+            <div class="permit-detail-row">
+                <div class="permit-detail-label">建议 ${i + 1}</div>
+                <div class="permit-detail-value">${typeof s === 'string' ? s : s.content || s.text || JSON.stringify(s)}</div>
+            </div>
+        `).join('');
+    } else {
+        suggestionsHtml = '<div class="permit-detail-value">暂无改进建议</div>';
+    }
+
+    return `
+        <div class="modal-info">
+            <div class="modal-info-title">💡 改进建议</div>
+            <div class="permit-detail-card">${suggestionsHtml}</div>
+        </div>
+        <div class="modal-info">
+            <div class="modal-info-title">🤔 确认问题</div>
+            <div class="permit-detail-value">${pendingInfo.message || '请确认归档报告'}</div>
+        </div>
+    `;
+}
+
+// ========== 通用 Tab 切换（P1 modal） ==========
 function switchPermitTab(tabName) {
-    document.querySelectorAll('.permit-tab').forEach(t => {
+    document.querySelectorAll('#hitl-modal .permit-tab').forEach(t => {
         t.classList.toggle('active', t.dataset.tab === tabName);
     });
     document.getElementById('permit-tab-permit').style.display = tabName === 'permit' ? 'block' : 'none';
     document.getElementById('permit-tab-jsa').style.display = tabName === 'jsa' ? 'block' : 'none';
 }
 
-// ========== step-modal 内嵌的 P1 作业票审批 Tab 切换 ==========
+// ========== step-modal 内嵌的 P1 作业票审批 Tab 切换（保留给其他阶段 step-modal 使用）==========
 function switchStepPermitTab(tabName) {
     const view = document.getElementById('step-approval-view');
     if (!view) return;
@@ -1563,18 +1941,16 @@ function switchStepPermitTab(tabName) {
     document.getElementById('step-permit-tab-jsa').style.display = tabName === 'jsa' ? 'block' : 'none';
 }
 
-// ========== step-modal 内嵌的 P1 作业票审批渲染 ==========
+// ========== step-modal 内嵌的 P1 作业票审批渲染（保留给其他阶段 step-modal 使用）==========
 function renderStepPermitApproval(baseStage, data) {
     if (baseStage !== 'P1') return;
 
-    // 复用 buildPermitDetailHtml / buildJsaDetailHtml（纯函数）
     let permitData = data && data.permit_data;
     if (!permitData && data && data.pending && data.pending.permit_data) {
         permitData = data.pending.permit_data;
     }
 
     if (!permitData || (!permitData.application && !permitData.permit_content)) {
-        // permit.json 缺失或无关键字段，仅显示 footer（按钮仍可操作）
         document.getElementById('step-approval-view').style.display = 'block';
         document.getElementById('step-permit-detail-content').innerHTML =
             '<div class="permit-detail-card"><div class="permit-detail-value">暂无作业票数据</div></div>';
@@ -1592,6 +1968,7 @@ function renderStepPermitApproval(baseStage, data) {
     switchStepPermitTab('permit');
 }
 
+// ========== 作业票详情 HTML 构建 ==========
 function buildPermitDetailHtml(permitData) {
     const app = permitData.application || {};
     const permit = permitData.permit_content || {};
@@ -1761,12 +2138,8 @@ function confirmDecision(decision) {
         return r.json();
     }).then(data => {
         addLog(`📋 响应数据: ${JSON.stringify(data)}`);
-        // 关闭弹窗：P1 阶段关闭 step-modal（合并窗口），其他阶段关闭 hitl-modal
-        if (stage && stage.toUpperCase().startsWith('P1')) {
-            hideStepModal();
-        } else {
-            closeModal();
-        }
+        // 关闭弹窗：统一关闭 hitl-modal
+        closeModal();
 
         if (data.status === 'executing') {
             // 异步执行中，等待 WebSocket 状态更新

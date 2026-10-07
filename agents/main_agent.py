@@ -1262,8 +1262,16 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
             }
 
         if next_result.get("pending_confirmation"):
+            pending_data = next_result.get("pending_confirmation", {})
+            # 构建 agent 更新数据，包含 pending_confirmation 内容（bindings 等）
+            agent_data = {
+                "status": "waiting",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            # 添加 pending_confirmation 的所有字段到 agent_data
+            agent_data.update(pending_data)
             update_workflow_status(job_id, {
-                f"{next_stage}_status": "waiting",
+                "agents": {next_stage: agent_data},
                 "main_agent": {"status": "waiting", "pending_confirmations": [next_stage]}
             })
             _broadcast_state(job_id)

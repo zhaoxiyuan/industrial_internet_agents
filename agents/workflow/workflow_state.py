@@ -58,14 +58,16 @@ def update_workflow_status(job_id: str, updates: dict) -> dict:
     status["updated_at"] = now
 
     # 处理快捷方式（如 P1_status → agents.P1.status）
+    # 注意：保留现有 agent 数据，只更新 status 字段，避免覆盖 bindings 等数据
     for stage in ALL_STAGES:
         status_key = f"{stage}_status"
         if status_key in updates:
             updates.setdefault("agents", {})
-            updates["agents"][stage] = {
-                "status": updates.pop(status_key),
-                "updated_at": now
-            }
+            # 保留现有 agent 数据，只更新 status 字段
+            if stage not in updates["agents"]:
+                updates["agents"][stage] = {}
+            updates["agents"][stage]["status"] = updates.pop(status_key)
+            updates["agents"][stage]["updated_at"] = now
 
     # 更新主Agent状态
     if "main_agent" in updates:

@@ -106,7 +106,7 @@ clear_agent_registry(thread_id)
 
 ## 工作流状态管理
 
-### 核心函数 (`agents/workflow/`)
+### 核心函数 (`../../agents/workflow`)
 
 ```python
 # workflow/job_persistence.py

@@ -311,7 +311,9 @@ def execute_stage(job_id: str) -> dict:
         result["completed_at"] = datetime.now(timezone.utc).isoformat()
         result["pending_confirmation"] = {
             "type": "binding_confirm",
-            "message": "请确认监测资源绑定是否正确"
+            "message": "请确认监测资源绑定是否正确",
+            "bindings": result.get("bindings", {}),
+            "unmatched_resources": result.get("unmatched_resources", [])
         }
 
     except Exception as e:

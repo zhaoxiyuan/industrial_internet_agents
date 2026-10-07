@@ -2,7 +2,7 @@
 
 ## P1 Permit Agent
 
-**文件**: `agents/p1_permit_agent.py`
+**文件**: `../../agents/p1_permit_agent.py`
 **System Prompt**: `agents/system_prompt/P1_PERMIT_SYSTEM_PROMPT.md`
 **工厂函数**: `create_permit_agent()`, `create_permit_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p1_result.json`
@@ -32,7 +32,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P2 Task Agent
 
-**文件**: `agents/p2_task_agent.py`
+**文件**: `../../agents/p2_task_agent.py`
 **System Prompt**: `agents/system_prompt/P2_TASK_SYSTEM_PROMPT.md`
 **工厂函数**: `create_task_agent()`, `create_task_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p2_result.json`
@@ -43,7 +43,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P3 Context Agent
 
-**文件**: `agents/p3_context_agent.py`
+**文件**: `../../agents/p3_context_agent.py`
 **System Prompt**: `agents/system_prompt/P3_CONTEXT_SYSTEM_PROMPT.md`
 **工厂函数**: `create_context_agent()`, `create_context_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p3_result.json`
@@ -55,7 +55,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P4 Binding Agent
 
-**文件**: `agents/p4_binding_agent.py`
+**文件**: `../../agents/p4_binding_agent.py`
 **System Prompt**: `agents/system_prompt/P4_BINDING_SYSTEM_PROMPT.md`
 **工厂函数**: `create_binding_agent()`, `create_binding_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p4_result.json`
@@ -67,7 +67,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P5 Verify Agent
 
-**文件**: `agents/p5_verify_agent.py`
+**文件**: `../../agents/p5_verify_agent.py`
 **System Prompt**: `agents/system_prompt/P5_VERIFY_SYSTEM_PROMPT.md`
 **工厂函数**: `create_verify_agent()`, `create_verify_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p5_result.json`
@@ -79,7 +79,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P6 Monitor Agent
 
-**文件**: `agents/p6_monitor_agent.py`
+**文件**: `../../agents/p6_monitor_agent.py`
 **System Prompt**: `agents/system_prompt/P6_MONITOR_SYSTEM_PROMPT.md`
 **端口**: 5002 (FastAPI，与 P7 A6 路由共享)
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p6_result.json`
@@ -93,7 +93,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P7 Risk Agent
 
-**文件**: `agents/p7_risk_agent.py`
+**文件**: `../../agents/p7_risk_agent.py`
 **System Prompt**: `agents/system_prompt/P7_RISK_SYSTEM_PROMPT.md`
 **路由挂载**: 通过 `register_a6_routes()` 挂载到 P6 的 FastAPI
 **阶段触发**: `trigger_a6_assessment()` 进程内触发
@@ -105,7 +105,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P8 Disposition Agent
 
-**文件**: `agents/p8_disposition_agent.py`
+**文件**: `../../agents/p8_disposition_agent.py`
 **System Prompt**: `agents/system_prompt/P8_DISPOSITION_SYSTEM_PROMPT.md`
 **工厂函数**: `create_disposition_agent()`, `create_disposition_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p8_result.json`
@@ -117,7 +117,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P9 Closure Agent
 
-**文件**: `agents/p9_closure_agent.py`
+**文件**: `../../agents/p9_closure_agent.py`
 **System Prompt**: `agents/system_prompt/P9_CLOSURE_SYSTEM_PROMPT.md`
 **工厂函数**: `create_closure_agent()`, `create_closure_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p9_result.json`
@@ -129,7 +129,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## P10 Archive Agent
 
-**文件**: `agents/p10_archive_agent.py`
+**文件**: `../../agents/p10_archive_agent.py`
 **System Prompt**: `agents/system_prompt/P10_ARCHIVE_SYSTEM_PROMPT.md`
 **工厂函数**: `create_archive_agent()`, `create_archive_agent_with_hitl()`
 **阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p10_result.json`
@@ -141,7 +141,7 @@ hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
 
 ## Main Agent
 
-**文件**: `agents/main_agent.py`
+**文件**: `../../agents/main_agent.py`
 **System Prompt**: `agents/system_prompt/MAIN_AGENT_SYSTEM_PROMPT.md`
 **工厂函数**: `create_main_agent()`
 **职责**: P1-P10 工作流协调（文件传递方式）
