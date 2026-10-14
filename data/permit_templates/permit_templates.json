@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "note": "许可证模板定义。common_fields 为 10 种类型共用的基本信息；每种类型可用 labels/modes/requires 覆盖某字段的表格标签、写入方式与必填性，用 drop 去掉本类型没有的字段，再追加 extra_fields。字段的 label 即模板 docx 表格里的标签文本（精确匹配优先，其次前缀匹配）。mode: fill=写入标签右侧紧邻的空格，右侧不可用时退到「表头行+值行」的正下方空格；below=明确写入正下方同列空格；append=追加到标签右侧格；same=追加到标签格自身；para=只追加到标签所在的那一段（用于「标签：／签字：」两段式复合格）；check=不打文字，把票面自带的「□」改成「☑」（该选项没印框时退化为 same）。只在该类型模板真有此栏时才定义字段——放到 common_fields 会让无关作业的表单凭空多出填不进票面的填空。",
+
+  "common_fields": [
+    {"key": "apply_unit",   "label": "申请单位",         "form_label": "申请单位",     "type": "text",     "required": true,  "mode": "fill"},
+    {"key": "area_unit",    "label": "作业区域所在单位", "form_label": "作业区域所在单位", "type": "text", "required": true,  "mode": "fill"},
+    {"key": "applicant",    "label": "申请人",           "form_label": "申请人",       "type": "text",     "required": true,  "mode": "fill"},
+    {"key": "work_people",  "label": "作业人",           "form_label": "作业人",       "type": "text",     "required": true,  "mode": "fill"},
+    {"key": "local_supervisor", "label": "属地监督",     "form_label": "属地监督",     "type": "text",     "required": false, "mode": "fill"},
+    {"key": "guardian",     "label": "监护人",           "form_label": "监护人",       "type": "text",     "required": false, "mode": "fill"},
+    {"key": "work_place",   "label": "作业地点",         "form_label": "作业地点（部）", "type": "text",   "required": true,  "mode": "fill"},
+    {"key": "work_content", "label": "作业内容",         "form_label": "作业内容",     "type": "textarea", "required": true,  "mode": "fill"},
+    {"key": "work_time",    "label": "作业时间",         "form_label": "作业时间",     "type": "time_range", "required": true, "mode": "append"},
+    {"key": "related_works","label": "关联的其他特殊作业、非常规作业", "form_label": "关联的其他作业类型", "type": "multiselect", "required": false, "mode": "fill", "options": []}
+  ],
+
+  "types": [
+    {
+      "key": "hot_work",
+      "name": "动火作业",
+      "title": "动火作业许可证",
+      "template": "动火作业许可证.docx",
+      "labels": {},
+      "modes": {},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",   "label": "作业申请时间",   "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "hot_place",    "label": "动火部位",       "form_label": "动火部位",           "type": "text", "required": true,  "mode": "fill"},
+        {"key": "hot_person",   "label": "动火人（签字）", "form_label": "动火人",             "type": "text", "required": true,  "mode": "fill"},
+        {"key": "hot_cert",     "label": "动火人证书编号", "form_label": "动火人证书编号",     "type": "text", "required": true,  "mode": "fill"},
+        {"key": "hot_types",    "label": "动火作业类型",   "form_label": "动火作业类型",       "type": "multiselect", "required": true, "mode": "check",
+         "options": ["焊接", "气割", "切削", "燃烧", "明火", "研磨", "打磨", "钻孔", "破碎", "锤击", "临时用电"]},
+        {"key": "plan_required","label": "是否编制方案",   "form_label": "是否编制作业方案",   "type": "bool", "required": true,  "mode": "check"},
+        {"key": "detect_time",  "label": "检测时间",       "form_label": "检测时间",           "type": "text", "required": false, "mode": "fill"},
+        {"key": "detect_place", "label": "检测位置",       "form_label": "检测位置",           "type": "text", "required": false, "mode": "fill"},
+        {"key": "o2_conc",      "label": "氧气浓度%",      "form_label": "氧气浓度（%）",      "type": "text", "required": false, "mode": "fill"},
+        {"key": "lel_conc",     "label": "可燃气体浓度LEL%","form_label": "可燃气体浓度（LEL%）","type": "text","required": false, "mode": "fill"},
+        {"key": "toxic_conc",   "label": "有毒气体浓度%",  "form_label": "有毒气体浓度（%）",  "type": "text", "required": false, "mode": "fill"},
+        {"key": "analyze_person","label": "分析人",         "form_label": "分析人",             "type": "text", "required": false, "mode": "fill"},
+        {"key": "risks",        "label": "存在的风险",      "form_label": "存在的风险（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["爆炸", "火灾", "灼伤", "烫伤", "机械伤害", "中毒", "辐射", "触电", "泄漏", "窒息", "坠落", "落物", "掩埋", "物体打击", "噪声", "坍塌", "淹溺", "其他"]}
+      ]
+    },
+    {
+      "key": "confined_space",
+      "name": "受限空间作业",
+      "title": "受限空间作业许可证",
+      "template": "受限空间作业许可证.docx",
+      "labels": {"work_place": "作业区域", "work_content": "作业内容描述：", "related_works": "涉及的其他特殊作业、非常规作业"},
+      "modes":  {"work_content": "same"},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",  "label": "作业申请时间",  "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "space_name",  "label": "受限空间名称",  "form_label": "受限空间名称",   "type": "text", "required": true, "mode": "fill"},
+        {"key": "attach_plan", "label": "是否附安全工作方案", "form_label": "是否附安全工作方案", "type": "bool", "required": true, "mode": "check"},
+        {"key": "detect_time", "label": "检测时间",         "form_label": "检测时间",           "type": "text", "required": false, "mode": "fill"},
+        {"key": "o2_conc",     "label": "氧气浓度%",        "form_label": "氧气浓度（%）",      "type": "text", "required": false, "mode": "fill"},
+        {"key": "lel_conc",    "label": "可燃气体浓度LEL%", "form_label": "可燃气体浓度（LEL%）","type": "text", "required": false, "mode": "fill"},
+        {"key": "toxic_conc",  "label": "有毒气体浓度%",    "form_label": "有毒气体浓度（%）",  "type": "text", "required": false, "mode": "fill"},
+        {"key": "attach_other",  "label": "其他附件",         "form_label": "其他附件（危害识别等）", "type": "text", "required": false, "mode": "fill"},
+        {"key": "gas_position",  "label": "气体检测部位",     "form_label": "气体检测部位",           "type": "text", "required": false, "mode": "inline"},
+        {"key": "space_medium",  "label": "受限空间原介质名称","form_label": "受限空间原介质名称",     "type": "text", "required": false, "mode": "inline"},
+        {"key": "sample_analyst","label": "采样分析人签字",   "form_label": "采样分析人",             "type": "text", "required": false, "mode": "fill"},
+        {"key": "risks",         "label": "存在的风险",       "form_label": "存在的风险（可多选）",   "type": "multiselect", "required": false, "mode": "check",
+         "options": ["爆炸", "火灾", "灼伤", "烫伤", "机械伤害", "中毒", "辐射", "触电", "泄漏", "窒息", "坠落", "落物", "掩埋", "噪声", "其他"]}
+      ]
+    },
+    {
+      "key": "line_open",
+      "name": "管线打开（盲板抽堵）",
+      "title": "管线打开（盲板抽堵）许可证",
+      "template": "管线打开（盲板抽堵）作业许可证.docx",
+      "labels": {"work_place": "作业地点、部位"},
+      "modes":  {},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",    "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "work_category", "label": "作业类别",       "form_label": "作业类别",       "type": "select", "required": true, "mode": "check",
+         "options": ["堵盲板", "抽盲板", "其他"]},
+        {"key": "pipe_name",     "label": "设备、管道名称", "form_label": "设备、管道名称", "type": "text",   "required": true, "mode": "below"},
+        {"key": "medium",        "label": "介质",   "form_label": "介质",     "type": "text", "required": true,  "mode": "below"},
+        {"key": "op_temperature","label": "温度",   "form_label": "温度",     "type": "text", "required": false, "mode": "below"},
+        {"key": "op_pressure",   "label": "压力",   "form_label": "运行压力", "type": "text", "required": false, "mode": "below"},
+        {"key": "blind_material","label": "材质",   "form_label": "盲板材质", "type": "text", "required": false, "mode": "below"},
+        {"key": "blind_spec",    "label": "规格",   "form_label": "盲板规格", "type": "text", "required": false, "mode": "below"},
+        {"key": "blind_no",      "label": "编号",   "form_label": "盲板编号", "type": "text", "required": false, "mode": "below"},
+        {"key": "gasket_spec",   "label": "垫片规格", "form_label": "垫片规格", "type": "text", "required": false, "mode": "below"},
+        {"key": "attach_drawing","label": "是否附管线打开（盲板抽堵）位置示意图", "form_label": "是否附位置示意图", "type": "bool", "required": false, "mode": "check"},
+        {"key": "attach_plan",   "label": "是否附管线打开（盲板抽堵）作业方案",   "form_label": "是否附作业方案",   "type": "bool", "required": false, "mode": "check"},
+        {"key": "medium_traits","label": "介质：", "form_label": "介质特性（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["液体", "气体", "温度", "压力", "可燃性", "腐蚀性", "毒性", "辐射性", "第二能源", "其他(请注明)"]}
+      ]
+    },
+    {
+      "key": "high_work",
+      "name": "高处作业",
+      "title": "高处作业许可证",
+      "template": "高处作业许可证.docx",
+      "labels": {"work_place": "作业地点、部位", "related_works": "涉及的其他特殊作业、非常规作业"},
+      "modes":  {},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",   "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "high_level",   "label": "作业等级",       "form_label": "作业等级",       "type": "select", "required": true, "mode": "check",
+         "options": ["Ⅰ级", "Ⅱ级", "Ⅲ级", "Ⅳ级"]},
+        {"key": "plan_required","label": "是否编制作业方案","form_label": "是否编制作业方案","type": "bool",   "required": true, "mode": "check"},
+        {"key": "risks",        "label": "危害因素识别",   "form_label": "危害因素识别（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["高处坠落/落物", "易燃易爆气体/粉尘", "高温烫伤/低温冻伤", "高压气体、液体", "生物伤害", "有毒/窒息性气体", "机械/车辆运动/物体打击", "挤压", "隔离/联锁失效", "放射性", "腐蚀/毒性化学品", "倾覆/坍塌", "恶劣天气", "设备失效泄漏", "噪声", "同时进行的可能发生互相影响的作业", "其他"]}
+      ]
+    },
+    {
+      "key": "lifting",
+      "name": "吊装作业",
+      "title": "吊装作业许可证",
+      "template": "吊装作业许可证.docx",
+      "labels": {"work_place": "作业地点、部位", "related_works": "涉及的其他特殊作业、非常规作业"},
+      "modes":  {},
+      "drop": ["work_people"],
+      "extra_fields": [
+        {"key": "apply_time",    "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "crane_name",    "label": "起重机械名称（有车牌号或其他编号的须注明）", "form_label": "起重机械名称", "type": "text", "required": true, "mode": "fill"},
+        {"key": "lifting_item",  "label": "吊物内容",   "form_label": "吊物内容",       "type": "text",   "required": true, "mode": "fill"},
+        {"key": "lifting_weight","label": "吊物质量（吨）", "form_label": "吊物质量（吨）", "type": "number", "required": true, "mode": "fill"},
+        {"key": "slinger",       "label": "吊装司索",   "form_label": "吊装司索",       "type": "text",   "required": true, "mode": "fill"},
+        {"key": "lift_commander","label": "吊装指挥及操作证",         "form_label": "吊装指挥（含证号）",         "type": "text", "required": false, "mode": "append"},
+        {"key": "crane_operator","label": "起重机械操作人员及操作证", "form_label": "起重机械操作人员（含证号）", "type": "text", "required": false, "mode": "append"},
+        {"key": "plan_required", "label": "是否编制作业方案",         "form_label": "是否编制作业方案",           "type": "bool", "required": true,  "mode": "check"},
+        {"key": "lifting_level", "label": "作业等级",   "form_label": "作业等级（按质量自动判定）", "type": "select", "required": true, "mode": "check",
+         "options": ["一级", "二级", "三级"]},
+        {"key": "risks",         "label": "危害因素识别","form_label": "危害因素识别（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["高处坠落/落物", "易燃易爆气体/粉尘", "高温烫伤/低温冻伤", "输电线路/带电体", "高压气体、液体", "生物伤害", "有毒/窒息性气体", "机械/车辆运动/物体打击", "挤压", "隔离/联锁失效", "放射性", "腐蚀/毒性化学品", "倾覆/坍塌", "恶劣天气", "设备失效泄漏", "噪声", "高压电力线等带电体", "同时进行的可能发生互相影响的作业", "其他"]}
+      ]
+    },
+    {
+      "key": "temp_power",
+      "name": "临时用电作业",
+      "title": "临时用电许可证",
+      "template": "临时用电作业许可证.docx",
+      "labels": {"apply_unit": "用电单位", "area_unit": "属地单位", "work_place": "用电地点", "work_time": "送电时间"},
+      "modes":  {"work_time": "append"},
+      "drop": ["applicant", "work_people", "local_supervisor", "guardian", "related_works"],
+      "extra_fields": [
+        {"key": "permit_no", "label": "作业许可证编号", "form_label": "作业许可证编号", "type": "text", "required": true, "mode": "fill"},
+        {"key": "voltage",   "label": "用电电压（V）",  "form_label": "用电电压（V）",  "type": "text", "required": true, "mode": "fill"},
+        {"key": "power_access","label": "电源接入点",   "form_label": "电源接入点",     "type": "text", "required": false, "mode": "fill"}
+      ]
+    },
+    {
+      "key": "earth_work",
+      "name": "动土作业",
+      "title": "动土作业许可证",
+      "template": "动土作业许可证.docx",
+      "labels": {"area_unit": "作业单位", "related_works": "涉及的其他特殊作业、非常规作业"},
+      "modes":  {},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",  "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "earth_scope", "label": "作业范围、方式(包括深度、面积，并附简图)", "form_label": "作业范围、方式（深度/面积）", "type": "textarea", "required": true, "mode": "para"},
+        {"key": "plan_required","label": "是否编制作业方案", "form_label": "是否编制作业方案", "type": "bool", "required": true, "mode": "check"},
+        {"key": "risks",        "label": "存在的风险", "form_label": "存在的风险（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["爆炸", "火灾", "灼烫", "物体打击", "机械伤害", "中毒和窒息", "坍塌", "触电", "高处坠落", "噪声", "泄漏", "落物", "掩埋", "其他"]}
+      ]
+    },
+    {
+      "key": "road_close",
+      "name": "断路作业",
+      "title": "断路作业许可证",
+      "template": "断路作业许可证.docx",
+      "labels": {"area_unit": "作业单位", "related_works": "涉及的其他特殊作业、非常规作业"},
+      "modes":  {},
+      "drop": ["work_place", "work_content"],
+      "extra_fields": [
+        {"key": "apply_time",    "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "road_reason",   "label": "断路原因",           "form_label": "断路原因",           "type": "text", "required": true, "mode": "fill"},
+        {"key": "related_units", "label": "涉及相关单位（部门）", "form_label": "涉及相关单位（部门）", "type": "text", "required": true, "mode": "fill"},
+        {"key": "road_sketch",   "label": "断路地段示意图",     "form_label": "断路地段示意图及相关说明", "type": "textarea", "required": true, "mode": "para"},
+        {"key": "plan_required", "label": "是否编制作业方案",   "form_label": "是否编制作业方案",   "type": "bool", "required": true, "mode": "check"},
+        {"key": "risks",         "label": "存在的风险",         "form_label": "存在的风险（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["爆炸", "火灾", "灼烫", "物体打击", "机械伤害", "中毒和窒息", "坍塌", "触电", "高处坠落", "噪声", "泄漏", "落物", "掩埋", "其他"]}
+      ]
+    },
+    {
+      "key": "radiation",
+      "name": "射线作业",
+      "title": "射线作业许可证",
+      "template": "射线作业许可证.docx",
+      "labels": {"work_place": "作业地点及影响范围", "work_content": "作业内容描述:", "work_time": "作业期限"},
+      "modes":  {"work_place": "append", "work_content": "same", "work_time": "append"},
+      "drop": ["apply_unit", "area_unit", "applicant", "work_people", "local_supervisor", "guardian", "related_works"],
+      "extra_fields": [
+        {"key": "risks", "label": "存在的风险", "form_label": "存在的风险（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["辐射伤害", "高处坠落", "触电", "物体打击", "其他伤害"]}
+      ]
+    },
+    {
+      "key": "non_routine",
+      "name": "非常规作业（设备/管线试压类）",
+      "title": "非常规作业许可证（设备/管线试压类）",
+      "template": "非常规作业许可证（设备管线试压类）.docx",
+      "labels": {"work_place": "作业地点、部位", "related_works": "涉及的其他非常规作业、特殊作业"},
+      "modes":  {},
+      "drop": [],
+      "extra_fields": [
+        {"key": "apply_time",   "label": "作业申请时间", "form_label": "作业申请时间（提交时自动生成）", "type": "text", "required": false, "mode": "overwrite", "readonly": true, "auto": "now"},
+        {"key": "nr_scope",     "label": "作业范围、方式(包括深度、面积，并附简图)", "form_label": "作业范围、方式（深度/面积）", "type": "textarea", "required": true, "mode": "para"},
+        {"key": "plan_required","label": "是否编制方案", "form_label": "是否编制方案", "type": "bool", "required": true, "mode": "check"},
+        {"key": "risks",        "label": "存在的风险", "form_label": "存在的风险（可多选）", "type": "multiselect", "required": false, "mode": "check",
+         "options": ["爆炸", "火灾", "灼烫", "物体打击", "机械伤害", "中毒和窒息", "坍塌", "触电", "高处坠落", "噪声", "泄漏", "落物", "掩埋", "其他"]}
+      ]
+    }
+  ]
+}
