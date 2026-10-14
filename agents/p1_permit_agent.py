@@ -5,10 +5,12 @@ Permit Agent - 处理作业申请、JSA分析和作业票生成
 """
 import json
 import logging
+import re
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from typing import Any, TypedDict, Dict
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
@@ -36,33 +38,6 @@ if not logger.handlers:
 _p1_job_context = ContextVar("p1_job_id", default="*")
 
 
-JSA_PROFILES = {
-    "动火作业": [
-        ("火灾、爆炸", "高", ["隔离可燃介质和能量", "清除动火点5米内可燃物", "配备消防器材并设专人监护"]),
-        ("可燃气体超限", "高", ["作业前30分钟内完成有代表性的气体检测", "便携式仪器检测值不大于10%LEL", "作业期间按要求复测"]),
-        ("火花飞溅和灼烫", "中", ["设置防火花飞溅隔离", "佩戴防护面罩、手套和阻燃防护用品"]),
-    ],
-    "受限空间作业": [
-        ("缺氧、富氧或有毒有害气体", "高", ["作业前和作业中检测氧气、可燃及有毒气体", "持续通风", "超限立即停止并撤离"]),
-        ("人员被困或盲目施救", "高", ["出入口外全程专人监护", "登记并清点人员和工器具", "配备救援器材并明确联络方式"]),
-        ("意外启动或介质突入", "高", ["管线加盲板或物理断开", "电气断电、上锁挂牌", "禁止以关闭阀门代替隔离"]),
-    ],
-    "高处作业": [
-        ("高处坠落", "高", ["验收作业平台、脚手架和防坠落设施", "安全带高挂低用", "无可靠挂点时设置生命线"]),
-        ("物体打击", "中", ["工具和零件放入工具袋", "设置警戒区", "禁止上下抛掷物品"]),
-        ("恶劣天气影响", "高", ["五级及以上风或暴雨、浓雾时停止露天高处作业", "雨雪天采取防滑防寒措施"]),
-    ],
-    "吊装作业": [
-        ("吊物坠落或起重机失稳", "高", ["核验起重量、额定能力和地基承载力", "检查吊具、索具及安全装置", "正式起吊前试吊"]),
-        ("人员进入吊装警戒区", "高", ["设置警戒区并专人监护", "吊物和起重臂移动区域下方禁止人员停留"]),
-    ],
-    "临时用电作业": [
-        ("触电", "高", ["由合格电工接线", "配置漏电保护器和独立开关", "停送电执行上锁挂牌"]),
-        ("电气火灾或爆炸", "高", ["爆炸危险区域使用相应防爆等级设备", "动力和照明线路分路设置"]),
-    ],
-}
-
-
 def _infer_job_type(application: dict) -> str:
     explicit = application.get("job_type") or application.get("permit_type")
     if explicit:
@@ -72,16 +47,14 @@ def _infer_job_type(application: dict) -> str:
     return next((name for keyword, name in aliases if keyword in text), "非常规作业")
 
 
-def _build_fallback_permit(application: dict, job_id: str) -> tuple:
-    """将已持久化的实际申请整理为审批可读的作业票，避免使用工具内的固定示例值。"""
+def _build_permit_content(application: dict) -> tuple:
+    """把已持久化的实际申请整理为审批可读的作业票内容（不含 JSA）。
+
+    **JSA 不在这里造**：那是 `_build_jsa_result` 的事——它走分析链路（模型 + 严格校验），
+    并保证"取不到就空着"。早先这里按作业类型塞一份写死的 hazards 冒充 JSA 结果，
+    既与本次作业无关，也会和真分析打架，已移除。
+    """
     job_type = _infer_job_type(application)
-    profile = JSA_PROFILES.get(job_type, [
-        ("作业环境和条件变化", "中", ["作业前开展JSA和安全技术交底", "设置专人监护", "条件变化时立即停止并重新评估"])
-    ])
-    hazards = [
-        {"id": f"H-{index:03d}", "description": description, "severity": severity, "measures": measures}
-        for index, (description, severity, measures) in enumerate(profile, 1)
-    ]
     missing = []
     for field in ("job_content", "region", "planned_start", "planned_end"):
         if not application.get(field):
@@ -96,13 +69,6 @@ def _build_fallback_permit(application: dict, job_id: str) -> tuple:
         if isinstance(person, dict) and not (person.get("qualifications") or person.get("qualification")):
             missing.append(f"personnel_{person.get('name') or 'unknown'}_qualifications")
 
-    jsa_result = {
-        "task_id": f"TASK-{job_id}",
-        "hazards": hazards,
-        "completeness_score": round(max(0.0, 1 - len(missing) * 0.08), 2),
-        "missing_items": missing,
-        "source": "application_rule_fallback",
-    }
     permit_content = {
         "job_type": job_type,
         "job_level": application.get("job_level", ""),
@@ -119,25 +85,231 @@ def _build_fallback_permit(application: dict, job_id: str) -> tuple:
         "related_permits": application.get("related_permits", []),
         "attachments": application.get("attachments", []),
         "gas_detection": application.get("gas_detection", []),
-        "hazards": hazards,
-        "measures": [measure for hazard in hazards for measure in hazard["measures"]],
+        "hazards": [],      # 由 JSA 分析结果填（见 _build_jsa_result）
+        "measures": [],
         "missing_fields": missing,
     }
-    return jsa_result, permit_content, missing
+    return permit_content, missing
 
 
-def _build_docx_permit_result(application: dict, job_id: str) -> dict:
+def _jsa_values(application: dict, values: dict = None) -> dict:
+    """JSA 与作业票**共用同一份填报值**。
+
+    手动填报路径直接有 `permit_fields`；上传 DOCX 路径没有，就从解析出的申请里映射
+    常用字段（作业内容/地点/介质/时间），映射不到的字段 JSA 报告里就不写——
+    不编造申请里没有的信息。
+    """
+    mapped = {
+        "work_content": application.get("job_content") or application.get("work_content") or "",
+        "work_place": application.get("work_location") or application.get("hot_work_location") or application.get("work_place") or application.get("region") or "",
+        "medium": application.get("medium", ""),
+        "work_height": application.get("work_height", ""),
+        "work_people": "、".join(
+            person.get("name") for person in (application.get("personnel") or [])
+            if isinstance(person, dict) and person.get("name")
+        ),
+    }
+    if application.get("planned_start") or application.get("planned_end"):
+        mapped["work_time"] = {
+            "start": application.get("planned_start", ""),
+            "end": application.get("planned_end", ""),
+        }
+    mapped.update(application.get("permit_fields") or {})
+    mapped.update(values or {})
+    return {key: value for key, value in mapped.items() if value}
+
+
+def _build_jsa_result(application: dict, values: dict, type_def: dict, job_id: str,
+                      related=None) -> dict:
+    """跑一次真正的 JSA 分析（模型 + 严格校验），失败即明确降级。
+
+    专项章节标题由**规则**决定（介质是否含硫、涉及哪些作业类型），不让模型自由增减章节。
+    成功时顺带把 `steps` 映射出一份 `hazards`，兼容前端与下游既有的展示口径。
+    """
+    from .workflow.jsa_analyze import (
+        JSA_SOURCE_AI,
+        build_jsa_context,
+        generate_jsa,
+        special_section_titles,
+        risk_options_for_type,
+    )
+
+    try:
+        jsa_values = _jsa_values(application, values)
+        related = related if related is not None else _related_permit_types(jsa_values, type_def["key"])
+        titles = special_section_titles(jsa_values, type_def, [item["key"] for item in related])
+        result = generate_jsa(
+            job_id,
+            type_def["name"],
+            build_jsa_context(jsa_values, type_def, titles, [item["name"] for item in related]),
+            titles,
+            risk_options_for_type(type_def),
+        )
+        if result.get("source") == JSA_SOURCE_AI:
+            result["hazards"] = [
+                {
+                    "id": f"H-{index:03d}",
+                    "description": step["hazard"],
+                    "severity": step["level"],
+                    "measures": [step["control"]],
+                    "step": step["step"],
+                    "consequence": step["consequence"],
+                }
+                for index, step in enumerate(result["steps"], 1)
+            ]
+            result["report_path"] = _render_jsa_report_safely(
+                result, jsa_values, type_def, job_id, related
+            )
+        return result
+    except Exception as exc:
+        logger.warning(f"[P1] JSA 分析失败: job_id={job_id} {exc}")
+        return {"source": "unavailable", "type_name": type_def.get("name", ""),
+                "generated_at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
+
+
+def _render_jsa_report_safely(payload: dict, values: dict, type_def: dict, job_id: str,
+                              related=None) -> str:
+    """渲染 JSA 报告 docx；**渲染失败不能影响出票**，只记原因并留空路径。"""
+    import os
+    from .workflow import get_job_dir
+    from .workflow.jsa_report import render_jsa_report
+
+    try:
+        out_path = os.path.join(get_job_dir(job_id), "jsa_report.docx")
+        return render_jsa_report(payload, values, type_def, out_path, related)
+    except Exception as exc:                      # noqa: BLE001
+        logger.warning(f"[P1] JSA 报告渲染失败: job_id={job_id} {exc}")
+        return ""
+
+
+def _jsa_measures_context(context: list, jsa: dict) -> list:
+    if jsa.get("source") != "ai":
+        return list(context)
+    return [*context, "【JSA 已识别的作业步骤、危害、后果及控制措施】",
+            json.dumps(jsa.get("steps", []), ensure_ascii=False)]
+
+
+def _merge_jsa_risks(values: dict, type_def: dict, jsa: dict) -> dict:
+    from .workflow.jsa_analyze import risk_options_for_type
+
+    merged = dict(values)
+    allowed = risk_options_for_type(type_def)
+    if not allowed or jsa.get("source") != "ai":
+        return merged
+    picked = merged.get("risks") or []
+    if isinstance(picked, str):
+        picked = [picked]
+    merged["risks"] = list(dict.fromkeys([*picked, *(
+        item for item in jsa.get("risk_options", []) if item in allowed
+    )]))
+    return merged
+
+
+def _catalog_to_measures(catalog: list) -> list:
+    """把上传 DOCX 解析出的措施目录转成与模板同形的清单（供 AI 判断）。
+
+    与模板口径一致：跳过空白项与结尾的「其他安全措施…」自由填写行，
+    index 按**可判断措施**从 1 重排。
+    """
+    measures = []
+    for item in catalog or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("description") or "").strip()
+        if not text or text.startswith(("其他安全措施", "其它安全措施")):
+            continue
+        measures.append({
+            "index": len(measures) + 1,
+            "seq_label": str(item.get("sequence") or len(measures) + 1),
+            "text": text,
+        })
+    return measures
+
+
+def _annotate_catalog(catalog: list, measure_decisions: dict) -> list:
+    """把 AI 判定按顺序写回措施目录，便于审批弹窗逐条对照原人工勾选。"""
+    from .workflow import decision_map
+
+    decided = decision_map(measure_decisions)
+    annotated = []
+    position = 0
+    for item in catalog or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        text = str(item.get("description") or "").strip()
+        if text and not text.startswith(("其他安全措施", "其它安全措施")):
+            position += 1
+            row["index"] = position
+            row["ai_needed"] = decided.get(position)
+        annotated.append(row)
+    return annotated
+
+
+def _docx_measures_context(application: dict) -> list:
+    """真实 DOCX 路径：把已解析出的申请字段整理成给模型看的上下文。"""
+    lines = []
+    for label, value in (
+        ("作业类型", application.get("job_type")),
+        ("作业内容", application.get("job_content")),
+        ("作业区域", application.get("region")),
+        ("作业地点", application.get("work_location") or application.get("hot_work_location")),
+        ("作业等级", application.get("job_level")),
+        ("计划开始", application.get("planned_start")),
+        ("计划结束", application.get("planned_end")),
+    ):
+        if value:
+            lines.append(f"{label}：{value}")
+    equipment = application.get("equipment")
+    if equipment:
+        lines.append("设备：" + "、".join(str(x) for x in equipment))
+    if application.get("medium"):
+        lines.append(f"介质：{application['medium']}")
+    names = [
+        person.get("name") for person in (application.get("personnel") or [])
+        if isinstance(person, dict) and person.get("name")
+    ]
+    if names:
+        lines.append("作业人员：" + "、".join(names))
+    return lines
+
+
+def _build_docx_permit_result(application: dict, job_id: str, approved_jsa=None) -> dict:
     """基于真实 DOCX 的已解析字段生成 P1 结果，禁止混入工具中的固定 Mock 内容。"""
-    jsa_result, permit_content, missing = _build_fallback_permit(application, job_id)
+    from .workflow import get_permit_type
+
+    permit_content, missing = _build_permit_content(application)
     selected_measures = application.get("safety_measures") or []
     measure_catalog = application.get("safety_measures_catalog") or []
+
+    # 上传 DOCX 的票里没有表单填报值（permit_fields），JSA 就从解析出的申请里取常用字段；
+    # 认不出作业类型时不硬猜——直接降级为空分析，等人补类型。
+    job_type_name = _infer_job_type(application)
+    type_def, _ = get_permit_type(job_type_name)
+    jsa_result = approved_jsa if approved_jsa is not None else (
+        _build_jsa_result(application, None, type_def, job_id)
+        if type_def
+        else {
+            "source": "unavailable",
+            "type_name": job_type_name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "error": f"未知的作业类型: {job_type_name or '(空)'}",
+        }
+    )
+    # 安全措施由 AI 重新判定；上传票里原有的人工勾选（selected）保留在目录里备查，
+    # 由 ai_needed 并列给出 AI 的判断，便于人工对照复核。
+    measures = _catalog_to_measures(measure_catalog)
+    measure_decisions = _decide_safety_measures(
+        job_id, _infer_job_type(application), _jsa_measures_context(_docx_measures_context(application), jsa_result), measures
+    )
 
     permit_content.update({
         "input_source": "docx",
         "source_document": application.get("source_document", {}),
         "hot_work_location": application.get("hot_work_location", ""),
         "document_safety_measures": selected_measures,
-        "safety_measures_catalog": measure_catalog,
+        "safety_measures_catalog": _annotate_catalog(measure_catalog, measure_decisions),
+        "measure_decisions": measure_decisions,
     })
     document_measure_text = [
         item.get("description", "") if isinstance(item, dict) else str(item)
@@ -147,10 +319,12 @@ def _build_docx_permit_result(application: dict, job_id: str) -> dict:
         [*permit_content.get("measures", []), *filter(None, document_measure_text)]
     ))
 
-    jsa_result.update({
-        "source": "docx_application_rule_analysis",
-        "document_safety_measures": selected_measures,
-    })
+    if jsa_result.get("hazards"):
+        permit_content["hazards"] = jsa_result["hazards"]
+        permit_content["measures"] = [
+            measure for hazard in jsa_result["hazards"] for measure in hazard["measures"]
+        ]
+    jsa_result["document_safety_measures"] = selected_measures
     return {
         "task_id": f"TASK-{job_id}",
         "permit_draft_id": f"PD-{job_id}",
@@ -159,9 +333,446 @@ def _build_docx_permit_result(application: dict, job_id: str) -> dict:
         "missing_fields": missing,
         "data_origin": {
             "application": "uploaded_docx",
-            "jsa_result": "job_type_rule_analysis",
+            "jsa_result": jsa_result.get("source"),
+            "safety_measures": "ai_decision" if measure_decisions.get("source") == _MEASURES_SOURCE_AI
+                               else measure_decisions.get("source"),
         },
     }
+
+
+def _missing_manual_fields(type_def: dict, values: dict) -> list:
+    """手动填报时，列出必填但未填的字段（用表单标签，便于提示操作员）。"""
+    from .workflow import resolve_fields
+
+    missing = []
+    for field in resolve_fields(type_def):
+        if not field.get("required"):
+            continue
+        raw = (values or {}).get(field["key"])
+        # 布尔字段的 False 是有效取值（相当于「否」），不算未填。
+        if raw is None or raw == "" or raw == []:
+            missing.append(field.get("form_label") or field["label"])
+    return missing
+
+
+def _manual_application_view(application: dict, values: dict) -> dict:
+    """把许可证字段映射成下游沿用的申请字段，避免同一个值在表单里填两遍。"""
+    view = dict(application)
+    work_content = values.get("work_content") or application.get("job_content", "")
+    if work_content:
+        view["job_content"] = work_content
+    area_unit = values.get("area_unit") or application.get("region", "")
+    if area_unit:
+        view["region"] = area_unit
+    work_time = values.get("work_time")
+    if isinstance(work_time, dict):
+        view["planned_start"] = work_time.get("start") or ""
+        view["planned_end"] = work_time.get("end") or ""
+    work_people = values.get("work_people")
+    if work_people:
+        existing = application.get("personnel") or []
+        first = dict(existing[0]) if existing and isinstance(existing[0], dict) else {}
+        first["name"] = work_people
+        view["personnel"] = [first, *existing[1:]]
+    return view
+
+
+# ============================================================
+# AI 安全措施判定
+# ============================================================
+
+# 逐条判断属于分类任务，需要稳定输出，因此不复用全局温度（默认 0.7）。
+# 注意：服务端处于思考模式时 temperature 不生效（DeepSeek 的 thinking 默认开启），
+# 该常量当前不起实际作用，保留仅为表达意图。
+MEASURES_TEMPERATURE = 0.0
+
+# 措施判定的思考强度。服务端默认 thinking=enabled 且 effort=high，实测真实判定会消耗
+# 数千 thinking token（占输出 90% 以上），单次 30~130 秒、抖动极大；改成 low 后 3 次实测
+# 平均 27.9 秒且判定逐条一致（详见 docs/update/update_2026-10-13.md 第十一节）。
+MEASURES_REASONING_EFFORT = "low"
+_MEASURES_SOURCE_AI = "ai"
+_MEASURES_SOURCE_NO_MEASURES = "no-measures"
+_MEASURES_SOURCE_UNAVAILABLE = "unavailable"
+_TRUE_LITERALS = ("true", "1", "是", "yes")
+_FALSE_LITERALS = ("false", "0", "否", "no")
+
+
+def _coerce_needed(value):
+    """把模型返回的布尔值规范化；无法判定的返回 None（视为非法）。
+
+    宽松接受 true/false 的字符串与 1/0 —— 各家模型对 JSON 布尔的遵循度不一致，
+    但这几种写法语义无歧义；其余一律判非法。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_LITERALS:
+            return True
+        if text in _FALSE_LITERALS:
+            return False
+    return None
+
+
+def _measures_user_message(type_name: str, context_lines: list, measures: list,
+                           kb: dict = None, kb_items: list = None) -> str:
+    """构造判定用的用户消息。
+
+    给了与 measures 等长的 kb_items 时，逐条附上知识库里的**条文依据**
+    （压成「适用情形 → 要求」一行），让模型按办法判定而不是凭常识。
+    """
+    lines = [f"作业类型：{type_name}", "", "本次作业申请信息："]
+    lines.extend(f"- {line}" for line in context_lines if line)
+    lines.extend(["", f"安全措施清单（共 {len(measures)} 条）："])
+    articles = {a["article_no"]: a for a in (kb or {}).get("articles") or []}
+    for pos, item in enumerate(measures):
+        lines.append(f"{item['index']}. {item['text']}")
+        kb_item = kb_items[pos] if kb_items else None
+        if not kb_item:
+            continue
+        for no in kb_item.get("refs") or []:
+            article = articles.get(no)
+            if article:
+                lines.append(f"   〖依据·第{no}条〗{_basis_excerpt(article, item['text'])}")
+    return "\n".join(lines)
+
+
+def _basis_coverage(measure_text: str, snippet: str) -> float:
+    """措施文本的二元组有多大比例出现在条文片段里。
+
+    与知识库校验（K1/K2 的全库最优条文扫描）用同一口径，便于互相印证。
+    """
+    from .workflow.article_knowledge import normalize_text
+
+    m = normalize_text(measure_text)
+    if len(m) < 2:
+        return 0.0
+    s = normalize_text(snippet)
+    mb = {m[i:i + 2] for i in range(len(m) - 1)}
+    sb = {s[i:i + 2] for i in range(len(s) - 1)}
+    return len(mb & sb) / len(mb) if mb else 0.0
+
+
+def _scenario_lines(article: dict) -> list:
+    """把正文的适用情形压成「情形 → 要求」若干行。"""
+    lines = []
+    for scen in article.get("scenarios") or []:
+        when = (scen.get("when") or "").strip()
+        requires = (scen.get("requires") or "").strip()
+        line = f"{when} → {requires}" if when else requires
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _basis_excerpt(article: dict, measure_text: str = "", limit: int = 320) -> str:
+    """取条文作为判定依据。
+
+    优先**逐字返回原文**：187 条正文里 94% 不超过 limit，原文信息最全，也不受情形
+    切分误差影响（第 117 条的情形就漏掉了主旨句「以下情况应当编制吊装作业方案」）。
+    只有原文超长时，才退化为「主旨句 + 按相关性排入的情形片段」——固定取前几片
+    会让关键子句落在窗口外，而提示词写着「有依据以条文为准」，模型会以为自己拿全了。
+    """
+    raw = re.sub(r"\s+", " ", (article.get("text") or "")).strip()
+    if len(raw) <= limit:
+        return raw
+
+    candidates = []
+    head = re.split(r"[。；]", raw, maxsplit=1)[0].strip()
+    if head:
+        candidates.append(head + "。")
+    lines = _scenario_lines(article)
+    if lines:
+        candidates.extend(sorted(lines, key=lambda ln: _basis_coverage(measure_text, ln), reverse=True)
+                          if measure_text else lines)
+
+    # 按相关性依次纳入直到接近上限，而不是固定取 2 片
+    picked = []
+    for piece in candidates:
+        if not piece or piece in "；".join(picked):
+            continue
+        if picked and len("；".join(picked) + "；" + piece) > limit:
+            continue
+        picked.append(piece)
+    text = "；".join(picked) or raw
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _resolve_permit_key(type_name: str):
+    """作业类型名（中文名或英文 key）→ 模板/知识库用的 type_key；未知返回 None。"""
+    if not type_name:
+        return None
+    try:
+        from .workflow import list_permit_types
+        for type_def in list_permit_types():
+            if type_name in (type_def.get("name"), type_def.get("key")):
+                return type_def.get("key")
+    except Exception:
+        logger.warning("[P1] 解析作业类型 key 失败", exc_info=True)
+    return None
+
+
+def _knowledge_items(type_name: str, measures: list):
+    """取与本次措施**逐条对齐**的知识库条目，供逐条附条文依据；对不齐返回 ``None``。
+
+    对不齐的典型情形：知识库缺失、作业类型未识别、上传 DOCX 自带清单与附录 1 内容不同。
+    此时调用方退回「无条文依据」的判定，绝不硬套可能错位的依据。
+    """
+    key = _resolve_permit_key(type_name)
+    if not key:
+        return None
+    try:
+        from .workflow import align_measures, load_knowledge
+        kb = load_knowledge()
+        if not kb:
+            return None
+        return align_measures(key, measures, kb)
+    except Exception:
+        logger.warning("[P1] 知识库加载/对齐失败，退回无依据判定", exc_info=True)
+        return None
+
+
+def _decide_safety_measures(job_id: str, type_name: str, context_lines: list, measures: list) -> dict:
+    """判定安全措施对本次作业是否需要（√ 需要 / × 不涉及）。
+
+    有知识库且措施能与附录 1 逐条对齐时，逐条附上办法条文依据，让模型按条文判而不是凭常识；
+    对不齐（知识库缺失 / 类型未识别 / 上传 DOCX 自带清单）则退回无依据判定。
+
+    返回 {"source", "mode"?, "model"?, "decided_at", "items": [{"index", "needed", "origin"}], "error"?}。
+    判定失败时 source 为 "unavailable" 且 items 为空 —— 调用方据此**不写任何勾**，
+    退回人工逐条勾选：安全措施打错叉的后果比"没打勾"严重得多，宁可保守。
+    """
+    decided_at = datetime.now(timezone.utc).isoformat()
+    if not measures:
+        return {"source": _MEASURES_SOURCE_NO_MEASURES, "decided_at": decided_at, "items": []}
+
+    kb_items = _knowledge_items(type_name, measures)
+    grounded = kb_items is not None
+    mode = "knowledge" if grounded else "full"
+    # 统一按 1..N 编号送模型（解析器要求序号连续不重不漏），判定后映射回原措施序号
+    view = [{"index": pos, "text": m["text"]} for pos, m in enumerate(measures, 1)]
+
+    try:
+        from .model.config import get_settings
+        from .workflow import load_knowledge
+        model = create_chat_model_with_logging(
+            "P1-MEASURES", job_id,
+            temperature=MEASURES_TEMPERATURE,
+            reasoning_effort=MEASURES_REASONING_EFFORT,
+        )
+        response = model.invoke([
+            SystemMessage(content=load_system_prompt("P1_MEASURES")),
+            HumanMessage(content=_measures_user_message(
+                type_name, context_lines, view,
+                load_knowledge() if grounded else None,
+                kb_items if grounded else None,
+            )),
+        ])
+        text = getattr(response, "content", "") or ""
+        if isinstance(text, list):
+            text = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in text)
+        parsed = _parse_measure_decisions(text, len(measures))
+    except Exception as exc:
+        logger.exception(f"[P1] 安全措施 AI 判定失败: job_id={job_id}")
+        push_websocket_log(
+            job_id, "ERROR", "AGENT",
+            f"[P1] 安全措施 AI 判定失败，已退回人工勾选：{exc}"
+        )
+        return {
+            "source": _MEASURES_SOURCE_UNAVAILABLE,
+            "mode": mode,
+            "decided_at": decided_at,
+            "error": str(exc),
+            "items": [],
+        }
+
+    # 序号映射回原措施（送模型时按 1..N 重编号）
+    items = [{"index": measures[d["index"] - 1]["index"],
+              "needed": d["needed"], "origin": "ai"} for d in parsed]
+    items.sort(key=lambda x: x["index"])
+
+    needed_count = sum(1 for item in items if item["needed"])
+    grounded_note = "（逐条附办法条文依据）" if grounded else "（无条文依据）"
+    logger.info(
+        f"[P1] 安全措施判定完成: job_id={job_id} 共 {len(items)} 条{grounded_note}，需 {needed_count} 条"
+    )
+    push_websocket_log(
+        job_id, "INFO", "AGENT",
+        f"[P1] 安全措施判定完成：共 {len(items)} 条措施已逐条判定{grounded_note}，"
+        f"判定需要 {needed_count} 条，待人工复核签字"
+    )
+    return {
+        "source": _MEASURES_SOURCE_AI,
+        "mode": mode,
+        "model": get_settings().OPENAI_MODEL,
+        "decided_at": decided_at,
+        "items": items,
+    }
+
+
+def _parse_measure_decisions(text: str, expected_count: int) -> list:
+    """解析并严格校验模型返回，任何不合规都抛 ValueError（由调用方转为兜底）。"""
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[A-Za-z]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("模型未返回 JSON 对象")
+    payload = json.loads(raw[start:end + 1])
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ValueError("返回里缺少 items 数组")
+    if len(items) != expected_count:
+        raise ValueError(f"items 条数 {len(items)} 与措施条数 {expected_count} 不一致")
+
+    parsed = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("items 元素不是对象")
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            raise ValueError(f"index 非法: {item.get('index')!r}")
+        needed = _coerce_needed(item.get("needed"))
+        if needed is None:
+            raise ValueError(f"index={index} 的 needed 非法: {item.get('needed')!r}")
+        if index in parsed:
+            raise ValueError(f"index={index} 重复")
+        parsed[index] = needed
+    if set(parsed) != set(range(1, expected_count + 1)):
+        raise ValueError("index 未覆盖全部措施序号")
+    return [{"index": index, "needed": parsed[index]} for index in sorted(parsed)]
+
+
+def _manual_measures_context(application: dict, values: dict, type_def: dict) -> list:
+    """手动填报路径：把表单填写值按中文标签整理成给模型看的上下文。"""
+    from .workflow import resolve_fields
+
+    view = _manual_application_view(application, values)
+    lines = []
+    if view.get("job_content"):
+        lines.append(f"作业内容：{view['job_content']}")
+    if view.get("region"):
+        lines.append(f"作业区域：{view['region']}")
+    if view.get("planned_start") or view.get("planned_end"):
+        lines.append(f"作业时间：{view.get('planned_start', '')} 至 {view.get('planned_end', '')}")
+    for field in resolve_fields(type_def):
+        raw = values.get(field["key"])
+        if raw in (None, "", [], {}):
+            continue
+        if field["key"] in ("work_content", "area_unit", "work_time"):
+            continue  # 已在上面写过
+        if isinstance(raw, dict):
+            raw = f"{raw.get('start', '')} 至 {raw.get('end', '')}"
+        elif isinstance(raw, (list, tuple)):
+            raw = "、".join(str(item) for item in raw)
+        lines.append(f"{field.get('form_label') or field['label']}：{raw}")
+    return lines
+
+
+def _related_permit_types(values: dict, main_key: str) -> list:
+    """把表单勾选的「关联的其他作业类型」解析成结构化条目。
+
+    只登记与取措施，**不做 √/× 判定**——本次票面只有主类型那一套措施；
+    关联类型的措施取出来是为后续 JSA 报告准备（决定要覆盖哪些专项章节）。
+
+    认不出的名字、与主类型相同的、重复的，一律跳过（不抛错）。
+    """
+    from .workflow import get_permit_type, list_safety_measures
+
+    picked = values.get("related_works")
+    if isinstance(picked, str):
+        picked = [picked]
+    related, seen = [], set()
+    for name in picked or []:
+        other, _config = get_permit_type(str(name).strip())
+        if not other or other["key"] == main_key or other["key"] in seen:
+            continue
+        seen.add(other["key"])
+        related.append({
+            "key": other["key"],
+            "name": other["name"],
+            "measures": [item["text"] for item in list_safety_measures(other["key"])],
+        })
+    return related
+
+
+def _build_manual_permit_result(application: dict, job_id: str, approved_jsa=None) -> dict:
+    """按操作员选定的作业类型与填写值生成许可证，禁止混入工具中的固定 Mock 内容。"""
+    from .workflow import (
+        build_permit_rows,
+        decision_map,
+        get_permit_type,
+        list_safety_measures,
+        resolve_fields,
+    )
+
+    permit_type = application.get("permit_type") or ""
+    type_def, _ = get_permit_type(permit_type)
+    if not type_def:
+        raise ValueError(f"未知的作业类型: {permit_type or '(空)'}")
+
+    values = dict(application.get("permit_fields") or {})
+    # 作业申请时间由系统填（提交那一刻）；表单上该字段是只读的，用户改不了。
+    if any(field.get("auto") == "now" for field in resolve_fields(type_def)):
+        values.setdefault("apply_time", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    permit_content, _ = _build_permit_content(_manual_application_view(application, values))
+
+    # 本次作业还涉及的其他作业类型：只登记、不判措施（票面上只有主类型那一套）。
+    related = _related_permit_types(values, type_def["key"])
+    # JSA：与作业票同源（同一份 values），专项章节由规则判定；失败只降级、不塞假数据。
+    jsa_result = approved_jsa if approved_jsa is not None else _build_jsa_result(application, values, type_def, job_id, related)
+    values = _merge_jsa_risks(values, type_def, jsa_result)
+    # 安全措施改由 AI 逐条判定（√ 需要 / × 不涉及），人工只负责复核并签字。
+    measures = list_safety_measures(type_def["key"])
+    measure_decisions = _decide_safety_measures(
+        job_id, type_def["name"], _jsa_measures_context(_manual_measures_context(application, values, type_def), jsa_result), measures
+    )
+    decided = decision_map(measure_decisions)
+
+    permit_data = build_permit_rows(type_def["key"], values, measure_decisions)
+    # 手动填报的缺项只看该类型表单的必填项，不掺入表单未采集的下游字段。
+    missing = _missing_manual_fields(type_def, values)
+    permit_content.update({
+        "input_source": "manual",
+        "permit_type": type_def["name"],
+        "permit_title": permit_data["permit_title"],
+        "permit_rows": permit_data["rows"],
+        "permit_values": values,
+        "job_type": type_def["name"],
+        "missing_fields": missing,
+        "measure_decisions": measure_decisions,
+        "safety_measures": [
+            {**item, "needed": decided.get(item["index"])} for item in measures
+        ],
+        "related_permit_types": related,
+        "hazards": jsa_result.get("hazards", []),
+        "measures": [
+            measure
+            for hazard in jsa_result.get("hazards", [])
+            for measure in hazard["measures"]
+        ],
+    })
+
+    return {
+        "task_id": f"TASK-{job_id}",
+        "permit_draft_id": f"PD-{job_id}",
+        "jsa_result": jsa_result,
+        "permit_content": permit_content,
+        "missing_fields": missing,
+        "data_origin": {
+            "application": "manual_form",
+            "jsa_result": jsa_result.get("source"),
+            "safety_measures": "ai_decision" if measure_decisions.get("source") == _MEASURES_SOURCE_AI
+                               else measure_decisions.get("source"),
+            "related_permit_types": "manual_form",
+        },
+    }
+
+
 def _push_p1_tool_log(level: str, message: str, data: dict = None):
     """将 P1 工具日志绑定到当前作业，避免通配日志串到其他作业窗口。"""
     push_websocket_log(_p1_job_context.get(), level, "TOOL", message, data)
@@ -253,21 +864,24 @@ def permit_submit(application: str) -> str:
 
 @tool(description="分析JSA，识别危害因素和对应措施。当用户请求分析JSA时触发。")
 def jsa_analyze(task_id: str) -> str:
-    """
-    分析 JSA（作业安全分析），识别危害因素和对应措施。
+    """回读本次作业的 JSA 分析结果（不重复生成、不造数据）。
+
+    JSA 与作业申请**同时生成**：`permit_submit` 之后 P1 会走分析链路产出结果并落盘。
+    本工具只把那份结果取出来，保证同一个作业不出现两份不一致的分析——早先这里返回的是
+    一段与作业内容无关的写死危害（被测出 P1 阶段的 jsa_result 全是假数据），已移除。
 
     参数:
-        task_id: 任务唯一标识
+        task_id: 任务唯一标识（形如 TASK-<job_id>）
     返回:
-        标准 JSON 响应，包含 hazards 分析结果
+        标准 JSON 响应，包含 steps / hazards / main_risks 等分析结果
     """
     import json
-    from datetime import datetime, timezone
+    from .workflow import get_stage_result_path, read_json_file
 
-    _push_p1_tool_log("INFO", f">>> jsa_analyze 工具入口", {"task_id": task_id})
+    _push_p1_tool_log("INFO", ">>> jsa_analyze 工具入口", {"task_id": task_id})
     logger.info(f"[jsa_analyze] >>> 工具入口: task_id={task_id}")
     if not task_id:
-        logger.warning(f"[jsa_analyze] !!! task_id 为空")
+        logger.warning("[jsa_analyze] !!! task_id 为空")
         _push_p1_tool_log("ERROR", "!!! jsa_analyze task_id为空")
         return json.dumps(make_error(
             code="TASK_NOT_FOUND",
@@ -275,59 +889,34 @@ def jsa_analyze(task_id: str) -> str:
             recoverable=False
         ), ensure_ascii=False)
 
-    # JSA 分析过程日志
-    _push_p1_tool_log("INFO", f"JSA 分析开始: task_id={task_id}", {"step": "start"})
+    job_id = task_id[5:] if task_id.startswith("TASK-") else task_id
+    stored = read_json_file(get_stage_result_path(job_id, "p1")) or {}
+    jsa_result = stored.get("jsa_result") or {}
+    if not jsa_result:
+        _push_p1_tool_log("WARNING", "本次作业还没有 JSA 结果：请先提交作业申请", {"job_id": job_id})
+        return json.dumps(make_error(
+            code="JSA_NOT_FOUND",
+            message="本次作业还没有 JSA 分析结果：JSA 随作业申请一并生成，请先调用 permit_submit",
+            recoverable=True
+        ), ensure_ascii=False)
 
-    # 危害因素识别过程
-    hazards = [
-        {
-            "id": "H-001",
-            "description": "受限空间内存在有毒有害气体",
-            "severity": "高",
-            "measures": ["气体检测", "强制通风", "佩戴呼吸器"]
-        },
-        {
-            "id": "H-002",
-            "description": "高温设备烫伤风险",
-            "severity": "中",
-            "measures": ["设备降温", "佩戴防护手套", "设置警戒区域"]
-        },
-        {
-            "id": "H-003",
-            "description": "人员误入风险区域",
-            "severity": "中",
-            "measures": ["设置警戒标识", "专人监护", "门禁管理"]
-        }
-    ]
+    if jsa_result.get("source") == "unavailable":
+        _push_p1_tool_log(
+            "ERROR",
+            f"JSA 生成失败（已降级，不提供内容）: {jsa_result.get('error', '')}",
+            {"job_id": job_id},
+        )
+        return json.dumps(make_error(
+            code="JSA_UNAVAILABLE",
+            message=f"JSA 分析未能生成：{jsa_result.get('error', '未知原因')}",
+            recoverable=True
+        ), ensure_ascii=False)
 
-    # 记录每个危害因素的识别
-    for hazard in hazards:
-        _push_p1_tool_log("INFO", f"识别危害因素: [{hazard['id']}] {hazard['description']}", {
-            "hazard_id": hazard["id"],
-            "severity": hazard["severity"],
-            "measures_count": len(hazard["measures"])
-        })
-        for measure in hazard["measures"]:
-            _push_p1_tool_log("DEBUG", f"  -> 措施: {measure}", {"hazard_id": hazard["id"], "measure": measure})
-
-    # 计算完整性得分
-    completeness_score = 0.85
-    missing_items = ["建议补充应急救援预案"]
-
-    _push_p1_tool_log("WARNING", f"JSA 分析完成: 识别到 {len(hazards)} 个危害因素, 完整性得分: {completeness_score}", {
-        "hazards_count": len(hazards),
-        "completeness_score": completeness_score,
-        "missing_items": missing_items
+    steps = jsa_result.get("steps") or jsa_result.get("hazards") or []
+    _push_p1_tool_log("INFO", f"JSA 回读完成: 共 {len(steps)} 条分析", {
+        "job_id": job_id, "steps": len(steps), "source": jsa_result.get("source"),
     })
-
-    # 模拟 JSA 分析结果
-    result = {
-        "task_id": task_id,
-        "hazards": hazards,
-        "completeness_score": completeness_score,
-        "missing_items": missing_items
-    }
-    return json.dumps(make_response("permit analyze-jsa", result), ensure_ascii=False)
+    return json.dumps(make_response("permit analyze-jsa", jsa_result), ensure_ascii=False)
 
 
 @tool(description="生成作业票草稿，包含缺失项提示。当用户请求生成作业票草稿时触发。")
@@ -641,114 +1230,74 @@ def execute_stage(
         log.log_exit(job_id, result)
         return result
 
-    # 真实 DOCX 使用独立的数据驱动路径。固定示例工具仅供 Mock 模式测试，
-    # 不允许其“受限空间、反应器 R-101”等内容进入真实作业票。
-    if application.get("input_source") == "docx":
-        try:
-            reset_permit_execution(job_id)
-            push_websocket_log(job_id, "INFO", "AGENT", "[P1] 根据真实 DOCX 识别结果生成作业票")
-            add_job_log(job_id, {
-                "action": "execute_p1_docx",
-                "message": "P1 使用真实 DOCX 数据生成作业票，已跳过固定 Mock 工具",
-            })
-            result = _process_p1_result(
-                job_id,
-                _build_docx_permit_result(application, job_id),
-                result,
-            )
-            log.log_exit(job_id, result)
-            return result
-        except Exception as e:
-            log.log_error(job_id, e)
-            result["error"] = str(e)
-            write_json_file(result_file, result)
-            log.log_exit(job_id, result)
-            return result
+    # 两次审批共享 P1，但各有独立审批 ID。批准事实持久化后才允许出票。
+    from .workflow import get_permit_type
+    import hashlib
+    import uuid
 
-    # 检查是否需要恢复执行
-    if resume or is_agent_interrupted(job_id):
-        log.log_hitl_interrupt(job_id, get_agent_next_tools(job_id))
-        hitl_result = run_permit_agent_with_hitl(
-            None,
-            job_id,
-            resume=True,
-            decision=decision,
-            notes=notes,
-        )
-        if not hitl_result:
-            logger.error(f"[execute_stage P1] hitl_result 为空: job_id={job_id}, resume={resume}")
-            return {"job_id": job_id, "stage": "P1", "completed": False, "error": "恢复执行失败：hitl_result 为空"}
-        if hitl_result["interrupted"]:
-            next_tools = hitl_result.get("next", [])
-            result["pending_confirmation"] = {
-                "type": "hitl_recover",
-                "message": "P1 Agent 工具调用等待确认",
-                "next_tools": next_tools,
-            }
-            log.log_exit(job_id, result)
-            return result
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
-        result = _process_p1_result(job_id, result_data, existing_result)
-        log.log_exit(job_id, result)
-        return result
-
+    fingerprint = hashlib.sha256(json.dumps(application, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    same_application = existing_result.get("jsa_application_fingerprint") == fingerprint
+    approved = same_application and existing_result.get("jsa_approval", {}).get("decision") == "approve" and not existing_result.get("rejected")
     try:
-        app_str = json.dumps(application, ensure_ascii=False)
-        message = f"""请处理以下作业申请：
+        if approved:
+            jsa = existing_result.get("jsa_result") or {}
+            if jsa.get("source") != "ai" or not jsa.get("steps"):
+                raise ValueError("已批准的 JSA 内容不可用，请重新进行 JSA 分析")
+            result.update({"jsa_application_fingerprint": fingerprint,
+                           "jsa_approval": existing_result["jsa_approval"],
+                           "jsa_result": jsa,
+                           "jsa_info_lines": existing_result.get("jsa_info_lines", []),
+                           "p1_phase": "permit_review"})
+            builder = _build_manual_permit_result if application.get("input_source") == "manual" else _build_docx_permit_result
+            push_websocket_log(job_id, "INFO", "AGENT", "[P1] JSA 已批准，开始判定措施并生成作业票")
+            return _process_p1_result(job_id, builder(application, job_id, approved_jsa=jsa), result)
 
-作业申请内容：{app_str}
+        if same_application and existing_result.get("p1_phase") == "jsa_review" and not existing_result.get("rejected"):
+            return existing_result
 
-请依次执行：
-1. 调用 permit_submit 工具提交作业申请
-2. 调用 jsa_analyze 工具进行JSA分析
-3. 调用 permit_generate_draft 工具生成作业票草稿"""
-
-        logger.info(f"[P1] 调用 run_permit_agent_with_hitl: job_id={job_id}")
-        push_websocket_log(job_id, "INFO", "AGENT", f"[P1] 开始执行作业许可流程")
-        hitl_result = run_permit_agent_with_hitl(message, job_id)
-
-        if hitl_result["interrupted"]:
-            next_tools = hitl_result.get("next", [])
-            log.log_hitl_interrupt(job_id, next_tools)
-            add_job_log(job_id, {
-                "action": "execute_p1_hitl_interrupt",
-                "next_tools": next_tools
-            })
-            result["pending_confirmation"] = {
-                "type": "hitl_tool_call",
-                "message": "P1 Agent 工具调用需要人工确认",
-                "next_tools": next_tools,
-            }
-            write_json_file(result_file, result)
-            log.log_exit(job_id, result)
-            return result
-
-        result_text = hitl_result.get("result", "{}")
-        try:
-            result_data = json.loads(result_text)
-        except:
-            result_data = {"result": result_text}
-
-        result = _process_p1_result(job_id, result_data, result)
+        type_def, _ = get_permit_type(application.get("permit_type") or _infer_job_type(application))
+        if not type_def and application.get("input_source") == "manual":
+            raise ValueError(f"未知的作业类型: {application.get('permit_type', '')}")
+        values = _jsa_values(application, application.get("permit_fields"))
+        related = _related_permit_types(values, type_def["key"]) if type_def else []
+        jsa = (_build_jsa_result(application, values, type_def, job_id, related) if type_def else
+               {"source": "unavailable", "error": "作业类型未识别，无法生成 JSA 报告"})
+        from .workflow.jsa_report import build_info_lines
+        result.update({
+            "p1_phase": "jsa_review",
+            "jsa_application_fingerprint": fingerprint,
+            "jsa_result": jsa,
+            "jsa_info_lines": build_info_lines(jsa, values, type_def, related) if type_def else [],
+            "pending_confirmation": {
+                "type": "jsa_approval", "approval_id": uuid.uuid4().hex,
+                "message": "请先审核 JSA 分析报告；批准后才会判定安全措施并生成作业票",
+            },
+        })
+        # 首次仅保存分析，清掉旧一轮草稿的可见数据，不能提前构建票面。
+        write_json_file(get_job_dir(job_id) + "/permit.json", {
+            "application": application, "jsa_result": jsa, "p1_phase": "jsa_review",
+        })
+        write_json_file(result_file, result)
+        add_job_log(job_id, {"action": "jsa_pending_approval", "message": "JSA 分析结束，等待独立审批"})
         log.log_exit(job_id, result)
         return result
-
-    except Exception as e:
-        log.log_error(job_id, e)
-        result["error"] = str(e)
+    except Exception as exc:
+        result["error"] = str(exc)
         write_json_file(result_file, result)
-        log.log_exit(job_id, result)
+        log.log_error(job_id, exc)
         return result
 
 
 def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) -> dict:
     """处理 P1 执行结果，提取并保存作业票数据"""
     from datetime import datetime, timezone
-    from .workflow import get_job_dir, get_stage_result_path, read_json_file, write_json_file
+    from .workflow import (
+        get_job_dir,
+        get_permit_type,
+        get_stage_result_path,
+        read_json_file,
+        write_json_file,
+    )
 
     result = existing_result.copy() if existing_result else {}
     for stale_key in ("rejected", "decision", "error"):
@@ -793,12 +1342,19 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
 
         app_file = get_job_dir(job_id) + "/application.json"
         application = read_json_file(app_file).get("application", {})
-        fallback_jsa, fallback_content, fallback_missing = _build_fallback_permit(application, job_id)
+        fallback_content, fallback_missing = _build_permit_content(application)
         result["task_id"] = result.get("task_id") or f"TASK-{job_id}"
         result["permit_draft_id"] = result.get("permit_draft_id") or f"PD-{job_id}"
-        result["jsa_result"] = result.get("jsa_result") or fallback_jsa
         result["permit_content"] = result.get("permit_content") or fallback_content
-        result["missing_fields"] = result.get("missing_fields") or fallback_missing
+        # 工具结果缺失时复用完整链路，保证 JSA → 措施判定 → 票面顺序一致。
+        if not result.get("jsa_result"):
+            rebuilt = (_build_manual_permit_result(application, job_id)
+                       if application.get("permit_type")
+                       else _build_docx_permit_result(application, job_id))
+            result.update(rebuilt)
+        # 手动填报的缺项由该类型的必填项决定，不被下游字段的兜底清单覆盖。
+        if (result.get("permit_content") or {}).get("input_source") != "manual":
+            result["missing_fields"] = result.get("missing_fields") or fallback_missing
 
         permit_data = {
             "task_id": result.get("task_id"),
@@ -807,6 +1363,8 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
             "jsa_result": result.get("jsa_result"),
             "permit_content": result.get("permit_content"),
             "data_origin": result.get("data_origin", {}),
+            "p1_phase": result.get("p1_phase"),
+            "jsa_approval": result.get("jsa_approval"),
             "saved_at": datetime.now(timezone.utc).isoformat()
         }
         output_path = get_job_dir(job_id) + "/permit.json"
@@ -816,10 +1374,12 @@ def _process_p1_result(job_id: str, result_data: dict, existing_result: dict) ->
     except Exception as e:
         result["error"] = str(e)
 
-    # P1 只保留这一处人工控制点：所有工具和分析完成后统一审批一次。
+    # JSA 审批后生成的票面进入第二次审批。
     if not result.get("error"):
+        import uuid
         result["pending_confirmation"] = {
             "type": "permit_final_approval",
+            "approval_id": uuid.uuid4().hex,
             "fields": result.get("missing_fields", []),
             "message": "P1 作业申请、JSA 与作业票草稿已生成，请进行最终审批",
         }

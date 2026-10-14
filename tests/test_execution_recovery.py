@@ -435,30 +435,18 @@ class P1HitlTests(unittest.TestCase):
                 "completed",
             )
 
-    def test_p1_produces_one_final_stage_approval(self):
+    def test_unknown_application_waits_for_jsa_without_running_mock_tools(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "agents.workflow.file_utils.get_jobs_dir", return_value=temp_dir
         ):
-            application_path = f"{temp_dir}/job/application.json"
-            write_json_file(application_path, {"application": {"job_content": "测试作业"}})
-            with (
-                patch("agents.p1_permit_agent.is_agent_interrupted", return_value=False),
-                patch("agents.p1_permit_agent.run_permit_agent_with_hitl", return_value={
-                    "interrupted": False,
-                    "result": '{"task_id":"T-1","permit_draft_id":"PD-1","missing_fields":[]}',
-                    "next": [],
-                }) as run_agent,
-                patch("agents.p1_permit_agent.add_job_log"),
-                patch("agents.p1_permit_agent.push_websocket_log"),
-            ):
+            write_json_file(f"{temp_dir}/job/application.json", {"application": {"job_content": "测试作业"}})
+            with patch("agents.p1_permit_agent.run_permit_agent_with_hitl") as run_agent:
                 result = execute_p1_stage("job")
-
-        self.assertTrue(result["completed"])
-        run_agent.assert_called_once()
-        self.assertEqual(
-            result["pending_confirmation"]["type"],
-            "permit_final_approval",
-        )
+        self.assertFalse(result["completed"])
+        run_agent.assert_not_called()
+        self.assertNotIn("permit_content", result)
+        self.assertEqual(result["pending_confirmation"]["type"], "jsa_approval")
+        self.assertEqual(result["jsa_result"]["source"], "unavailable")
 
     def test_real_docx_p1_skips_fixed_mock_agent_on_first_run_and_retry(self):
         application = {
@@ -486,35 +474,21 @@ class P1HitlTests(unittest.TestCase):
                 patch("agents.p1_permit_agent.reset_permit_execution"),
                 patch("agents.p1_permit_agent.add_job_log"),
                 patch("agents.p1_permit_agent.push_websocket_log"),
+                # 单测不调外部模型：JSA 链路打桩为「不可用」，只验证降级口径
+                # （真实链路的解析/映射由 tests/test_jsa_analyze.py 覆盖）。
+                patch("agents.workflow.jsa_analyze.generate_jsa",
+                      return_value={"source": "unavailable", "error": "stub"}),
             ):
                 first_result = execute_p1_stage("job")
                 retry_result = execute_p1_stage("job", resume=True)
 
             run_agent.assert_not_called()
             for result in (first_result, retry_result):
-                self.assertTrue(result["completed"])
-                self.assertEqual(result["permit_content"]["job_type"], "动火作业")
-                self.assertEqual(result["permit_content"]["equipment"], ["F-0102 空气预热器"])
-                self.assertEqual(result["permit_content"]["input_source"], "docx")
-                self.assertEqual(result["data_origin"]["application"], "uploaded_docx")
-                self.assertTrue(any(
-                    item["description"] == "火灾、爆炸"
-                    for item in result["jsa_result"]["hazards"]
-                ))
-                self.assertFalse(any(
-                    item["description"] == "受限空间内存在有毒有害气体"
-                    for item in result["jsa_result"]["hazards"]
-                ))
-                self.assertEqual(
-                    result["pending_confirmation"]["type"],
-                    "permit_final_approval",
-                )
-
-            saved_permit = read_json_file(f"{temp_dir}/job/permit.json")
-            self.assertEqual(
-                saved_permit["data_origin"]["application"],
-                "uploaded_docx",
-            )
+                self.assertFalse(result["completed"])
+                self.assertNotIn("permit_content", result)
+                self.assertEqual(result["jsa_result"]["source"], "unavailable")
+                self.assertEqual(result["pending_confirmation"]["type"], "jsa_approval")
+            self.assertEqual(first_result["pending_confirmation"], retry_result["pending_confirmation"])
 
     def test_p1_agent_has_no_per_tool_approval_middleware(self):
         clear_agent_registry("single-approval")

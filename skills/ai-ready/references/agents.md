@@ -3,30 +3,22 @@
 ## P1 Permit Agent
 
 **文件**: `agents/p1_permit_agent.py`
-**System Prompt**: `agents/system_prompt/P1_PERMIT_SYSTEM_PROMPT.md`
-**工厂函数**: `create_permit_agent()`, `create_permit_agent_with_hitl()`
-**阶段执行**: `execute_stage(job_id, resume)` → `data/jobs/{job_id}/p1_result.json`
-**Checkpointer**: `_permit_checkpointer = MemorySaver()`
+**阶段执行（真实业务入口）**: `execute_stage(job_id, resume, decision, notes)` → `data/jobs/{job_id}/p1_result.json`
+**深度流程**: 见 `skills/p1-permit-workflow/`（本文件只给定位）。
 
-**工具**: `permit_submit`, `jsa_analyze`, `permit_generate_draft`, `permit_check`
+> ⚠️ P1 已从"agent 工具链"改为"直连 `execute_stage` + 两次审批"。本节曾有几处过时记述，已订正如下。
 
-**HITL 配置**:
-```python
-hitl_middleware = HumanInTheLoopMiddleware(interrupt_on={
-    "permit_submit": True,
-    "jsa_analyze": True,
-    "permit_generate_draft": True,
-    "permit_check": True,
-})
-```
+**提示词**（P1 实际用到的是后两份）:
+- `agents/system_prompt/JSA_SYSTEM_PROMPT.md` — JSA 分析（`load_system_prompt("JSA")`）
+- `agents/system_prompt/P1_MEASURES_SYSTEM_PROMPT.md` — 安全措施判定（`load_system_prompt("P1_MEASURES")`）
+- `agents/system_prompt/P1_PERMIT_SYSTEM_PROMPT.md` — 仅被 `create_permit_agent()` 的 agent 工具链加载；该链路在当前 UI（只产 manual/docx）下**不可达**
 
-**全局注册表**: `_agent_registry: Dict[str, Any]` - 按 thread_id 缓存 Agent 实例
+**工具（mock，非主路径）**: `permit_submit`, `jsa_analyze`, `permit_generate_draft`, `permit_check` —— 均为**打桩示例**。真实流程不经过它们，而是 `execute_stage` → `jsa_analyze.py` / `_decide_safety_measures`。
 
-**关键函数**:
-- `is_agent_interrupted(thread_id)` - 检查中断状态
-- `get_agent_next_tools(thread_id)` - 获取下一个待执行工具
-- `clear_agent_registry(thread_id)` - 清除注册表
-- `run_permit_agent_with_hitl(message, thread_id, resume)` - HITL 执行入口
+**HITL（非 `HumanInTheLoopMiddleware`）**: P1 的两次审批靠 `pending_confirmation` + `main_agent.confirm_and_continue`（`jsa_approval` → `permit_final_approval`），见 `skills/p1-permit-workflow/`。
+
+**工厂函数**: `create_permit_agent()`, `create_permit_agent_with_hitl()`（仅工具链路径使用）
+**Checkpointer / 注册表**: `_permit_checkpointer`、`_agent_registry`（同上，工具链路径）
 
 ---
 

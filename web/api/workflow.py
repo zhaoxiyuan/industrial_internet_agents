@@ -7,6 +7,7 @@ import random
 import os
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 logger = logging.getLogger("server")
 
@@ -233,6 +234,49 @@ def handle_workflow_history(handler, limit=50):
     handler.send_json({"status": "ok", "jobs": items, "count": len(items)})
 
 
+def handle_workflow_delete(handler, data):
+    """POST /api/workflow/delete - 删除一个历史作业。
+
+    只做「移到回收站」：把 `data/jobs/<工单号>/` 整体移到 `data/jobs_trash/<工单号>_<时间戳>/`，
+    不物理删除，误删还能找回。正在执行的作业不允许删除（后台线程仍在该目录上读写）。
+    """
+    import shutil
+
+    from agents.workflow import get_jobs_dir
+
+    job_id = str((data or {}).get("job_id") or "").strip()
+    if not _valid_job_id(job_id):
+        handler.send_json({"status": "error", "error": "job_id 必须是 17 位数字"}, status=400)
+        return
+
+    jobs_dir = get_jobs_dir()
+    job_dir = os.path.join(jobs_dir, job_id)
+    if not os.path.isdir(job_dir):
+        handler.send_json({"status": "error", "error": "作业不存在"}, status=404)
+        return
+
+    snapshot = _read_job_files(job_id)
+    if (snapshot or {}).get("status") in {"running", "executing", "starting"}:
+        handler.send_json({
+            "status": "error",
+            "error": "该作业正在执行中，不能删除；请等它结束或失败后再删",
+        }, status=409)
+        return
+
+    trash_dir = os.path.join(os.path.dirname(os.path.abspath(jobs_dir.rstrip(os.sep))), "jobs_trash")
+    os.makedirs(trash_dir, exist_ok=True)
+    target = os.path.join(trash_dir, f"{job_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}")
+    try:
+        shutil.move(job_dir, target)
+    except OSError as exc:
+        logger.exception("[POST] /api/workflow/delete 移动失败: job_id=%s", job_id)
+        handler.send_json({"status": "error", "error": f"删除失败：{exc}"}, status=500)
+        return
+
+    logger.info("[POST] /api/workflow/delete 完成: job_id=%s -> %s", job_id, target)
+    handler.send_json({"status": "ok", "job_id": job_id, "moved_to": target})
+
+
 def handle_workflow_job_detail(handler, job_id):
     """GET /api/workflow/job-detail - 返回查看和 P1 审批需要的完整数据。"""
     if not _valid_job_id(job_id):
@@ -255,6 +299,89 @@ def handle_workflow_job_detail(handler, job_id):
         }
     snapshot["pending_data"] = pending_data
     handler.send_json(snapshot)
+
+
+def handle_workflow_permit_types(handler):
+    """GET /api/workflow/permit-types - 手动填报可选的作业类型及其表单字段。"""
+    from agents.workflow import list_permit_types
+
+    try:
+        handler.send_json({"status": "ok", "types": list_permit_types()})
+    except Exception as exc:
+        logger.exception("[permit-types] 读取许可证模板失败")
+        handler.send_json({"status": "error", "error": f"读取许可证模板失败: {exc}"}, status=500)
+
+
+def handle_workflow_permit_docx(handler, job_id, artifact="permit"):
+    """GET /api/workflow/permit-docx - 按模板生成填好值的许可证并下载。
+
+    许可证按需生成：从工单的 application.json 取作业类型与填写值，套用对应的模板 docx。
+    """
+    from agents.workflow import get_job_dir, read_json_file, render_permit_docx
+
+    if not _valid_job_id(job_id):
+        handler.send_json({"status": "error", "error": "job_id 必须是 17 位数字"}, status=400)
+        return
+
+    job_dir = get_job_dir(job_id)
+    if artifact not in ("permit", "jsa"):
+        handler.send_json({"status": "error", "error": "未知的文档类型"}, status=400)
+        return
+    if artifact == "jsa":
+        stored = read_json_file(os.path.join(job_dir, "permit.json")) or {}
+        jsa = stored.get("jsa_result") or {}
+        report = os.path.join(job_dir, "jsa_report.docx")
+        if jsa.get("source") != "ai" or not jsa.get("report_path") or not os.path.isfile(report):
+            handler.send_json({"status": "error", "error": "JSA 报告尚未生成"}, status=404)
+            return
+        with open(report, "rb") as fh:
+            body = fh.read()
+        _send_docx_download(handler, body, f"JSA分析报告-{job_id}.docx")
+        return
+    stored = read_json_file(os.path.join(job_dir, "permit.json")) or {}
+    if stored.get("p1_phase") == "jsa_review":
+        handler.send_json({"status": "error", "error": "JSA 尚未批准，作业票未生成"}, status=409)
+        return
+    application = read_json_file(os.path.join(job_dir, "application.json")).get("application", {})
+    permit_type = application.get("permit_type") or ""
+    if not permit_type:
+        handler.send_json({
+            "status": "error",
+            "error": "该作业不是手动填报创建的，没有可下载的许可证",
+        }, status=400)
+        return
+
+    try:
+        # AI 的安全措施判定存在 permit.json，按它把 √/× 写进票面；
+        # 「确认人」列保持空白，由人工复核后签字。
+        permit_content = (read_json_file(os.path.join(job_dir, "permit.json")) or {}).get("permit_content") or {}
+        measure_decisions = permit_content.get("measure_decisions")
+        out_path = os.path.join(job_dir, "permit.docx")
+        render_permit_docx(
+            permit_type, permit_content.get("permit_values") or application.get("permit_fields") or {},
+            out_path, measure_decisions
+        )
+        with open(out_path, "rb") as fh:
+            body = fh.read()
+    except Exception as exc:
+        logger.exception("[permit-docx] 生成许可证失败")
+        handler.send_json({"status": "error", "error": f"生成许可证失败: {exc}"}, status=500)
+        return
+
+    _send_docx_download(handler, body, f"许可证-{job_id}.docx")
+
+
+def _send_docx_download(handler, body, filename):
+    handler.send_response(200)
+    handler.send_header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    handler.send_header("Content-Length", len(body))
+    handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def handle_workflow_start(handler, app):
@@ -366,7 +493,7 @@ def handle_workflow_confirm(handler, data):
 
     try:
         result = confirm_and_continue(
-            thread_id, stage, decision, notes=notes, async_execute=async_execute
+            thread_id, stage, decision, notes=notes, async_execute=async_execute, approval_id=data.get("approval_id")
         )
 
         if result is None:

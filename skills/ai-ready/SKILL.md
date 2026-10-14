@@ -26,7 +26,7 @@ description: This skill should be used when the user asks to "show me the projec
 | 模块 | 路径 | 说明 |
 |------|------|------|
 | [agents](#agents-模块) | `agents/` | P1-P10 Agent 实现 |
-| [web](#web-模块) | `web/` | Gradio Web 前端 |
+| [web](#web-模块) | `web/` | 自建 HTTPServer + 原生 JS 前端 |
 | [docs](#docs-文档) | `docs/` | 架构文档 |
 | [A5/A6/A7](#子系统) | `A5/`, `A6/`, `A7/` | 边缘智能子系统 |
 
@@ -119,7 +119,7 @@ data/jobs/{job_id}/
 ├── p1_result.json ~ p10_result.json  # 各阶段结果
 ├── permit.json              # 作业票数据
 ├── logs.json                # 执行日志
-└── confirmation/            # 人工确认记录
+└── confirmations.json       # 人工确认记录（含 approval_type / approval_id）
 ```
 
 ---
@@ -192,3 +192,4 @@ python agents/p6_monitor_agent.py --port 5002
 - **工具签名**: 阅读 `references/tools.md`
 - **工作流/HITL**: 阅读 `references/workflow.md`
 - **文档索引**: 阅读 `references/docs.md`
+- **P1 深度流程**（作业票 / JSA / 两次审批 / 知识库判定）: 阅读 `../p1-permit-workflow/SKILL.md`

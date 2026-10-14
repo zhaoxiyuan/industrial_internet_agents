@@ -20,6 +20,9 @@ build/
 .vscode/
 *.swp
 data/jobs/
+data/jobs_trash/
+docs/p1_docs/_local/
+data/knowledge/_local/
 data/output
 data/input
 .mcp.json

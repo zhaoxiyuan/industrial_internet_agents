@@ -207,6 +207,30 @@
         .form-row .form-group {
             flex: 1;
         }
+        /* 多选字段用复选框组：原生 select multiple 必须按住 Ctrl/Cmd 才能多选，
+           单击会把已选项顶掉，现场操作员极易误触清空。 */
+        .check-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .check-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 13px;
+            color: #444;
+            cursor: pointer;
+            user-select: none;
+        }
+        .check-item input {
+            cursor: pointer;
+        }
 
         /* 按钮 */
         .btn {
@@ -933,6 +957,7 @@
         .permit-field.full { grid-column: 1 / -1; }
         .permit-label { color: #888; font-size: 11px; margin-bottom: 3px; }
         .permit-value { color: #222; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+        .permit-warning { color: #B71C1C; background: #FFEBEE; border: 1px solid #EF9A9A; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
         .permit-section { margin-top: 14px; }
         .permit-section-title { font-weight: bold; color: #333; margin-bottom: 7px; }
         .permit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1094,6 +1119,11 @@
             flex: 1;
             overflow-y: auto;
         }
+
+        /* 手动填报生成的许可证票面表格 */
+        .permit-template-title { font-size: 15px; font-weight: 500; text-align: center; margin-bottom: 8px; }
+        .permit-template-table { width: 100%; border-collapse: collapse; font-size: 11px; line-height: 1.5; margin-bottom: 10px; }
+        .permit-template-table td { border: 1px solid #bbb; padding: 3px 5px; vertical-align: top; word-break: break-all; }
 
     </style>
 </head>
@@ -1369,17 +1399,27 @@
                             <div class="work-entry-panel active" id="work-entry-new-panel">
                             <div class="section-title" style="margin-top: 0;">数据来源</div>
                             <div class="input-source-selector">
-                                <button class="input-source-option active" id="source-mock-option" onclick="selectInputSource('mock')">
-                                    <span class="input-source-title">🧪 Mock 测试数据</span>
-                                    <span class="input-source-desc">使用内置示例快速测试流程</span>
+                                <button class="input-source-option active" id="source-manual-option" onclick="selectInputSource('manual')">
+                                    <span class="input-source-title">✍️ 手动填报</span>
+                                    <span class="input-source-desc">选择作业类型并填写基本信息</span>
                                 </button>
                                 <button class="input-source-option" id="source-docx-option" onclick="selectInputSource('docx')">
                                     <span class="input-source-title">📄 真实作业许可</span>
                                     <span class="input-source-desc">上传 DOCX 并核对识别结果</span>
                                 </button>
                             </div>
-                            <div class="source-mode-panel active" id="source-mock-panel">
-                                <button class="btn btn-secondary" onclick="fillMockData()" style="width: 100%; padding: 7px 12px; font-size: 12px;">🔄 更换一条 Mock 数据</button>
+                            <div class="source-mode-panel active" id="source-manual-panel">
+                                <div class="form-group">
+                                    <label class="form-label">作业类型 <span style="color: #C62828;">*</span></label>
+                                    <select class="form-input" id="permit-type-select" onchange="onPermitTypeChange()">
+                                        <option value="">正在加载作业类型...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <button type="button" class="btn btn-secondary" onclick="fillPermitMock()" style="width: 100%; padding: 7px 12px; font-size: 12px;">🧪 填入 Mock 数据</button>
+                                    <div class="docx-status" id="permit-mock-hint" style="margin-top: 6px;"></div>
+                                </div>
+                                <div id="permit-type-fields"></div>
                             </div>
                             <div class="source-mode-panel" id="source-docx-panel">
                                 <div class="docx-upload">
@@ -1387,6 +1427,7 @@
                                     <div class="docx-status" id="permit-docx-status">请选择真实的 .docx 作业许可文件。解析后请核对并补充下方字段。</div>
                                 </div>
                             </div>
+                            <div id="docx-application-fields">
                             <div class="section-title">📋 作业申请识别结果</div>
                             <div class="form-group">
                                 <label class="form-label">作业内容</label>
@@ -1417,6 +1458,7 @@
                                     <label class="form-label">结束时间</label>
                                     <input type="text" class="form-input" id="app-end" value="2026-08-04T17:00:00Z">
                                 </div>
+                            </div>
                             </div>
                             <div class="btn-group">
                                 <button class="btn btn-primary" onclick="startWorkflow()">🚀 启动</button>
@@ -1468,6 +1510,9 @@
                 <div id="history-permit-content">正在加载...</div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-secondary" id="history-show-jsa" onclick="renderHistoryDocument(true)" style="display: none;">查看 JSA 报告</button>
+                <button class="btn btn-secondary" id="history-show-permit" onclick="renderHistoryDocument(false)" style="display: none;">查看作业票</button>
+                <a class="btn btn-secondary" id="history-jsa-download" style="display: none;">⬇️ 下载 JSA 报告</a>
                 <button class="btn btn-secondary" onclick="closeHistoryPermit()">关闭</button>
             </div>
         </div>
@@ -1499,8 +1544,42 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal()">❌ 取消</button>
+                <a class="btn btn-secondary" id="jsa-download-button" style="display: none;">⬇️ 下载 JSA 报告</a>
+                <button class="btn btn-secondary" id="permit-download-button" onclick="downloadPermitDocx()" style="display: none;">⬇️ 下载许可证</button>
                 <button class="btn btn-reject" onclick="console.log('reject clicked');confirmDecision('reject')">❌ 否决</button>
                 <button class="btn btn-approve" id="hitl-approve-button" onclick="console.log('approve clicked');confirmDecision('approve')">✅ 批准</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 启动时发现未完成作业：继续旧作业 / 另起新作业 / 取消启动 -->
+    <div class="modal-overlay" id="start-choice-modal">
+        <div class="modal" style="max-width: 560px;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #FF9800, #F57C00);">
+                <span class="modal-icon">🔄</span>
+                <div>
+                    <div class="modal-title">检测到未完成的作业</div>
+                    <div class="modal-subtitle">请选择如何处理后再启动</div>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="modal-info">
+                    <div class="modal-info-title">未完成作业</div>
+                    <div id="start-choice-summary"></div>
+                </div>
+                <div class="modal-info">
+                    <div class="modal-info-title">可选操作</div>
+                    <div>
+                        旧作业 —— 继续执行这个未完成的作业<br>
+                        新作业 —— 保留旧作业，另行创建一张新作业单<br>
+                        取消 —— 不创建作业，取消本次启动
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="resolveStartChoice('cancel')">取消</button>
+                <button class="btn btn-secondary" onclick="resolveStartChoice('new')">新作业</button>
+                <button class="btn btn-primary" onclick="resolveStartChoice('old')">旧作业</button>
             </div>
         </div>
     </div>

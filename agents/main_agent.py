@@ -1310,7 +1310,7 @@ def run_workflow(
         "status": "completed"
     }
 
-def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False) -> dict:
+def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", notes: str = "", async_execute: bool = False, approval_id: str = None) -> dict:
     """确认阶段并继续工作流
 
     对于 P1 阶段的 HITL 中断，确认后会调用 execute_p1(resume=True) 恢复执行
@@ -1362,6 +1362,18 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
                 "message": f"{stage} 当前不在等待审批状态，本次请求未重复执行",
             }
 
+        pending_review = result.get("pending_confirmation") or {}
+        expected_id = pending_review.get("approval_id")
+        if expected_id and approval_id != expected_id:
+            return {"job_id": job_id, "status": "already_processed", "duplicate": True,
+                    "message": "审批已更新，请重新打开当前预览后确认"}
+        jsa_review = stage == "P1" and pending_review.get("type") == "jsa_approval"
+        if jsa_review and decision == "approve" and (
+            (result.get("jsa_result") or {}).get("source") != "ai"
+            or not (result.get("jsa_result") or {}).get("steps")
+        ):
+            return {"job_id": job_id, "status": "error", "error": "JSA 尚未成功生成，不能批准并出票"}
+
         if async_execute and decision == "approve":
             execution_token = claim_job_execution(job_id, f"confirm:{stage}")
             if execution_token is None:
@@ -1383,7 +1395,12 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
                 "pending_confirmations": [],
             },
         })
-        save_confirmation(job_id, stage, decision, notes)
+        save_confirmation(job_id, stage, decision, notes, approval_type=pending_review.get("type"), approval_id=expected_id)
+        if jsa_review and decision == "approve":
+            result["jsa_approval"] = {"decision": "approve", "approval_id": expected_id,
+                                      "approved_at": datetime.now(timezone.utc).isoformat(), "notes": notes}
+            result["p1_phase"] = "permit_build"
+            write_json_file(result_file, result)
 
     # 否决是终止决定，不能像批准一样把阶段标记完成并继续向下执行。
     # 将当前阶段记为失败，用户点击“启动”后由断点恢复机制重新执行该阶段。
@@ -1484,7 +1501,7 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
         }
 
     # 更新工作流状态：清除该阶段的 waiting 状态
-    update_workflow_status(job_id, {f"{stage}_status": "completed"})
+    update_workflow_status(job_id, {f"{stage}_status": "running" if jsa_review else "completed"})
     _broadcast_state(job_id)
 
     # 清除 pending_confirmation 标记
@@ -1574,6 +1591,9 @@ def confirm_and_continue(thread_id: str, stage: str, decision: str = "approve", 
             }
 
         if p1_result.get("pending_confirmation"):
+            update_workflow_status(job_id, {"P1_status": "waiting", "main_agent": {
+                "status": "waiting", "current_stage": "P1", "pending_confirmations": ["P1"]}})
+            _broadcast_state(job_id)
             logger.info(f"[confirm_and_continue] P1 恢复后仍等待确认")
             return {
                 "job_id": job_id,
@@ -1876,7 +1896,10 @@ def list_pending_confirmations(thread_id: str) -> list:
         pending = []
         for stage in ALL_STAGES:
             if status.get("agents", {}).get(stage, {}).get("status") == "waiting":
-                pending.append({"stage": stage, "pending": {}})
+                review = {}
+                if stage == "P1":
+                    review = read_json_file(get_stage_result_path(thread_id, "p1")).get("pending_confirmation") or {}
+                pending.append({"stage": stage, "pending": review})
         return pending
     job_status = get_job_status(thread_id)
     return job_status.get("pending_confirmations", [])
