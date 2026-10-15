@@ -34,6 +34,12 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
+    def end_headers(self):
+        # console 探测要求固定 app.js 地址；用响应头保证直连页面也会重新验证脚本。
+        if urlparse(self.path).path in {"/", "/index.html", "/app.js"}:
+            self.send_header("Cache-Control", "no-cache, max-age=0")
+        super().end_headers()
+
     def do_POST(self):
         logger.info(f"[POST] 请求进入: path={self.path}")
         parsed = urlparse(self.path)
@@ -71,6 +77,10 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/api/workflow/resume":
             data = self._read_json()
             workflow_api.handle_workflow_resume(self, data)
+
+        elif path == "/api/workflow/delete":
+            data = self._read_json()
+            workflow_api.handle_workflow_delete(self, data)
 
         elif path == "/api/workflow/claim":
             data = self._read_json()
@@ -161,6 +171,13 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/api/workflow/execution-status":
             job_id = parse_qs(parsed.query).get("job_id", [None])[0]
             workflow_api.handle_execution_status(self, job_id)
+
+        elif path == "/api/workflow/permit-types":
+            workflow_api.handle_workflow_permit_types(self)
+
+        elif path == "/api/workflow/permit-docx":
+            job_id = parse_qs(parsed.query).get("job_id", [None])[0]
+            workflow_api.handle_workflow_permit_docx(self, job_id, parse_qs(parsed.query).get("artifact", ["permit"])[0])
 
         elif path == "/api/feishu/card-callbacks":
             feishu_card_api.handle_card_callback_list(self)

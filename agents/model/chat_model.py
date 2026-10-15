@@ -65,32 +65,49 @@ class LLMLoggingCallback(BaseCallbackHandler):
         self._push_ws("ERROR", f"LLM 调用错误: {error}")
 
 
-def create_chat_model(callbacks=None):
+def create_chat_model(callbacks=None, temperature=None, reasoning_effort=None):
     """创建 LLM 模型
 
     Args:
         callbacks: 可选的回调处理器列表
+        temperature: 覆盖全局温度。**注意：服务端处于思考模式时该参数不生效**（不报错、也不起作用）。
+            DeepSeek 的 `thinking` 默认开启，所以这个值目前只对已关闭思考的调用有实际意义。
+        reasoning_effort: 思考强度 `low` / `high` / `max`；None 表示用服务默认（实测为 `high`）。
+            真实判定任务里思考会消耗数千 token（占输出 90% 以上、单次 30~130 秒），
+            换成 `low` 后平均约 28 秒、判定逐条一致（详见 docs/update/update_2026-10-13.md）。
     """
     from .config import get_settings
     settings = get_settings()
+    extra = {}
+    if reasoning_effort:
+        # reasoning_effort 作为顶层参数直传会被 LangChain 丢弃（实测 reasoning 纹丝不动），
+        # 必须放进 extra_body 才能到达服务端。
+        extra["extra_body"] = {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": reasoning_effort,
+        }
     llm = init_chat_model(
         model=settings.OPENAI_MODEL,
         api_key=settings.OPENAI_API_KEY,
         base_url=settings.OPENAI_BASE_URL,
         model_provider=settings.MODEL_PROVIDER,
-        temperature=settings.TEMPERATURE,
+        temperature=settings.TEMPERATURE if temperature is None else temperature,
         max_tokens=settings.MAX_TOKENS,
         callbacks=callbacks,
+        **extra,
     )
     return llm
 
 
-def create_chat_model_with_logging(agent_name: str = "LLM", job_id: str = "*"):
+def create_chat_model_with_logging(agent_name: str = "LLM", job_id: str = "*", temperature=None,
+                                   reasoning_effort=None):
     """创建带日志回调的 LLM 模型
 
     Args:
         agent_name: Agent 名称
         job_id: 作业ID，用于 WebSocket 推送和 LangSmith 关联
+        temperature: 覆盖全局温度（思考模式下不生效，见 create_chat_model）
+        reasoning_effort: 思考强度 low/high/max；None 表示用服务默认
     """
     from agents.model.langsmith_config import LangSmithConfig
 
@@ -106,4 +123,5 @@ def create_chat_model_with_logging(agent_name: str = "LLM", job_id: str = "*"):
     if langsmith_cb:
         callbacks.append(langsmith_cb)
 
-    return create_chat_model(callbacks=callbacks)
+    return create_chat_model(callbacks=callbacks, temperature=temperature,
+                             reasoning_effort=reasoning_effort)

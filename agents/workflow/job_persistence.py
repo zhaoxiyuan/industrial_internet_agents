@@ -50,7 +50,8 @@ def add_job_log(job_id: str, log_entry: dict) -> str:
         return log_file
 
 
-def save_confirmation(job_id: str, stage: str, decision: str, notes: str = "") -> str:
+def save_confirmation(job_id: str, stage: str, decision: str, notes: str = "",
+                      approval_type=None, approval_id=None) -> str:
     """保存确认记录"""
     with get_job_lock(job_id):
         job_dir = ensure_job_dir(job_id)
@@ -73,6 +74,10 @@ def save_confirmation(job_id: str, stage: str, decision: str, notes: str = "") -
             "notes": notes,
             "confirmed_at": datetime.now(timezone.utc).isoformat()
         }
+        if approval_type:
+            record["approval_type"] = approval_type
+        if approval_id:
+            record["approval_id"] = approval_id
         confirmations.append(record)
 
         write_json_file(confirm_file, confirmations)

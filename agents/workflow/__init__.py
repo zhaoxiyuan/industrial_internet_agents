@@ -66,6 +66,29 @@ from .job_lease import (
     clear_job_leases,
 )
 
+from .permit_template import (
+    get_templates_dir,
+    get_template_path,
+    load_config,
+    resolve_fields,
+    list_permit_types,
+    get_permit_type,
+    fill_table_xml,
+    build_permit_rows,
+    render_permit_docx,
+    list_safety_measures,
+    fill_safety_measures,
+    decision_map,
+)
+
+from .article_knowledge import (
+    load_knowledge,
+    clear_cache as clear_knowledge_cache,
+    align_measures,
+    measure_items as knowledge_measure_items,
+    basis_texts as knowledge_basis_texts,
+)
+
 __all__ = [
     # file_utils
     "get_jobs_dir",
@@ -120,4 +143,23 @@ __all__ = [
     "get_occupant",
     "is_job_lease_holder",
     "clear_job_leases",
+    # permit template（许可证模板）
+    "get_templates_dir",
+    "get_template_path",
+    "load_config",
+    "resolve_fields",
+    "list_permit_types",
+    "get_permit_type",
+    "fill_table_xml",
+    "build_permit_rows",
+    "render_permit_docx",
+    "list_safety_measures",
+    "fill_safety_measures",
+    "decision_map",
+    # article_knowledge
+    "load_knowledge",
+    "clear_knowledge_cache",
+    "align_measures",
+    "knowledge_measure_items",
+    "knowledge_basis_texts",
 ]

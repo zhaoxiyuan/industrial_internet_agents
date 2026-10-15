@@ -15,9 +15,10 @@ const state = {
     liveWorkflowState: null,
     // 工单页面占用（租约）：readOnly 表示本页只能看，不能操作
     lease: { jobId: null, holding: false, readOnly: false, heartbeatTimer: null, occupant: null },
-    mockApplication: null,
+    permitTypes: [],
+    permitType: '',
     realApplication: null,
-    inputSource: 'mock',
+    inputSource: 'manual',
     ws: null,           // 状态 WebSocket 连接
     logsWs: null        // 日志 WebSocket 连接
 };
@@ -353,7 +354,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadModelConfig();
     loadAllPrompts();
     renderWorkflowDiagram();
-    selectInputSource('mock');
+    loadPermitTypes();
+    selectInputSource('manual');
     loadHistoryJobs();
     restoreActiveWorkflow();
 });
@@ -940,9 +942,31 @@ function renderHistoryJobs() {
                 <button class="btn btn-secondary" onclick="viewHistoryJob('${job.job_id}')">查看流程</button>
                 <button class="btn btn-secondary" onclick="viewHistoryPermit('${job.job_id}')">查看作业单</button>
                 ${job.can_continue ? `<button class="btn btn-primary" onclick="continueHistoryJob('${job.job_id}')">继续</button>` : ''}
+                <button class="btn btn-reject" onclick="deleteHistoryJob('${job.job_id}')">删除</button>
             </div>
         </div>`;
     }).join('');
+}
+
+function deleteHistoryJob(jobId) {
+    // 破坏性操作：先确认。服务端只把工单目录移到 data/jobs_trash，不物理删除。
+    if (!confirm('确定删除作业 ' + jobId + ' 吗？\n\n删除后该作业会从列表移除，如需找回请联系管理员（服务端 data/jobs_trash）。')) return;
+    fetch('/api/workflow/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId })
+    }).then(r => r.json())
+      .then(data => {
+          if (data.status === 'ok') {
+              addLog('🗑️ 已删除作业: ' + jobId, 'success');
+              if (state.historyViewJobId === jobId) exitHistoryView();
+              loadHistoryJobs();
+          } else {
+              addLog('❌ 删除失败: ' + (data.error || '未知错误'), 'error');
+              alert('删除失败：' + (data.error || '未知错误'));
+          }
+      })
+      .catch(err => addLog('❌ 删除失败: ' + err.message, 'error'));
 }
 
 function workflowStateFromDetail(detail) {
@@ -1000,6 +1024,8 @@ function viewHistoryPermit(jobId) {
     const modal = document.getElementById('history-permit-modal');
     const content = document.getElementById('history-permit-content');
     document.getElementById('history-permit-title').textContent = '历史作业单：' + jobId;
+    state.historyPermitDetail = null;
+    for (const id of ['history-show-jsa', 'history-show-permit', 'history-jsa-download']) document.getElementById(id).style.display = 'none';
     content.textContent = '正在加载作业单内容...';
     modal.classList.add('active');
     fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
@@ -1007,7 +1033,8 @@ function viewHistoryPermit(jobId) {
         .then(detail => {
             if (detail.error) throw new Error(detail.error || '读取作业单失败');
             if (!modal.classList.contains('active')) return;
-            content.innerHTML = renderP1Approval(detail, false);
+            state.historyPermitDetail = detail;
+            renderHistoryDocument(false);
         })
         .catch(err => {
             content.innerHTML = '<div class="permit-missing">作业单读取失败：' + escapeHtml(err.message) + '</div>';
@@ -1072,19 +1099,343 @@ function applyApplicationToForm(application) {
 }
 
 function selectInputSource(source) {
-    state.inputSource = source === 'docx' ? 'docx' : 'mock';
-    document.getElementById('source-mock-option').classList.toggle('active', state.inputSource === 'mock');
+    state.inputSource = source === 'docx' ? 'docx' : 'manual';
+    document.getElementById('source-manual-option').classList.toggle('active', state.inputSource === 'manual');
     document.getElementById('source-docx-option').classList.toggle('active', state.inputSource === 'docx');
-    document.getElementById('source-mock-panel').classList.toggle('active', state.inputSource === 'mock');
+    document.getElementById('source-manual-panel').classList.toggle('active', state.inputSource === 'manual');
     document.getElementById('source-docx-panel').classList.toggle('active', state.inputSource === 'docx');
-    if (state.inputSource === 'mock') {
-        if (state.mockApplication) applyApplicationToForm(state.mockApplication);
-        else fillMockData();
-    } else if (state.realApplication) {
-        applyApplicationToForm(state.realApplication);
-    } else {
-        applyApplicationToForm({});
+    // 手动填报的字段由所选作业类型决定；旧表单只在 DOCX 模式下用于核对识别结果。
+    document.getElementById('docx-application-fields').style.display = state.inputSource === 'docx' ? '' : 'none';
+    if (state.inputSource === 'docx') applyApplicationToForm(state.realApplication || {});
+}
+
+// ========== 手动填报：作业类型与字段 ==========
+
+function currentPermitType() {
+    return (state.permitTypes || []).find(item => item.key === state.permitType) || null;
+}
+
+function loadPermitTypes() {
+    fetch('/api/workflow/permit-types')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'ok') throw new Error(data.error || '加载失败');
+            state.permitTypes = data.types || [];
+            const select = document.getElementById('permit-type-select');
+            select.innerHTML = '<option value="">请选择作业类型</option>' +
+                state.permitTypes.map(t => `<option value="${escapeHtml(t.key)}">${escapeHtml(t.name)}</option>`).join('');
+            renderPermitFields();
+        })
+        .catch(err => {
+            document.getElementById('permit-type-select').innerHTML = '<option value="">作业类型加载失败</option>';
+            addLog('❌ 加载作业类型失败: ' + err.message, 'error');
+        });
+}
+
+function onPermitTypeChange() {
+    state.permitType = document.getElementById('permit-type-select').value;
+    renderPermitFields();
+}
+
+function permitFieldInputId(key) {
+    return 'permit-field-' + key;
+}
+
+// 系统自动填的字段（如作业申请时间）：本地时间「YYYY-MM-DD HH:MM」。
+function nowText() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderPermitFields() {
+    const container = document.getElementById('permit-type-fields');
+    const hint = document.getElementById('permit-mock-hint');
+    const type = currentPermitType();
+    if (!type) {
+        container.innerHTML = '<div class="docx-status">请选择作业类型，随后填写该类型需要的基本信息。</div>';
+        if (hint) hint.textContent = '';
+        return;
     }
+    const mockSets = PERMIT_MOCK_DATA[type.key] || [];
+    if (hint) {
+        hint.textContent = mockSets.length
+            ? `共 ${mockSets.length} 套示例数据，每点一次切换一套`
+            : '该类型暂无示例数据';
+    }
+    let html = `<div class="section-title">📋 ${escapeHtml(type.name)} · 基本信息</div>`;
+    for (const field of type.fields) {
+        const inputId = permitFieldInputId(field.key);
+        const required = field.required ? ' <span style="color: #C62828;">*</span>' : '';
+        html += `<div class="form-group"><label class="form-label">${escapeHtml(field.label)}${required}</label>`;
+        if (field.type === 'textarea') {
+            html += `<textarea class="form-input" id="${inputId}" rows="3" style="height: 60px !important; min-height: 60px !important;"></textarea>`;
+        } else if (field.type === 'select') {
+            html += `<select class="form-input" id="${inputId}"><option value=""></option>` +
+                field.options.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('') + '</select>';
+        } else if (field.type === 'multiselect') {
+            // 复选框组：原生 select multiple 要按住 Ctrl/Cmd 才能多选，单击会清掉已选项。
+            html += `<div class="check-group" id="${inputId}">` +
+                field.options.map(o => `<label class="check-item"><input type="checkbox" value="${escapeHtml(o)}"><span>${escapeHtml(o)}</span></label>`).join('') +
+                '</div>';
+        } else if (field.type === 'bool') {
+            html += `<select class="form-input" id="${inputId}"><option value="是">是</option><option value="否">否</option></select>`;
+        } else if (field.type === 'time_range') {
+            html += `<div class="form-row"><input type="text" class="form-input" id="${inputId}-start" placeholder="开始时间，如 2026-10-09 09:00">` +
+                `<input type="text" class="form-input" id="${inputId}-end" placeholder="结束时间，如 2026-10-09 17:00" style="margin-left: 8px;"></div>`;
+        } else {
+            // readonly + auto=now 的字段（作业申请时间）由系统填，表单上只读展示。
+            const preset = field.auto === 'now' ? nowText() : '';
+            const locked = field.readonly ? ' disabled style="background:#F4F4F5;color:#52525B;"' : '';
+            html += `<input type="text" class="form-input" id="${inputId}" value="${escapeHtml(preset)}"${locked}>`;
+        }
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function readPermitFieldValue(field) {
+    if (field.type === 'time_range') {
+        const start = (document.getElementById(permitFieldInputId(field.key) + '-start') || {}).value || '';
+        const end = (document.getElementById(permitFieldInputId(field.key) + '-end') || {}).value || '';
+        return { start: start.trim(), end: end.trim() };
+    }
+    const element = document.getElementById(permitFieldInputId(field.key));
+    if (!element) return '';
+    if (field.type === 'multiselect') {
+        return Array.from(element.querySelectorAll('input[type="checkbox"]:checked'))
+            .map(box => box.value).filter(Boolean);
+    }
+    return (element.value || '').trim();
+}
+
+function collectPermitFieldValues() {
+    const type = currentPermitType();
+    const values = {};
+    if (!type) return values;
+    for (const field of type.fields) {
+        values[field.key] = readPermitFieldValue(field);
+    }
+    return values;
+}
+
+function resetPermitFields() {
+    state.permitType = '';
+    const select = document.getElementById('permit-type-select');
+    if (select) select.value = '';
+    renderPermitFields();
+}
+
+// 每种作业类型两套示例数据，供「填入 Mock 数据」按钮循环填入。
+// 直接内嵌在前端：不新增 /data/ 请求，避免牵动 console /jobmon 的脚本适配契约。
+// key 必须与 permit_templates.json 解析后的字段一致；bool 字段用「是」「否」。
+const PERMIT_MOCK_DATA = {
+    hot_work: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强', work_people: '王明',
+            work_place: '焦化 I 装置 F-0102 空气预热器区',
+            work_content: '更换 F-0102 空气预热器入口膨胀节，配合切割与焊接作业。',
+            work_time: { start: '2026-10-12 08:30', end: '2026-10-12 17:00' },
+            hot_place: 'F-0102 空气预热器入口法兰处', hot_person: '王明', hot_cert: '动火-2026-1087',
+            hot_types: ['焊接', '气割', '打磨'], plan_required: '是'
+        },
+        {
+            apply_unit: '炼油二部', area_unit: '常减压车间', applicant: '张伟', work_people: '陈刚',
+            work_place: '常减压 II 装置 加热炉 F-0201 二层平台',
+            work_content: '加热炉 F-0201 火嘴法兰紧固，吹扫管线补焊。',
+            work_time: { start: '2026-10-15 09:00', end: '2026-10-15 16:30' },
+            hot_place: 'F-0201 加热炉二层火嘴平台', hot_person: '陈刚', hot_cert: '动火-2026-1132',
+            hot_types: ['焊接', '明火'], plan_required: '否'
+        }
+    ],
+    confined_space: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强', work_people: '王明',
+            work_place: '焦化 I 装置 F-0102 空气预热器内部',
+            work_content: '进入 F-0102 空气预热器内部清理积灰、检查换热管束。',
+            work_time: { start: '2026-10-13 08:00', end: '2026-10-13 18:00' },
+            space_name: '空气预热器 F-0102 壳体内', attach_plan: '是'
+        },
+        {
+            apply_unit: '储运部', area_unit: '罐区车间', applicant: '赵磊', work_people: '孙浩',
+            work_place: '中间罐区 T-1203 污油罐',
+            work_content: '进入 T-1203 罐内清理罐底油泥，检查内壁防腐层。',
+            work_time: { start: '2026-10-16 08:00', end: '2026-10-16 17:30' },
+            space_name: '污油罐 T-1203 罐内', attach_plan: '是'
+        }
+    ],
+    line_open: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强', work_people: '王明',
+            work_place: '焦化 I 装置 原料油泵 P-0101 出口管线',
+            work_content: 'P-0101 出口管线加装盲板，隔离原料油系统。',
+            work_time: { start: '2026-10-12 08:00', end: '2026-10-12 12:00' },
+            work_category: '堵盲板', pipe_name: '原料油泵 P-0101 出口管线 DN200', medium: '原料油'
+        },
+        {
+            apply_unit: '炼油二部', area_unit: '常减压车间', applicant: '张伟', work_people: '陈刚',
+            work_place: '常减压 II 装置 柴油汽提塔 C-0203 侧线',
+            work_content: '柴油汽提塔 C-0203 侧线抽盲板，恢复管线联通。',
+            work_time: { start: '2026-10-17 09:00', end: '2026-10-17 15:00' },
+            work_category: '抽盲板', pipe_name: '柴油汽提塔 C-0203 侧线 DN150', medium: '柴油'
+        }
+    ],
+    high_work: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强', work_people: '王明',
+            work_place: '焦化 I 装置 焦炭塔 T-0101 顶部平台',
+            work_content: '焦炭塔 T-0101 顶部平台护栏除锈刷漆。',
+            work_time: { start: '2026-10-14 08:30', end: '2026-10-14 17:00' },
+            high_level: 'Ⅱ级', plan_required: '否'
+        },
+        {
+            apply_unit: '设备管理部', area_unit: '检修车间', applicant: '周波', work_people: '吴涛',
+            work_place: '常减压 II 装置 常压塔 C-0201 顶部人孔区',
+            work_content: '常压塔 C-0201 顶部更换液位计，搭设临边防护。',
+            work_time: { start: '2026-10-18 08:00', end: '2026-10-18 16:00' },
+            high_level: 'Ⅲ级', plan_required: '是'
+        }
+    ],
+    lifting: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强',
+            work_place: '焦化 I 装置 检修场地',
+            work_content: '吊装 F-0102 空气预热器换热管束并落位。',
+            work_time: { start: '2026-10-12 13:00', end: '2026-10-12 17:00' },
+            crane_name: '25t 汽车起重机 辽A·H8231', lifting_item: '空气预热器换热管束',
+            lifting_weight: '18', slinger: '王明', lifting_level: '三级'
+        },
+        {
+            apply_unit: '炼油二部', area_unit: '常减压车间', applicant: '张伟',
+            work_place: '常减压 II 装置 加热炉北侧检修区',
+            work_content: '吊装加热炉炉管组件并落位固定。',
+            work_time: { start: '2026-10-19 09:00', end: '2026-10-19 15:00' },
+            crane_name: '50t 汽车起重机 辽A·H9056', lifting_item: '加热炉炉管组件',
+            lifting_weight: '42', slinger: '陈刚', lifting_level: '二级'
+        }
+    ],
+    temp_power: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间',
+            work_place: '焦化 I 装置 F-0102 检修作业区',
+            work_content: 'F-0102 检修用电焊机、角磨机临时电源敷设。',
+            work_time: { start: '2026-10-12 08:00', end: '2026-10-12 18:00' },
+            permit_no: 'LDY-2026-0417', voltage: '380'
+        },
+        {
+            apply_unit: '炼油二部', area_unit: '常减压车间',
+            work_place: '常减压 II 装置 加热炉检修区',
+            work_content: '加热炉检修用电焊机与行灯临时电源敷设。',
+            work_time: { start: '2026-10-15 08:00', end: '2026-10-15 17:00' },
+            permit_no: 'LDY-2026-0453', voltage: '220'
+        }
+    ],
+    earth_work: [
+        {
+            apply_unit: '工程管理部', area_unit: '焦化车间', applicant: '郑凯', work_people: '刘洋',
+            work_place: '焦化 I 装置 循环水埋地管线管段处',
+            work_content: '开挖循环水埋地管线，更换腐蚀管段。',
+            work_time: { start: '2026-10-20 08:00', end: '2026-10-20 17:30' },
+            earth_scope: '沿管线走向开挖沟槽，长 12 米、宽 1.2 米、深 1.5 米，放坡系数 1:0.5，附开挖简图。',
+            plan_required: '是'
+        },
+        {
+            apply_unit: '工程管理部', area_unit: '储运车间', applicant: '郑凯', work_people: '刘洋',
+            work_place: '中间罐区 T-1203 罐区北侧',
+            work_content: '开挖罐区消防水管线漏点，配合补焊处理。',
+            work_time: { start: '2026-10-21 08:30', end: '2026-10-21 16:30' },
+            earth_scope: '机械开挖配合人工清底，长 8 米、宽 1.0 米、深 1.2 米，附开挖简图。',
+            plan_required: '否'
+        }
+    ],
+    road_close: [
+        {
+            apply_unit: '工程管理部', area_unit: '焦化车间', applicant: '郑凯', work_people: '刘洋',
+            work_time: { start: '2026-10-20 08:00', end: '2026-10-20 18:00' },
+            road_reason: '焦化 I 装置东侧消防通道埋地管线抢修，需占道施工。',
+            related_units: '消防保卫部、生产调度中心、焦化车间', plan_required: '是'
+        },
+        {
+            apply_unit: '工程管理部', area_unit: '储运车间', applicant: '郑凯', work_people: '刘洋',
+            work_time: { start: '2026-10-22 09:00', end: '2026-10-22 15:00' },
+            road_reason: '中间罐区北侧管廊防腐施工搭设脚手架，需占道作业。',
+            related_units: '消防保卫部、储运车间', plan_required: '否'
+        }
+    ],
+    radiation: [
+        {
+            work_place: '焦化 I 装置 F-0102 空气预热器入口管线焊缝，影响范围半径 30 米',
+            work_content: '对 F-0102 入口膨胀节焊缝进行射线探伤，检测 6 道焊口。',
+            work_time: { start: '2026-10-15 20:00', end: '2026-10-16 02:00' }
+        },
+        {
+            work_place: '常减压 II 装置 C-0201 塔顶管线焊缝，影响范围半径 25 米',
+            work_content: '对常压塔 C-0201 塔顶管线环焊缝进行射线探伤，检测 4 道焊口。',
+            work_time: { start: '2026-10-19 21:00', end: '2026-10-20 01:00' }
+        }
+    ],
+    non_routine: [
+        {
+            apply_unit: '炼油三部', area_unit: '焦化车间', applicant: '李强', work_people: '王明',
+            work_place: '焦化 I 装置 F-0102 空气预热器及附属管线',
+            work_content: '对 F-0102 空气预热器及附属管线进行水压试验，试验压力 1.6 MPa。',
+            work_time: { start: '2026-10-13 08:00', end: '2026-10-13 17:00' },
+            nr_scope: '设备及管线整体水压试验，含壳体、进出口管段与膨胀节，附试压流程简图。',
+            plan_required: '是'
+        },
+        {
+            apply_unit: '炼油二部', area_unit: '常减压车间', applicant: '张伟', work_people: '陈刚',
+            work_place: '常减压 II 装置 柴油汽提塔 C-0203 及侧线',
+            work_content: '对柴油汽提塔 C-0203 及其侧线进行气密性试验，试验压力 0.6 MPa。',
+            work_time: { start: '2026-10-17 08:30', end: '2026-10-17 16:30' },
+            nr_scope: '塔体及侧线气密试验，含塔顶、侧线抽出与返塔管线，附试压流程简图。',
+            plan_required: '否'
+        }
+    ]
+};
+
+// 记录每种类型当前填到第几套，实现「每点一次切换一套」。
+const permitMockCursor = {};
+
+function fillPermitMock() {
+    const type = currentPermitType();
+    if (!type) {
+        addLog('❌ 请先选择作业类型，再填入 Mock 数据', 'error');
+        return;
+    }
+    const sets = PERMIT_MOCK_DATA[type.key] || [];
+    if (!sets.length) {
+        addLog(`❌ ${type.name} 暂无 Mock 数据`, 'error');
+        return;
+    }
+    const index = (permitMockCursor[type.key] || 0) % sets.length;
+    const values = sets[index];
+    permitMockCursor[type.key] = index + 1;
+
+    for (const field of type.fields) {
+        if (field.readonly) continue;   // 系统自动填的字段（申请时间），Mock 不覆盖
+        const value = values[field.key];
+        if (value === undefined || value === null) continue;
+        const inputId = permitFieldInputId(field.key);
+        if (field.type === 'time_range') {
+            const start = document.getElementById(inputId + '-start');
+            const end = document.getElementById(inputId + '-end');
+            if (start) start.value = value.start || '';
+            if (end) end.value = value.end || '';
+        } else if (field.type === 'multiselect') {
+            const element = document.getElementById(inputId);
+            if (element) {
+                const chosen = Array.isArray(value) ? value : [value];
+                element.querySelectorAll('input[type="checkbox"]').forEach(box => {
+                    box.checked = chosen.includes(box.value);
+                });
+            }
+        } else {
+            const element = document.getElementById(inputId);
+            if (element) element.value = String(value);
+        }
+    }
+    addLog(`🧪 已填入 ${type.name} Mock 数据（第 ${index + 1}/${sets.length} 套）`);
 }
 
 function setDocxStatus(message, type = '') {
@@ -1134,6 +1485,20 @@ function handlePermitDocx(file) {
 }
 
 function validateNewApplication(application) {
+    if (state.inputSource === 'manual') {
+        const type = currentPermitType();
+        if (!type) return ['作业类型'];
+        const missing = [];
+        for (const field of type.fields) {
+            if (!field.required) continue;
+            const value = readPermitFieldValue(field);
+            const empty = field.type === 'time_range'
+                ? !(value.start && value.end)
+                : (Array.isArray(value) ? value.length === 0 : value === '');
+            if (empty) missing.push(field.label);
+        }
+        return missing;
+    }
     if (state.inputSource !== 'docx') return [];
     if (!state.realApplication) return ['请先上传并解析真实 DOCX 作业许可'];
     const missing = [];
@@ -1155,39 +1520,67 @@ function startWorkflow() {
         state.workflowState.status !== 'completed' &&
         state.workflowState.status !== 'idle') {
 
-        // 有未完成的作业，询问用户
+        // 三选一：旧作业（继续执行）/ 新作业（另起一单）/ 取消（不启动）。
         const jobId = existingJobId;
         const currentStage = state.workflowState.current_stage ||
                              state.workflowState.currentStage || '未知';
         const status = state.workflowState.status || '未知';
 
-        const message = `检测到未完成的作业：\n\n` +
-                        `作业单号: ${jobId}\n` +
-                        `当前阶段: ${currentStage}\n` +
-                        `状态: ${status}\n\n` +
-                        `请选择操作：\n` +
-                        `• 点击"确定"继续执行当前作业\n` +
-                        `• 点击"取消"创建新作业`;
-
-        if (confirm(message)) {
-            if (blockIfReadOnly(jobId)) return;
-            // 先取得该工单的操作权；被其他页面占用时保持只读并提示接管。
-            claimJobLease(jobId).then(res => {
-                if (!res.ok) return;
-                // 失败状态才触发断点恢复；running/waiting 只重新连接现有作业。
-                if (status === 'error' || status === 'failed') {
-                    resumeWorkflow(jobId);
-                } else {
-                    addLog('🔄 重新连接作业: ' + jobId);
-                    connectWebSocket(jobId);
-                    startResumeStatePolling(jobId);
-                }
-            });
-            return;
-        }
+        askStartChoice({ jobId, currentStage, status }).then(choice => {
+            if (choice === 'old') {
+                if (blockIfReadOnly(jobId)) return;
+                // 先取得该工单的操作权；被其他页面占用时保持只读并提示接管。
+                claimJobLease(jobId).then(res => {
+                    if (!res.ok) return;
+                    // 失败状态才触发断点恢复；running/waiting 只重新连接现有作业。
+                    if (status === 'error' || status === 'failed') {
+                        resumeWorkflow(jobId);
+                    } else {
+                        addLog('🔄 重新连接作业: ' + jobId);
+                        connectWebSocket(jobId);
+                        startResumeStatePolling(jobId);
+                    }
+                });
+                return;
+            }
+            if (choice === 'new') {
+                createNewWorkflow();
+                return;
+            }
+            // 取消：不创建任何作业，旧作业保持原状
+            addLog('⏹️ 已取消启动：未创建新作业，旧作业保持原状', 'warning');
+        });
+        return;
     }
 
-    // 创建新作业
+    createNewWorkflow();
+}
+
+// 启动时发现未完成作业时的三选一弹窗；返回 'old' | 'new' | 'cancel'。
+let startChoiceResolver = null;
+
+function askStartChoice(info) {
+    return new Promise(resolve => {
+        const modal = document.getElementById('start-choice-modal');
+        const summary = document.getElementById('start-choice-summary');
+        if (!modal || !summary) { resolve('cancel'); return; }
+        summary.textContent =
+            `作业单号：${info.jobId}　当前阶段：${info.currentStage}　状态：${info.status}`;
+        startChoiceResolver = resolve;
+        modal.classList.add('active');
+    });
+}
+
+function resolveStartChoice(choice) {
+    const modal = document.getElementById('start-choice-modal');
+    if (modal) modal.classList.remove('active');
+    const resolve = startChoiceResolver;
+    startChoiceResolver = null;
+    if (resolve) resolve(choice);
+}
+
+// 创建新作业并启动（原先内联在 startWorkflow 里的那一段）。
+function createNewWorkflow() {
     resumeStatePollGeneration++;
     releaseJobLease();
     const app = buildApplicationJson();
@@ -1294,8 +1687,10 @@ function reconcilePendingConfirmation(workflowState, sourceLabel, suppressStage)
 
     if (!stage) return false;
 
-    if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== stage) {
-        const pendingData = workflowState.pending_data || {};
+    const pendingData = workflowState.pending_data || {};
+    const review = (pendingData[stage] || {}).pending || {};
+    const reviewChanged = review.approval_id && review.approval_id !== hitlModal.dataset.approvalId;
+    if (!hitlModal.classList.contains('active') || hitlModal.dataset.stage !== stage || reviewChanged) {
         showHitlModal(stage, pendingData[stage]);
         addLog('⏸️ ' + sourceLabel + '已到达人工确认: ' + stage, 'warning');
     }
@@ -1506,20 +1901,24 @@ function disconnectLogsWebSocket() {
     }
 }
 
-function fillMockData() {
-    fetch('/data/input/mock_job_content.json')
-        .then(r => r.json())
-        .then(data => {
-            const randomIndex = Math.floor(Math.random() * data.length);
-            const item = data[randomIndex];
-            state.mockApplication = JSON.parse(JSON.stringify(item));
-            if (state.inputSource === 'mock') applyApplicationToForm(item);
-        })
-        .catch(() => {});
-}
-
 function buildApplicationJson() {
-    const sourceApplication = state.inputSource === 'docx' ? state.realApplication : state.mockApplication;
+    if (state.inputSource === 'manual') {
+        const permitFields = collectPermitFieldValues();
+        const workTime = permitFields.work_time || {};
+        const workPeople = permitFields.work_people || '';
+        return {
+            input_source: 'manual',
+            permit_type: state.permitType,
+            permit_fields: permitFields,
+            // 同时给出下游沿用的申请字段，便于历史列表与后续阶段展示。
+            job_content: permitFields.work_content || '',
+            region: permitFields.area_unit || permitFields.work_place || '',
+            personnel: workPeople ? [{ name: workPeople }] : [],
+            planned_start: workTime.start || '',
+            planned_end: workTime.end || ''
+        };
+    }
+    const sourceApplication = state.realApplication;
     const application = sourceApplication ? JSON.parse(JSON.stringify(sourceApplication)) : {};
     delete application.person_name;
     delete application.person_badge;
@@ -1559,8 +1958,8 @@ function resetWorkflow() {
     state.selectedWorkflowNode = null;
     state.historyViewJobId = null;
     state.liveWorkflowState = null;
-    state.mockApplication = null;
     state.realApplication = null;
+    resetPermitFields();
     document.getElementById('history-view-banner').classList.remove('active');
     rememberActiveWorkflow(state.workflowState);
     renderWorkflowDiagram();
@@ -1575,7 +1974,7 @@ function resetWorkflow() {
     const fileInput = document.getElementById('permit-docx-file');
     if (fileInput) fileInput.value = '';
     setDocxStatus('请选择真实的 .docx 作业许可文件。解析后请核对并补充下方字段。');
-    selectInputSource('mock');
+    selectInputSource('manual');
 }
 
 function updateControlPanel() {
@@ -1822,14 +2221,16 @@ function permitField(label, value, cls = '') {
 }
 
 function normalizeHazards(jsa, permitContent) {
-    const raw = firstValue(jsa && jsa.hazards, permitContent && permitContent.hazards, []);
+    const raw = firstValue(jsa && jsa.hazards, jsa && jsa.steps, permitContent && permitContent.hazards, []);
     if (!Array.isArray(raw)) return [];
     return raw.map((hazard, index) => {
         if (typeof hazard === 'string') return { description: hazard, severity: '', measures: [] };
         return {
+            step: hazard.step || "",
+            consequence: hazard.consequence || "",
             description: firstValue(hazard.description, hazard.name, hazard.hazard, '风险 ' + (index + 1)),
             severity: firstValue(hazard.severity, hazard.level, ''),
-            measures: firstValue(hazard.measures, hazard.controls, [])
+            measures: firstValue(hazard.measures, hazard.controls, hazard.control ? [hazard.control] : [])
         };
     });
 }
@@ -1864,6 +2265,117 @@ function displayMissingField(value) {
     return text.replaceAll('_', ' ');
 }
 
+// 手动填报生成的许可证票面：按模板行渲染表格，colspan 还原合并单元格。
+function renderPermitTable(title, rows) {
+    let html = `<div class="permit-template-title">${escapeHtml(title)}</div>`;
+    html += '<table class="permit-template-table">';
+    for (const row of rows) {
+        html += '<tr>';
+        for (const cell of row) {
+            const span = Number(cell.colspan) > 1 ? ` colspan="${Number(cell.colspan)}"` : '';
+            html += `<td${span}>${escapeHtml(cell.text || '')}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</table>';
+    return html;
+}
+
+// 下载当前工单的许可证：服务端按模板即时生成 docx。
+function downloadPermitDocx() {
+    const confirmState = state.historyViewJobId
+        ? (state.liveWorkflowState || state.workflowState)
+        : state.workflowState;
+    const jobId = confirmState.thread_id || confirmState.jobId || confirmState.threadId;
+    if (!jobId) {
+        addLog('❌ 没有可下载的工单', 'error');
+        return;
+    }
+    const link = document.createElement('a');
+    // 必须用「相对当前页面」的路径，不能写绝对路径：
+    // 本前端会被 console 以 iframe 嵌到 /jobmon/index.html 下，而 console 只改写 fetch
+    // 调用里的 /api 前缀，不会改写 <a href>；写绝对路径会落到 console 自己的 /api/*
+    // （反代到 apiserver）而不是作业监测服务。相对路径在直连 8080 与 /jobmon 嵌入下都能解析正确。
+    link.href = 'api/workflow/permit-docx?job_id=' + encodeURIComponent(jobId);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
+function jsaDownloadUrl(detail) {
+    const jsa = (detail.permit || {}).jsa_result || (detail.p1_result || {}).jsa_result || {};
+    return jsa.source === 'ai' && jsa.report_path && detail.job_id
+        ? 'api/workflow/permit-docx?artifact=jsa&job_id=' + encodeURIComponent(detail.job_id) : '';
+}
+
+function renderJsaReport(detail) {
+    const p1 = detail.p1_result || {};
+    const jsa = (detail.permit || {}).jsa_result || p1.jsa_result || {};
+    let html = permitField('工单编号', detail.job_id);
+    if (jsa.source !== 'ai' || !Array.isArray(jsa.steps) || !jsa.steps.length) {
+        return html + `<div class="permit-warning">JSA 分析未完成：${escapeHtml(jsa.error || '该工单没有新版 JSA 报告，请重新开展分析。')}</div>`;
+    }
+    html += `<div class="permit-template-title">${escapeHtml(jsa.job_name || '作业')} JSA 分析报告</div>`;
+    let chapter = 0;
+    const section = (title, body) => `<div class="permit-section"><div class="permit-section-title">${++chapter}、${escapeHtml(title)}</div>${body}</div>`;
+    const text = value => `<div class="permit-value">${escapeHtml(displayValue(value))}</div>`;
+    const list = items => '<ul>' + (items || []).map(item => `<li>${escapeHtml(item)}</li>`).join('') + '</ul>';
+    const app = detail.application || {};
+    const fields = app.permit_fields || {};
+    html += section('作业基本信息', text((p1.jsa_info_lines || []).length ? p1.jsa_info_lines :
+        [jsa.job_name, fields.work_content || app.job_content, fields.work_place || app.region, jsa.type_name].filter(Boolean)));
+    html += section('作业风险概述', text(jsa.risk_summary));
+    html += section('作业前安全确认要求', list(jsa.pre_checks));
+    const rows = jsa.steps.map(step => '<tr>' + ['step', 'hazard', 'consequence', 'level', 'control'].map(key =>
+        `<td>${escapeHtml(displayValue(step[key]))}</td>`).join('') + '</tr>').join('');
+    html += section('JSA 风险分析', '<table class="permit-table"><thead><tr><th>作业步骤</th><th>主要危险</th><th>可能后果</th><th>风险等级</th><th>控制措施</th></tr></thead><tbody>' + rows + '</tbody></table>');
+    for (const special of jsa.special_sections || []) html += section(special.title, list(special.items));
+    html += section('应急处置要求', text(jsa.emergency));
+    html += section('作业前最终确认清单', list(jsa.final_checklist));
+    html += '<div class="permit-value">由系统生成，须作业单位确认。</div>';
+    return html;
+}
+
+function renderP1Review(detail) {
+    const p1 = detail.p1_result || {};
+    const pending = p1.pending_confirmation || {};
+    const isJsa = pending.type === 'jsa_approval';
+    const modal = document.getElementById('hitl-modal');
+    modal.dataset.approvalId = pending.approval_id || '';
+    document.getElementById('modal-title').textContent = isJsa ? 'P1 - JSA 报告审核' : 'P1 - 作业票审批';
+    document.getElementById('modal-subtitle').textContent = isJsa ? '批准 JSA 后，系统才会判定安全措施并生成作业票' : '请核对作业票并审批';
+    const download = document.getElementById('jsa-download-button');
+    const url = jsaDownloadUrl(detail);
+    download.style.display = isJsa && url ? '' : 'none';
+    if (isJsa && url) download.href = url;
+    else download.removeAttribute('href');
+    if (!isJsa) return renderP1Approval(detail);
+    document.getElementById('permit-download-button').style.display = 'none';
+    const jsa = p1.jsa_result || {};
+    const approve = document.getElementById('hitl-approve-button');
+    approve.disabled = jsa.source !== 'ai' || !(jsa.steps || []).length;
+    approve.title = approve.disabled ? 'JSA 未成功生成，不能批准并出票' : '';
+    return renderJsaReport(detail);
+}
+
+function renderHistoryDocument(showJsa) {
+    const detail = state.historyPermitDetail;
+    if (!detail) return;
+    const p1 = detail.p1_result || {};
+    const content = (detail.permit || {}).permit_content || p1.permit_content || {};
+    const hasPermit = Object.keys(content).length > 0;
+    showJsa = showJsa || !hasPermit;
+    document.getElementById('history-permit-title').textContent = (showJsa ? 'JSA 报告：' : '历史作业单：') + detail.job_id;
+    document.getElementById('history-permit-content').innerHTML = showJsa ? renderJsaReport(detail) : renderP1Approval(detail, false);
+    document.getElementById('history-show-jsa').style.display = showJsa ? 'none' : '';
+    document.getElementById('history-show-permit').style.display = showJsa && hasPermit ? '' : 'none';
+    const link = document.getElementById('history-jsa-download');
+    const url = jsaDownloadUrl(detail);
+    link.style.display = showJsa && url ? '' : 'none';
+    if (showJsa && url) link.href = url;
+    else link.removeAttribute('href');
+}
+
 function renderP1Approval(detail, manageApprovalButton = true) {
     const application = detail.application || {};
     const permit = detail.permit || {};
@@ -1882,7 +2394,7 @@ function renderP1Approval(detail, manageApprovalButton = true) {
         jobContent && jobContent.includes('：') ? jobContent.split('：')[0] : '');
     const hazards = normalizeHazards(jsa, content);
     const standaloneMeasures = firstValue(content.measures, jsa.measures, []);
-    const hazardRows = hazards.map(hazard => `<tr><td>${escapeHtml(displayValue(hazard.description))}</td><td>${escapeHtml(displayValue(hazard.severity, '未分级'))}</td><td>${escapeHtml(displayValue(hazard.measures, '待补充'))}</td></tr>`).join('');
+    const hazardRows = hazards.map(hazard => `<tr><td>${escapeHtml(displayValue(hazard.step))}</td><td>${escapeHtml(displayValue(hazard.description))}</td><td>${escapeHtml(displayValue(hazard.consequence))}</td><td>${escapeHtml(displayValue(hazard.severity, '未分级'))}</td><td>${escapeHtml(displayValue(hazard.measures, '待补充'))}</td></tr>`).join('');
     const gasRecords = firstValue(content.gas_detection, application.gas_detection, permit.gas_detection, []);
     const gasRows = Array.isArray(gasRecords) ? gasRecords.map(record => `<tr><td>${escapeHtml(displayValue(record.time || record.detected_at))}</td><td>${escapeHtml(displayValue(record.location))}</td><td>${escapeHtml(displayValue(firstValue(record.oxygen, record.oxygen_percent)))}</td><td>${escapeHtml(displayValue(firstValue(record.lel, record.lel_percent)))}</td><td>${escapeHtml(displayValue(firstValue(record.toxic_gas, record.toxic)))}</td><td>${escapeHtml(displayValue(firstValue(record.result, record.qualified)))}</td></tr>`).join('') : '';
     const missing = [...new Set([...(p1.missing_fields || []), ...(content.missing_fields || []), ...(permit.missing_fields || [])])];
@@ -1892,7 +2404,13 @@ function renderP1Approval(detail, manageApprovalButton = true) {
     const relatedPermits = firstValue(content.related_permits, application.related_permits, application.related_work_permits, []);
     const attachments = firstValue(content.attachments, application.attachments, []);
 
-    let html = '<div class="permit-approval-grid">';
+    let html = '';
+    const templateRows = Array.isArray(content.permit_rows) ? content.permit_rows : [];
+    if (templateRows.length) {
+        // 手动填报生成的许可证：票面表格本身就是审批对象，直接按模板行渲染。
+        html += renderPermitTable(content.permit_title || '作业许可证', templateRows);
+    } else {
+    html += '<div class="permit-approval-grid">';
     html += permitField('作业编号', firstValue(permit.permit_draft_id, p1.permit_draft_id, detail.job_id));
     html += permitField('作业类型', jobType);
     html += permitField('作业等级', firstValue(content.job_level, application.job_level));
@@ -1907,9 +2425,35 @@ function renderP1Approval(detail, manageApprovalButton = true) {
     html += permitField('关联许可证', relatedPermits, 'wide');
     html += permitField('附件', attachments, 'full');
     html += '</div>';
+    }
+
+    html += '<div class="permit-section"><div class="permit-section-title">安全措施判定</div>';
+    const measureDecisions = content.measure_decisions || {};
+    const decidedItems = Array.isArray(measureDecisions.items) ? measureDecisions.items : [];
+    const measureCatalog = Array.isArray(content.safety_measures_catalog) ? content.safety_measures_catalog : [];
+    if (measureDecisions.source === 'ai') {
+        const needCount = decidedItems.filter(item => item.needed === true).length;
+        html += `<div class="permit-value">AI 已逐条判定 ${decidedItems.length} 条安全措施：<b>需要 ${needCount} 条（√）</b>、不涉及 ${decidedItems.length - needCount} 条（×）。请复核措施是否到位，并在「确认人」处签字。</div>`;
+        if (measureCatalog.length) {
+            const measureRows = measureCatalog.map(item => {
+                const ai = item.ai_needed;
+                const aiMark = ai === true ? '√' : (ai === false ? '×' : '—');
+                const humanMark = item.selected === true ? '√' : (item.selected === false ? '×' : '—');
+                return `<tr><td>${escapeHtml(displayValue(item.sequence))}</td><td>${escapeHtml(displayValue(item.description))}</td><td>${aiMark}</td><td>${humanMark}</td></tr>`;
+            }).join('');
+            html += `<table class="permit-table"><thead><tr><th>序号</th><th>安全措施</th><th>AI 判定</th><th>上传票原勾选</th></tr></thead><tbody>${measureRows}</tbody></table>`;
+        }
+    } else if (measureDecisions.source === 'unavailable') {
+        html += `<div class="permit-warning">⚠️ AI 未完成安全措施判定，请人工逐条勾选后再批准。${measureDecisions.error ? '（原因：' + escapeHtml(displayValue(measureDecisions.error)) + '）' : ''}</div>`;
+    } else if (measureDecisions.source === 'no-measures') {
+        html += '<div class="permit-value">该类型的许可证没有可判定的安全措施清单（如临时用电的检查项是另一套表单），请按票面要求人工确认。</div>';
+    } else {
+        html += '<div class="permit-value">本次没有生成安全措施判定结果。</div>';
+    }
+    html += '</div>';
 
     html += '<div class="permit-section"><div class="permit-section-title">风险与削减措施</div>';
-    if (hazardRows) html += `<table class="permit-table"><thead><tr><th>风险</th><th>等级</th><th>对应措施</th></tr></thead><tbody>${hazardRows}</tbody></table>`;
+    if (hazardRows) html += `<table class="permit-table"><thead><tr><th>作业步骤</th><th>风险</th><th>可能后果</th><th>等级</th><th>对应措施</th></tr></thead><tbody>${hazardRows}</tbody></table>`;
     else html += `<div class="permit-value">${escapeHtml(displayValue(standaloneMeasures, '尚未生成 JSA 风险—措施对应关系'))}</div>`;
     html += '</div>';
 
@@ -1929,6 +2473,9 @@ function renderP1Approval(detail, manageApprovalButton = true) {
         const approveButton = document.getElementById('hitl-approve-button');
         approveButton.disabled = critical.length > 0;
         approveButton.title = critical.length ? '存在关键缺失项：' + critical.map(displayMissingField).join('、') : '';
+        // 只有手动填报的工单带模板票面，才有可下载的许可证。
+        const downloadButton = document.getElementById('permit-download-button');
+        if (downloadButton) downloadButton.style.display = templateRows.length ? '' : 'none';
     }
     return html;
 }
@@ -1949,8 +2496,11 @@ function showHitlModal(stage, data) {
     const modalCard = document.getElementById('hitl-modal-card');
     const approveButton = document.getElementById('hitl-approve-button');
     modalCard.classList.toggle('p1-approval-modal', baseStage === 'P1');
-    approveButton.disabled = false;
+    approveButton.disabled = baseStage === 'P1';
     approveButton.title = '';
+    document.getElementById('jsa-download-button').style.display = 'none';
+    // 许可证下载只在 P1 的模板票面上出现，默认隐藏。
+    document.getElementById('permit-download-button').style.display = 'none';
 
     const evidenceSection = document.getElementById('modal-evidence-section');
     const suggestionSection = document.getElementById('modal-suggestion-section');
@@ -1971,6 +2521,9 @@ function showHitlModal(stage, data) {
 
     const hitlModal = document.getElementById('hitl-modal');
     hitlModal.dataset.stage = stage;
+    hitlModal.dataset.approvalId = pendingInfo.approval_id || '';
+    const reviewRequest = String(Date.now()) + Math.random();
+    hitlModal.dataset.reviewRequest = reviewRequest;
     hitlModal.classList.add('active');
 
     if (baseStage === 'P1') {
@@ -1979,16 +2532,17 @@ function showHitlModal(stage, data) {
             ? (state.liveWorkflowState || state.workflowState)
             : state.workflowState;
         const jobId = liveState.thread_id || liveState.jobId || liveState.threadId;
-        infoContent.textContent = '正在加载作业票内容...';
+        infoContent.textContent = '正在加载审批内容...';
         fetch('/api/workflow/job-detail?job_id=' + encodeURIComponent(jobId))
             .then(r => r.json())
             .then(detail => {
-                if (hitlModal.dataset.stage !== stage || !hitlModal.classList.contains('active')) return;
+                if (hitlModal.dataset.reviewRequest !== reviewRequest || hitlModal.dataset.stage !== stage || !hitlModal.classList.contains('active')) return;
                 if (detail.error) throw new Error(detail.error || '读取作业票失败');
-                infoContent.innerHTML = renderP1Approval(detail);
+                infoContent.innerHTML = renderP1Review(detail);
             })
             .catch(err => {
-                infoContent.innerHTML = '<div class="permit-missing">作业票内容加载失败：' + escapeHtml(err.message) + '</div>';
+                if (hitlModal.dataset.reviewRequest !== reviewRequest || !hitlModal.classList.contains('active')) return;
+                infoContent.innerHTML = '<div class="permit-missing">审批内容加载失败：' + escapeHtml(err.message) + '</div>';
                 approveButton.disabled = true;
             });
     }
@@ -1998,6 +2552,8 @@ function closeModal() {
     const hitlModal = document.getElementById('hitl-modal');
     hitlModal.classList.remove('active');
     delete hitlModal.dataset.stage;
+    delete hitlModal.dataset.approvalId;
+    delete hitlModal.dataset.reviewRequest;
 }
 
 function resyncWorkflowState(jobId, sourceLabel, suppressStage) {
@@ -2058,6 +2614,7 @@ function confirmDecision(decision) {
         return;
     }
 
+    const approvalId = hitlModal.dataset.approvalId || '';
     addLog(`${decision === 'approve' ? '✅ 批准' : '⛔ 否决'} ${stage}`);
     addLog(`📤 发送确认请求: thread_id=${jobId}, stage=${stage}, decision=${decision}`);
 
@@ -2072,6 +2629,7 @@ function confirmDecision(decision) {
             thread_id: jobId,
             stage: stage,
             decision: decision,
+            approval_id: approvalId,
             holder_id: getHolderId(),
             async_execute: true  // 异步执行，点击确认后立即返回
         })
@@ -2099,7 +2657,7 @@ function confirmDecision(decision) {
             addLog(`ℹ️ ${stage} 本次审批未生效：${why}，本页审批窗口已关闭`, 'warning');
             if (data.message) addLog(`ℹ️ ${data.message}`);
             closeModal();
-            resyncWorkflowState(jobId, '审批未生效', stage);
+            resyncWorkflowState(jobId, '审批未生效', stage === 'P1' ? '' : stage);
         } else if (data.status === 'error') {
             addLog(`❌ ${stage} 审批失败：${data.error || '服务端返回错误'}`, 'error');
             closeModal();

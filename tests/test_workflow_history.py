@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agents.p1_permit_agent import _build_fallback_permit
+from agents.p1_permit_agent import _build_permit_content
 from web.api.workflow import handle_workflow_history, handle_workflow_job_detail
 
 
@@ -101,7 +101,14 @@ class WorkflowHistoryApiTests(unittest.TestCase):
 
 
 class PermitFallbackTests(unittest.TestCase):
-    def test_hot_work_fallback_uses_application_instead_of_fixed_mock(self):
+    """作业票内容的兜底：取自申请本身，**不再顺带伪造一份 JSA**。
+
+    早先这里按作业类型塞一份写死的 hazards 冒充 JSA 结果（"火灾、爆炸 / 可燃气体超限"
+    那三条），既与本次作业无关，又会和真分析打架。JSA 现在由 `_build_jsa_result`
+    走分析链路单独产出，跑不出结果就留空。
+    """
+
+    def test_permit_content_comes_from_application_without_fake_jsa(self):
         application = {
             "job_content": "对 F-0102 进行动火焊接",
             "region": "催化装置",
@@ -111,11 +118,12 @@ class PermitFallbackTests(unittest.TestCase):
             "planned_end": "2026-09-09T17:00:00+08:00",
             "job_level": "二级",
         }
-        jsa, permit, missing = _build_fallback_permit(application, "20260909120000004")
+        permit, missing = _build_permit_content(application)
         self.assertEqual(permit["job_type"], "动火作业")
         self.assertEqual(permit["equipment"], ["F-0102"])
-        self.assertTrue(any(item["description"] == "火灾、爆炸" for item in jsa["hazards"]))
         self.assertEqual(missing, [])
+        self.assertEqual(permit["hazards"], [], "兜底不该再塞写死的危害")
+        self.assertEqual(permit["measures"], [])
 
 
 if __name__ == "__main__":
