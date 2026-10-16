@@ -1,0 +1,27 @@
+# Whitelist only P_skill/ and skill_decoupling‌/ (trailing U+200C).
+# Everything else at root is ignored. X86_64/ and arm_64/ are also ignored.
+# Inner .gitignore files in P_skill/ and skill_decoupling‌/ filter
+# .runtime/, __pycache__/, *.pyc, .venv/, data/, etc.
+/*
+!/.gitignore
+!/P_skill/
+!/skill_decoupling‌/
+
+# Local runtimes, credentials, caches and generated state.
+**/.runtime/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+**/node_modules/
+**/data/
+**/state/
+*.py[cod]
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+!.env.sample

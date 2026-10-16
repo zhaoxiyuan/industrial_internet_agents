@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "claim_description",
+      "description": "P7领取最早描述，逐份串行；no_work/blocked退出。当前领取由后台绑定，complete_assessment不传claim，提交后继续领取，不能一份就退出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 1800,
+            "description": "领取或续租秒数，30–1800整数；可选领取参数默认600。"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:claim_description",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90,
+      "claim_failure": "fail_description"
+    },
+    {
+      "name": "complete_assessment",
+      "description": "只传assessments，后台关联本轮当前领取，不传claim/id/token。每个含异常段的key恰好一条assessment；正常/未知描述传assessments=[]。成功后closed_events逐项read_event→report_closed_event，再claim_description。工具负责事件聚合/恢复与通知入队。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "assessments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "事实回执中的风险key，原样使用，不能自行创造、合并主体或省略异常。"
+                },
+                "risk_level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5,
+                  "description": "0–5整数，依据可信规则和证据；事件持续更新保留历史最大研判等级，人工处置等级另有受控覆盖。"
+                },
+                "basis": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 6000,
+                  "description": "真实归属或风险研判依据。Main可使用用户确认的一句归属说明，无需附加文件号或附件。"
+                },
+                "advice": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "maxItems": 1000,
+                  "description": "处置建议字符串数组，不能声称建议已执行。"
+                }
+              },
+              "required": [
+                "key",
+                "risk_level",
+                "basis",
+                "advice"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000,
+            "description": "每个含异常key一项{key,risk_level,basis,advice}；全正常或未知传[]仍提交。"
+          }
+        },
+        "required": [
+          "assessments"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:complete_assessment",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "report_closed_event",
+      "description": "对已结束事件生成一次最终报告，event_id与summary必填。未结束不归档，不代表人工处置关闭。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "持久P7事件ID，来自changed_events/closed_events/unreported或实际队列。"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "本次事实/最终事件摘要，限6000字符；只概括证据支持的信息，不用空结果冒充完成。"
+          }
+        },
+        "required": [
+          "event_id",
+          "summary"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:report_closed_event",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "read_event",
+      "description": "读取当前授权事件的完整事实、证据和状态，归档前核实。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "持久P7事件ID，来自changed_events/closed_events/unreported或实际队列。"
+          }
+        },
+        "required": [
+          "event_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_event",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "renew_description_lease",
+      "description": "只传lease_seconds，自动续租本轮当前领取；不能复活过期领取，不延长Agent执行超时。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 1800,
+            "description": "领取或续租秒数，30–1800整数；可选领取参数默认600。"
+          }
+        },
+        "required": [
+          "lease_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:renew_description_lease",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "fail_description",
+      "description": "真实失败且未提交时记录reason，claim可省略按当前run回收；已完成不回退，交Main有限恢复。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "description": "对象类型；在claim中必须原样使用领取类型，在retry_failed中按工具枚举选择。"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "领取记录标识，必须来自领取回执；证据引用内id是正整数数据库主键。"
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "description": "有效领取凭证，原样传回，不猜测、不外传。"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "token"
+            ],
+            "additionalProperties": false,
+            "description": "原样使用领取工具返回的kind/id/token；平台和业务侧校验角色、归属、期限，不复制到用户回复。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:fail_description",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    }
+  ]
+}

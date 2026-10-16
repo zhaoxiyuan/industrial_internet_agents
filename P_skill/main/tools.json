@@ -1,0 +1,407 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "bind_work_permit",
+      "description": "无活动票时登记；job_id=permit_id=用户票号，精确开始时间必填；人员/设备至少一类非空，basis为用户归属确认。用户指定registered须传operators/reviewers。不同票占用禁止覆盖，同票须参数一致。成功返回bound后查query_pipeline。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "作业业务标识。Main绑定时原样使用唯一作业票号码，与permit_id相同。"
+          },
+          "permit_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "作业票号码；Main绑定时与job_id完全相同，不要求第二个号码。"
+          },
+          "start_time": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户提供或可信票证已有的开始时刻，需明确日期和时区；转换为带时区ISO8601，不自行选当前时间。"
+          },
+          "end_time": {
+            "type": "string",
+            "minLength": 1,
+            "description": "可选归属终点；不设置时省略，不传空字符串。提供必须晚于start_time，不代表自动结束监测或风险。"
+          },
+          "person_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 1000,
+            "description": "可信采集人员ID数组，与sensor_ids至少一类非空；无人员范围时传[]，不从姓名猜ID。"
+          },
+          "sensor_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 1000,
+            "description": "可信传感器/设备ID数组，与person_ids至少一类非空；无设备范围时传[]。"
+          },
+          "area_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 1000,
+            "description": "可选业务区域ID数组；不凭区域信息替代必需的人员或设备范围。"
+          },
+          "operators": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 1000
+              },
+              {
+                "const": "registered"
+              }
+            ],
+            "description": "明确处置人ID数组，或registered表示P8/P9绑定飞书连接.env中的全部已登记用户；省略登记时为空、更新时保持，[]无人授权。"
+          },
+          "reviewers": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 1000
+              },
+              {
+                "const": "registered"
+              }
+            ],
+            "description": "明确审核人ID数组，或registered表示当前连接.env中的全部已登记用户；回调按最新目录校验，不是任意人。[]无人授权，模型意见不赋予审批权限。"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "真实归属或风险研判依据。Main可使用用户确认的一句归属说明，无需附加文件号或附件。"
+          }
+        },
+        "required": [
+          "job_id",
+          "permit_id",
+          "start_time",
+          "person_ids",
+          "sensor_ids",
+          "basis"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:bind_work_permit",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "query_pipeline",
+      "description": "Main首步传{}。当前票号只取回执job.job_id，与用户目标逐字比较，不同则停止调度并报告冲突。active只表示票未关，不证明心跳运行；心跳须另查get_heartbeat_channels。work_permit_required才绑定。平台task_id不是票号。",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:query_pipeline",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "retry_failed",
+      "description": "恢复失败description/report/event_notification，传原record_id及reason；先核对未成功落库，不重发结果未知的飞书通知。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "description",
+              "report",
+              "event_notification"
+            ],
+            "description": "对象类型；在claim中必须原样使用领取类型，在retry_failed中按工具枚举选择。"
+          },
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "使用对应工具返回的记录ID。下游业务重试按kind使用业务记录ID；P6按时间恢复。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "kind",
+          "record_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:retry_failed",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "reopen_monitoring",
+      "description": "用户明确要求时恢复尚未关闭作业的监测，reason必填；保留历史与归属。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:reopen_monitoring",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "configure_schedule",
+      "description": "绑定后设置业务window_seconds和max_parallel，不创建心跳；窗口已领取则时长锁定。随后list_time_windows查进度。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "window_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300,
+            "description": "当前作业窗口N，由Main configure_schedule设置，1–300整数秒；不是P6任务入参或心跳间隔H。"
+          },
+          "max_parallel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          }
+        },
+        "required": [
+          "window_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:configure_schedule",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "list_time_windows",
+      "description": "查询时间窗与连续完成进度，不领取。默认{}，可limit/start_time/state筛选。返回windows、continuous_completed_through、source_through、pending_count/failed_count/available_slots；无数据不要空转。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "start_time": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户提供或可信票证已有的开始时刻，需明确日期和时区；转换为带时区ISO8601，不自行选当前时间。"
+          },
+          "state": {
+            "enum": [
+              "all",
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "retry_ready"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:list_time_windows",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "retry_time_window",
+      "description": "按list_time_windows原始start_time恢复失败窗，reason必填，最多3次。成功窗不重做，保留历史，不跳过前序。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户提供或可信票证已有的开始时刻，需明确日期和时区；转换为带时区ISO8601，不自行选当前时间。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "start_time",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:retry_time_window",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "close_time_monitoring",
+      "description": "用户明确要求停止监测即调用，不等截止或窗口完成。reason必填；cutoff省略取工具当前时间，可非窗口边界。保留未完成记录并停用本票P6心跳；不等于人工关票。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cutoff": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户明确要求结束监测的带时区截止时间，需与实际已处理终点一致；不是计划end_time。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:close_time_monitoring",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "configure_participants",
+      "description": "更新当前票operators/reviewers：ID数组或registered（真实绑定连接登记名单）。省略保持，[]清空，reason必填；不代替人工审核。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "operators": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 1000
+              },
+              {
+                "const": "registered"
+              }
+            ],
+            "description": "明确处置人ID数组，或registered表示P8/P9绑定飞书连接.env中的全部已登记用户；省略登记时为空、更新时保持，[]无人授权。"
+          },
+          "reviewers": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 1000
+              },
+              {
+                "const": "registered"
+              }
+            ],
+            "description": "明确审核人ID数组，或registered表示当前连接.env中的全部已登记用户；回调按最新目录校验，不是任意人。[]无人授权，模型意见不赋予审批权限。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:configure_participants",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    }
+  ]
+}

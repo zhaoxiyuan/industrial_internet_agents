@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "read_current_window",
+      "description": "P6首步传{}，自动领取最早一窗；同run重读仍同窗。返回monitoring_data、observations、required_observations。no_work/blocked退出；completed不重做；否则分析后save_current_description。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户提供或可信票证已有的开始时刻，需明确日期和时区；转换为带时区ISO8601，不自行选当前时间。"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_current_window",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90,
+      "claim_failure": "fail_current_window"
+    },
+    {
+      "name": "read_current_evidence",
+      "description": "核实当前窗证据，不另领取。observation为观测序号；source可ppe/sensor/position/cv。CV按next_cursor翻页直到has_more=false。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "observation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "enum": [
+              "ppe",
+              "sensor",
+              "position",
+              "cv"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_current_evidence",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "save_current_description",
+      "description": "提交一窗描述：summary、descriptions、limitations必填。每个required_observations序号恰好一项，含observation/state/explanation；变化用exceptions（1起闭区间，递增不重叠）。缺测unknown。成功后退出P6；结果不明先读当前窗核对。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "本次事实/最终事件摘要，限6000字符；只概括证据支持的信息，不用空结果冒充完成。"
+          },
+          "descriptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "observation": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "state": {
+                  "enum": [
+                    "normal",
+                    "abnormal",
+                    "unknown"
+                  ]
+                },
+                "exceptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "from_sample": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "to_sample": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "state": {
+                        "enum": [
+                          "normal",
+                          "abnormal",
+                          "unknown"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "from_sample",
+                      "to_sample",
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxItems": 1000
+                },
+                "explanation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 6000,
+                  "description": "本key的客观事实、对应证据及限制；不在P6中输出风险等级或结束结论。"
+                }
+              },
+              "required": [
+                "observation",
+                "state",
+                "explanation"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000,
+            "description": "所有观测通道各一项{observation,state,explanation,exceptions?}；state为默认判断，exceptions用from_sample/to_sample覆盖变化段；正常通道也须提交。"
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 1000,
+            "description": "事实/材料缺测、不可读及证据范围等限制字符串列表，没有额外限制传[]。"
+          }
+        },
+        "required": [
+          "summary",
+          "descriptions",
+          "limitations"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:save_current_description",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "fail_current_window",
+      "description": "本窗确实无法提交时保存reason，交Main恢复；不需ID，不覆盖已完成结果。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:fail_current_window",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    }
+  ]
+}

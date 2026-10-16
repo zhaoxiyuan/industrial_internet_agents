@@ -1,0 +1,404 @@
+{
+  "verified_at": "2026-10-13",
+  "environment": "Mac isolated deployment; Linux Docker Desktop",
+  "model": "MiniMax-M3 real calls",
+  "source_data": "synthetic test fixture, 3 windows of 2 seconds",
+  "feishu": "mock HTTP; real delivery skipped by request",
+  "human_actions": "synthetic fixture, not actual human approval",
+  "job_id": "20261013000000001",
+  "job_status": "active",
+  "task_count_including_debug_history": 37,
+  "tool_run_count_including_debug_history": 229,
+  "tasks": [
+    {
+      "id": "256ff3b31b8248d4888075ef79458cd3",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "5527e5706d3b42348ecd8948fe494cad",
+      "agent_id": "cd59ae32e7154243b39b9f3c32308f43",
+      "parent_task_id": "256ff3b31b8248d4888075ef79458cd3",
+      "status": "succeeded",
+      "role": "p6"
+    },
+    {
+      "id": "5186beaa527d44c9a58c1dcb325564ad",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "7093c1f8ad7a4444ba696f621ba55789",
+      "agent_id": "30f30785b8234f289b36fb108e5a7f59",
+      "parent_task_id": "5186beaa527d44c9a58c1dcb325564ad",
+      "status": "succeeded",
+      "role": "p7"
+    },
+    {
+      "id": "7d92c4e848bb469193fc77444a1cc773",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "ab621c4cd845489f869ddb1838d1b7d6",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "599d164ce93d4de3b86893ffb58a9e02",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "2066d009e172488b91bac71fc79dd6dc",
+      "agent_id": "cd59ae32e7154243b39b9f3c32308f43",
+      "parent_task_id": "599d164ce93d4de3b86893ffb58a9e02",
+      "status": "succeeded",
+      "role": "p6"
+    },
+    {
+      "id": "db70e66a9b8044369c83cdf3c4b113c0",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "7a199445fe1c43f0a13b7f24789243ab",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "7ed4139221294dc5b53193177c633209",
+      "agent_id": "cd59ae32e7154243b39b9f3c32308f43",
+      "parent_task_id": "7a199445fe1c43f0a13b7f24789243ab",
+      "status": "succeeded",
+      "role": "p6"
+    },
+    {
+      "id": "a2fca409b5c04f03a91e670aecae32b5",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "e8ad6613949043af8d52a55193e32e4b",
+      "agent_id": "30f30785b8234f289b36fb108e5a7f59",
+      "parent_task_id": "a2fca409b5c04f03a91e670aecae32b5",
+      "status": "succeeded",
+      "role": "p7"
+    },
+    {
+      "id": "00af52efbafd4161be623cd8b2d11103",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "b4eb44309ac64c20b6b1c996da6a5e21",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "bbc2c9f8e1a145efa6dd6da827068a29",
+      "agent_id": "cd59ae32e7154243b39b9f3c32308f43",
+      "parent_task_id": "b4eb44309ac64c20b6b1c996da6a5e21",
+      "status": "succeeded",
+      "role": "p6"
+    },
+    {
+      "id": "f4e3ea8a2f61444bb52ba4299208b640",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "272bae489dd54200aefef6c7307b12e8",
+      "agent_id": "30f30785b8234f289b36fb108e5a7f59",
+      "parent_task_id": "f4e3ea8a2f61444bb52ba4299208b640",
+      "status": "succeeded",
+      "role": "p7"
+    },
+    {
+      "id": "3a2c0a179735449f858d92a7dae2d24d",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "a723970ad5914a76be0a3281db9a581c",
+      "agent_id": "cd59ae32e7154243b39b9f3c32308f43",
+      "parent_task_id": "3a2c0a179735449f858d92a7dae2d24d",
+      "status": "succeeded",
+      "role": "p6"
+    },
+    {
+      "id": "79af998c63f8406eac753046f089a86b",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "f461d959da0f48fd9a471352b78e2889",
+      "agent_id": "30f30785b8234f289b36fb108e5a7f59",
+      "parent_task_id": "79af998c63f8406eac753046f089a86b",
+      "status": "succeeded",
+      "role": "p7"
+    },
+    {
+      "id": "9713a11413d1406eb6c062fa3af15807",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "5178133bf57c45a882a146721bce0f55",
+      "agent_id": "74d9deae6f1348e8a6c0f7b54af463e8",
+      "parent_task_id": "9713a11413d1406eb6c062fa3af15807",
+      "status": "succeeded",
+      "role": "p8p9"
+    },
+    {
+      "id": "af9c0b3068734d1591fa73af496286a4",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "827728682ebc4e52a1744a8008ec6f35",
+      "agent_id": "74d9deae6f1348e8a6c0f7b54af463e8",
+      "parent_task_id": "af9c0b3068734d1591fa73af496286a4",
+      "status": "succeeded",
+      "role": "p8p9"
+    },
+    {
+      "id": "6750f806b0484898981b7ef508cd386c",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "6366e3d9cacc4661b534aab2b3432885",
+      "agent_id": "74d9deae6f1348e8a6c0f7b54af463e8",
+      "parent_task_id": "6750f806b0484898981b7ef508cd386c",
+      "status": "succeeded",
+      "role": "p8p9"
+    },
+    {
+      "id": "246a85511230456981dd685449d279bf",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "84414c4cf0f545999ce8ca745395957b",
+      "agent_id": "74d9deae6f1348e8a6c0f7b54af463e8",
+      "parent_task_id": "246a85511230456981dd685449d279bf",
+      "status": "succeeded",
+      "role": "p8p9"
+    },
+    {
+      "id": "1a8a541d050e4c86bc163a43ec4713f2",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "63fdffec0d684ee18c806ac687f21ec7",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "08526edc22434d9faed2ae7c171d050b",
+      "agent_id": "a503b3bac4ec40efb80502512dd9fc64",
+      "parent_task_id": "63fdffec0d684ee18c806ac687f21ec7",
+      "status": "succeeded",
+      "role": "p10_access"
+    },
+    {
+      "id": "edd50d1fd7e2494797c51048729293a1",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "75239916cde64b729ced037762646819",
+      "agent_id": "f8af8f11edf14d94af7211d69c09a714",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "main"
+    },
+    {
+      "id": "67ebb50cedbb4a86801a4ad85878a0ea",
+      "agent_id": "a503b3bac4ec40efb80502512dd9fc64",
+      "parent_task_id": "75239916cde64b729ced037762646819",
+      "status": "succeeded",
+      "role": "p10_access"
+    },
+    {
+      "id": "3883675329d54257a1ac521388d944a5",
+      "agent_id": "a503b3bac4ec40efb80502512dd9fc64",
+      "parent_task_id": null,
+      "status": "succeeded",
+      "role": "p10_access"
+    }
+  ],
+  "events": [
+    {
+      "id": "da722717cb31e37847741366c3af334f",
+      "risk_item": "goggles",
+      "state": "closed",
+      "windows": 2
+    },
+    {
+      "id": "e7ea6b836a81c82b7ea8ad23a875ba5a",
+      "risk_item": "helmet",
+      "state": "closed",
+      "windows": 3
+    }
+  ],
+  "dispositions": [
+    {
+      "id": "5d41cda99550678d6d5f485f14519469",
+      "status": "closed",
+      "delivery": {
+        "status": "simulated",
+        "card_id": "card-1",
+        "message_id": "msg-3",
+        "sequence": 3,
+        "evidence": "mock_http_receipt"
+      }
+    },
+    {
+      "id": "625eea4b513b923b6171229be51e46c8",
+      "status": "closed",
+      "delivery": {
+        "status": "simulated",
+        "card_id": "card-2",
+        "message_id": "msg-5",
+        "sequence": 3,
+        "evidence": "mock_http_receipt"
+      }
+    }
+  ],
+  "p10": {
+    "contains_mock": true,
+    "export_id": "9e73a888ddf15e85d169f320ba9cc9df",
+    "id": "9e73a888ddf15e85d169f320ba9cc9df",
+    "job_id": "20261013000000001",
+    "result": {
+      "command": "p10_generate_report",
+      "errors": [],
+      "result": {
+        "completed": true,
+        "contains_mock": true,
+        "job_id": "20261013000000001",
+        "local_docx_path": "/business/exports/9e73a888ddf15e85d169f320ba9cc9df/jobs/20261013000000001/P10/reports/RPT-20261013000000001-481e271b116c/report.docx",
+        "local_report_json_path": "/business/exports/9e73a888ddf15e85d169f320ba9cc9df/jobs/20261013000000001/P10/reports/RPT-20261013000000001-481e271b116c/report.json",
+        "report_id": "RPT-20261013000000001-481e271b116c",
+        "snapshot_id": "cf03a049-66a3-4d25-bc39-f7c723f699c0",
+        "stage": "P10",
+        "status": "generated",
+        "template_id": "work-ticket-report-v1",
+        "template_version": "1.1.0",
+        "validation": {
+          "page_count": 4,
+          "render_validation": "passed",
+          "sha256": "f5ca5ca12a4fa2c8e05a258f6b5ec024ca7c641d5630a522960f180f3c65c3a0",
+          "structural_validation": "passed",
+          "visual_review": "pending"
+        }
+      },
+      "schema_version": "1.0",
+      "timestamp": "2026-10-13T05:39:34.527903+00:00"
+    },
+    "scope_gaps": [
+      "P1-P5 not implemented",
+      "Per-event review details retained in lineage, not flattened into original job review"
+    ],
+    "status": "completed",
+    "tool_calls": [
+      {
+        "name": "p10_get_template_contract"
+      },
+      {
+        "name": "p10_query_closure_state"
+      },
+      {
+        "name": "p10_query_monitor_events"
+      },
+      {
+        "name": "p10_query_risk_assessments"
+      }
+    ],
+    "version": 2
+  },
+  "historical_failures": [
+    "Docker Desktop socket path, repaired locally then synced",
+    "Main requested unnecessary time_range, repaired Skill and schema locally then synced",
+    "P10 bridge incorrect worker module, repaired locally then synced; failed request retained"
+  ],
+  "tests": {
+    "local_pipeline": {
+      "passed": 8
+    },
+    "mac_pipeline": {
+      "passed": 8
+    },
+    "platform_unittest": {
+      "run": 27,
+      "skipped": 0,
+      "result": "OK"
+    },
+    "skill_tools_unittest": {
+      "run": 14,
+      "skipped": 2,
+      "result": "OK"
+    }
+  },
+  "original_source_sha256": {
+    "a_mac_skill/agents/p10_report_agent.py": "8808c065a920fa3add9cbc467566f031eb6c1d35c284616a02421dd79818083e",
+    "a_mac_skill/P10/build_template.py": "01e56a2df69e35fbfe3f1fbe523afa6bfe99a2c9fd40e6d42bb59092dc32f5ce",
+    "a_mac_skill/P10/pipeline_review_smoke.py": "3d42106ffc1c05a94c1318d08def6c3cb1412bcb6dd45381350254aa153c1bfd",
+    "a_mac_skill/P10/prepare_site_env.py": "c0c522ee57395117d36254658b742680a5b37c300ec054891593cdd7a6050881",
+    "a_mac_skill/P10/remote_playback.py": "a2a58f32218e36d8ef1093b1b52d24df01374e7af7f5cf43387cde54179bc33e",
+    "a_mac_skill/P10/schemas.py": "08141217f8b1bd1ccf6f35e1282b14a470baaa9e98123a8386315630393aea2b",
+    "a_mac_skill/P10/tools.py": "2614b68bd405c7be20b137fd0462ae1401ebd93a6b8f7ac6948235abf2aed108",
+    "a_mac_skill/P10/__init__.py": "0c7c8b8798314405c7fb269e74a4a836f21348412805a4eed0a493f514d48590",
+    "a_mac_skill/P10/__main__.py": "6f368b53107f6826add8d070d39de2bbd556269519091cbae064c551e575d883",
+    "a_mac_skill/P10/services/data_reader.py": "011e607076d3e8878214ae2800e1ff0952c4b3d5c2f5b1597fdb8a4b9b2d826f",
+    "a_mac_skill/P10/services/docx_renderer.py": "c25ddd7f5ea19e7c34bcb822d6ece5ca71775392d2656db614d09bf04e9d3878",
+    "a_mac_skill/P10/services/report_service.py": "176f56a08904d77310c589cdc736fa930b77ad269f588e5a404901a36788b1a3",
+    "a_mac_skill/P10/services/__init__.py": "786e662d898379f382710b554a096dd846569864b4f016db97676c4756816a4d",
+    "a_mac_skill/P10/tests/test_reporting.py": "dc45c7807e26dc9b0660f99a9ca7f99489963cb7af8d5dd28c7405548d6556de",
+    "a_mac_skill/P10/tests/__init__.py": "905818a9232004265cd0157a4c0e681908429aa3024fb409cd7d2ce59b7a4a6a",
+    "a_mac_skill/P10/SKILL.md": "54312f0a2db6ab771d8cb8c0a357018632b0bb68c935c8e8c14365ce3ce156ec"
+  }
+}

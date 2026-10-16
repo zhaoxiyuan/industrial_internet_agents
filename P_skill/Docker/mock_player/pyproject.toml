@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mock-player"
+version = "0.3.0"
+description = "Standalone mock playback and platform agent result tools"
+requires-python = ">=3.11"
+dependencies = ["fastapi==0.141.1", "uvicorn==0.51.0"]
+
+[project.optional-dependencies]
+test = ["httpx>=0.28,<1"]
+
+[project.scripts]
+mock-player = "mock_player.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mock_player = ["static/*.html", "schema.sql"]

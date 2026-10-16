@@ -1,0 +1,11 @@
+services:
+  mock-player:
+    build: .
+    ports:
+      - "127.0.0.1:5010:5010"
+    volumes:
+      - mock-player-data:/data
+    stop_grace_period: 15s
+    restart: unless-stopped
+volumes:
+  mock-player-data:

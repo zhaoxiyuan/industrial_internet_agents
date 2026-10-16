@@ -1,0 +1,215 @@
+{
+  "people": {
+    "P7": {
+      "name": "张师傅",
+      "role": "焊工"
+    },
+    "P8": {
+      "name": "王师傅",
+      "role": "焊工"
+    },
+    "P11": {
+      "name": "赵师傅",
+      "role": "监护人"
+    }
+  },
+  "baseline": {
+    "gas_detector_03": {
+      "value": 0.2,
+      "status": "normal",
+      "unit": "%LEL"
+    },
+    "temperature_03": {
+      "value": 26.0,
+      "status": "normal",
+      "unit": "°C"
+    },
+    "flame_detector_03": {
+      "value": false,
+      "status": "normal",
+      "unit": "bool"
+    }
+  },
+  "timeline": [
+    {
+      "id": "ppe-p7-helmet",
+      "label": "P7 张师傅 · 未戴安全帽",
+      "source": "cv",
+      "subject": "P7",
+      "field": "helmet",
+      "segments": [
+        {
+          "start": 470,
+          "end": 730,
+          "value": false,
+          "status": "abnormal"
+        },
+        {
+          "start": 2160,
+          "end": 2400,
+          "value": false,
+          "status": "abnormal"
+        },
+        {
+          "start": 3240,
+          "end": 3360,
+          "value": false,
+          "status": "abnormal"
+        }
+      ]
+    },
+    {
+      "id": "ppe-p11-goggles",
+      "label": "P11 赵师傅 · 未戴护目镜",
+      "source": "cv",
+      "subject": "P11",
+      "field": "goggles",
+      "segments": [
+        {
+          "start": 600,
+          "end": 840,
+          "value": false,
+          "status": "abnormal"
+        },
+        {
+          "start": 1440,
+          "end": 1920,
+          "value": false,
+          "status": "abnormal"
+        },
+        {
+          "start": 3120,
+          "end": 3360,
+          "value": false,
+          "status": "abnormal"
+        }
+      ]
+    },
+    {
+      "id": "ppe-p8-goggles",
+      "label": "P8 王师傅 · 未戴护目镜",
+      "source": "cv",
+      "subject": "P8",
+      "field": "goggles",
+      "segments": [
+        {
+          "start": 2280,
+          "end": 2520,
+          "value": false,
+          "status": "abnormal"
+        },
+        {
+          "start": 3360,
+          "end": 3480,
+          "value": false,
+          "status": "abnormal"
+        }
+      ]
+    },
+    {
+      "id": "ppe-p8-suit",
+      "label": "P8 王师傅 · 未穿防护服",
+      "source": "cv",
+      "subject": "P8",
+      "field": "protective_suit",
+      "segments": [
+        {
+          "start": 2520,
+          "end": 2700,
+          "value": false,
+          "status": "abnormal"
+        }
+      ]
+    },
+    {
+      "id": "gas",
+      "label": "可燃气体 gas_detector_03",
+      "source": "sensor",
+      "subject": "gas_detector_03",
+      "segments": [
+        {
+          "start": 960,
+          "end": 1080,
+          "value": 0.8,
+          "status": "warning"
+        },
+        {
+          "start": 1080,
+          "end": 1320,
+          "value": 1.2,
+          "status": "alarm"
+        },
+        {
+          "start": 1440,
+          "end": 1920,
+          "value": 1.1,
+          "status": "alarm"
+        },
+        {
+          "start": 2760,
+          "end": 2880,
+          "value": 0.8,
+          "status": "warning"
+        },
+        {
+          "start": 2880,
+          "end": 3000,
+          "value": 1.3,
+          "status": "alarm"
+        }
+      ]
+    },
+    {
+      "id": "temperature",
+      "label": "温度 temperature_03",
+      "source": "sensor",
+      "subject": "temperature_03",
+      "segments": [
+        {
+          "start": 1200,
+          "end": 1440,
+          "value": 38.0,
+          "status": "warning"
+        },
+        {
+          "start": 1440,
+          "end": 1500,
+          "value": 46.0,
+          "status": "alarm"
+        }
+      ]
+    },
+    {
+      "id": "flame",
+      "label": "火焰 flame_detector_03",
+      "source": "sensor",
+      "subject": "flame_detector_03",
+      "segments": [
+        {
+          "start": 2640,
+          "end": 2760,
+          "value": true,
+          "status": "alarm"
+        }
+      ]
+    },
+    {
+      "id": "watch-position",
+      "label": "P11 赵师傅 · 离开动火区",
+      "source": "position",
+      "subject": "P11",
+      "segments": [
+        {
+          "start": 2040,
+          "end": 2160,
+          "value": "休息室",
+          "status": "absent"
+        }
+      ]
+    }
+  ],
+  "dropouts": [],
+  "interval_convention": "[start_sec,end_sec); seconds relative to playback start",
+  "playback": "real-time 1x; future samples are not prewritten",
+  "note": "Unlisted periods have full PPE, normal sensors, and all personnel in hot-work area. All sources report continuously; all anomalies recover before the final two normal minutes."
+}

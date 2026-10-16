@@ -1,0 +1,37 @@
+{
+  "consumer": {
+    "consumer_id": "demo-monitor",
+    "window_seconds": 5,
+    "max_attempts": 2,
+    "start_at_us": null,
+    "scheduled_through_us": 1791770829593962,
+    "completed_through_us": 1791770809593962,
+    "created_at_us": 1791770774408645,
+    "completed_through": "2026-10-12T02:06:49.593962+00:00",
+    "counts": {
+      "pending": 2,
+      "processing": 0,
+      "completed": 2,
+      "retryable": 1,
+      "failed": 1
+    }
+  },
+  "first_completion": {
+    "result_id": "validation-task-1",
+    "result_seq": 1,
+    "received_at": "2026-10-12T02:08:23.403429+00:00",
+    "duplicate": false
+  },
+  "checks": [
+    "claim",
+    "heartbeat",
+    "fail",
+    "reclaim",
+    "old_token_rejected",
+    "complete",
+    "idempotent_complete",
+    "manual_retry",
+    "query_window",
+    "result_evidence"
+  ]
+}

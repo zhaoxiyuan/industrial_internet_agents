@@ -1,0 +1,32 @@
+{
+  "integrity": "ok",
+  "foreign_key_errors": [],
+  "tables": [
+    "agent_consumers",
+    "agent_evidence",
+    "agent_results",
+    "areas",
+    "cv_observations",
+    "persons",
+    "player_state",
+    "position_readings",
+    "ppe_second_stats",
+    "processing_tasks",
+    "sensor_readings",
+    "sensors"
+  ],
+  "counts": {
+    "cv_observations": 2250,
+    "sensor_readings": 90,
+    "position_readings": 90,
+    "ppe_second_stats": 90,
+    "agent_results": 2,
+    "agent_evidence": 2
+  },
+  "task_states": {
+    "completed": 2,
+    "failed": 1,
+    "pending": 2,
+    "retryable": 1
+  }
+}

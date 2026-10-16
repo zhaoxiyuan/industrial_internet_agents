@@ -1,0 +1,1153 @@
+{
+  "schema_version": 3,
+  "description": "通用采集、秒级消费及领取时窗口工具。无作业票和消费者配置。",
+  "deployment_command": "mock-player serve --data-dir ./data",
+  "global_parameters": {
+    "server": {
+      "type": "string",
+      "default": "http://127.0.0.1:5010"
+    },
+    "timeout": {
+      "type": "number",
+      "default": 10
+    }
+  },
+  "exit_codes": {
+    "0": "success_or_no_work",
+    "1": "failure",
+    "2": "invalid_argument",
+    "3": "not_found",
+    "4": "conflict_or_expired_lease",
+    "5": "unreachable",
+    "130": "interrupted"
+  },
+  "tools": [
+    {
+      "name": "mock_player.scenarios.list",
+      "executable": "mock-player",
+      "arguments": [
+        "scenarios",
+        "list"
+      ],
+      "parameters": {},
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "player",
+      "read_only": true,
+      "output_schema": "scenarios"
+    },
+    {
+      "name": "mock_player.scenarios.show",
+      "executable": "mock-player",
+      "arguments": [
+        "scenarios",
+        "show"
+      ],
+      "parameters": {
+        "scenario": {
+          "type": "string",
+          "required": true,
+          "flag": null
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "player",
+      "read_only": true,
+      "output_schema": "scenario"
+    },
+    {
+      "name": "mock_player.start",
+      "executable": "mock-player",
+      "arguments": [
+        "start"
+      ],
+      "parameters": {
+        "scenario": {
+          "type": "string",
+          "required": false,
+          "flag": "--scenario",
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F"
+          ],
+          "default": "B"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "player",
+      "read_only": false,
+      "output_schema": "player"
+    },
+    {
+      "name": "mock_player.stop",
+      "executable": "mock-player",
+      "arguments": [
+        "stop"
+      ],
+      "parameters": {},
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "player",
+      "read_only": false,
+      "output_schema": "player"
+    },
+    {
+      "name": "mock_player.status",
+      "executable": "mock-player",
+      "arguments": [
+        "status"
+      ],
+      "parameters": {
+        "watch": {
+          "type": "boolean",
+          "required": false,
+          "flag": "--watch",
+          "default": false
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "player",
+      "read_only": true,
+      "output_schema": "player"
+    },
+    {
+      "name": "mock_player.data.status",
+      "executable": "mock-player",
+      "arguments": [
+        "data",
+        "status"
+      ],
+      "parameters": {},
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "data",
+      "read_only": true,
+      "output_schema": "data_status"
+    },
+    {
+      "name": "mock_player.query.window",
+      "executable": "mock-player",
+      "arguments": [
+        "query",
+        "window"
+      ],
+      "parameters": {
+        "from_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--from-time"
+        },
+        "to_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--to-time"
+        },
+        "task_id": {
+          "type": "integer",
+          "required": false,
+          "flag": "--task-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "data",
+      "read_only": true,
+      "output_schema": "window"
+    },
+    {
+      "name": "mock_player.query.records",
+      "executable": "mock-player",
+      "arguments": [
+        "query",
+        "records"
+      ],
+      "parameters": {
+        "from_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--from-time"
+        },
+        "to_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--to-time"
+        },
+        "cursor": {
+          "type": "string",
+          "required": false,
+          "flag": "--cursor"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "flag": "--limit",
+          "default": 100
+        },
+        "source": {
+          "type": "string",
+          "required": false,
+          "flag": "--source",
+          "enum": [
+            "all",
+            "cv",
+            "sensor",
+            "position",
+            "ppe"
+          ],
+          "default": "all"
+        },
+        "person_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--person-id"
+        },
+        "sensor_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--sensor-id"
+        },
+        "task_id": {
+          "type": "integer",
+          "required": false,
+          "flag": "--task-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "data",
+      "read_only": true,
+      "output_schema": "records_page"
+    },
+    {
+      "name": "mock_player.query.record",
+      "executable": "mock-player",
+      "arguments": [
+        "query",
+        "record"
+      ],
+      "parameters": {
+        "source": {
+          "type": "string",
+          "required": true,
+          "flag": "--source",
+          "enum": [
+            "cv",
+            "sensor",
+            "position",
+            "ppe"
+          ]
+        },
+        "id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "data",
+      "read_only": true,
+      "output_schema": "record"
+    },
+    {
+      "name": "mock_player.pull",
+      "executable": "mock-player",
+      "arguments": [
+        "pull"
+      ],
+      "parameters": {
+        "from_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--from-time"
+        },
+        "to_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--to-time"
+        },
+        "cursor": {
+          "type": "string",
+          "required": false,
+          "flag": "--cursor"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "flag": "--limit",
+          "default": 100
+        },
+        "source": {
+          "type": "string",
+          "required": false,
+          "flag": "--source",
+          "enum": [
+            "all",
+            "cv",
+            "sensor",
+            "position",
+            "ppe"
+          ],
+          "default": "all"
+        },
+        "person_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--person-id"
+        },
+        "sensor_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--sensor-id"
+        },
+        "follow": {
+          "type": "boolean",
+          "required": false,
+          "flag": "--follow",
+          "default": false
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "data",
+      "read_only": true,
+      "output_schema": "records_page"
+    },
+    {
+      "name": "mock_player.tasks.claim",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "claim"
+      ],
+      "parameters": {
+        "worker_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--worker-id"
+        },
+        "lease_seconds": {
+          "type": "integer",
+          "required": false,
+          "flag": "--lease-seconds",
+          "default": 60
+        },
+        "window_seconds": {
+          "type": "integer",
+          "required": true,
+          "flag": "--window-seconds",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "request_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--request-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": false,
+      "output_schema": "claim"
+    },
+    {
+      "name": "mock_player.tasks.heartbeat",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "heartbeat"
+      ],
+      "parameters": {
+        "task_id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--task-id"
+        },
+        "lease_token": {
+          "type": "string",
+          "required": true,
+          "flag": "--lease-token"
+        },
+        "lease_seconds": {
+          "type": "integer",
+          "required": false,
+          "flag": "--lease-seconds",
+          "default": 60
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": false,
+      "output_schema": "task"
+    },
+    {
+      "name": "mock_player.tasks.complete",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "complete"
+      ],
+      "parameters": {
+        "task_id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--task-id"
+        },
+        "lease_token": {
+          "type": "string",
+          "required": true,
+          "flag": "--lease-token"
+        },
+        "file": {
+          "type": "string",
+          "required": true,
+          "flag": "--file"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": false,
+      "output_schema": "complete"
+    },
+    {
+      "name": "mock_player.tasks.fail",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "fail"
+      ],
+      "parameters": {
+        "task_id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--task-id"
+        },
+        "lease_token": {
+          "type": "string",
+          "required": true,
+          "flag": "--lease-token"
+        },
+        "error": {
+          "type": "string",
+          "required": true,
+          "flag": "--error",
+          "description": "Failure message"
+        },
+        "error_code": {
+          "type": "string",
+          "required": false,
+          "flag": "--error-code",
+          "default": "agent_error"
+        },
+        "retry_delay_seconds": {
+          "type": "integer",
+          "required": false,
+          "flag": "--retry-delay-seconds",
+          "default": 0
+        },
+        "terminal": {
+          "type": "boolean",
+          "required": false,
+          "flag": "--terminal",
+          "default": false
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": false,
+      "output_schema": "fail"
+    },
+    {
+      "name": "mock_player.tasks.retry",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "retry"
+      ],
+      "parameters": {
+        "task_id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--task-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": false,
+      "output_schema": "task"
+    },
+    {
+      "name": "mock_player.tasks.get",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "get"
+      ],
+      "parameters": {
+        "task_id": {
+          "type": "integer",
+          "required": true,
+          "flag": "--task-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": true,
+      "output_schema": "task"
+    },
+    {
+      "name": "mock_player.tasks.list",
+      "executable": "mock-player",
+      "arguments": [
+        "tasks",
+        "list"
+      ],
+      "parameters": {
+        "state": {
+          "type": "string",
+          "required": false,
+          "flag": "--state",
+          "enum": [
+            "pending",
+            "processing",
+            "completed",
+            "retryable",
+            "failed"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "flag": "--limit",
+          "default": 100
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "task",
+      "read_only": true,
+      "output_schema": "tasks"
+    },
+    {
+      "name": "mock_player.results.publish",
+      "executable": "mock-player",
+      "arguments": [
+        "results",
+        "publish"
+      ],
+      "parameters": {
+        "file": {
+          "type": "string",
+          "required": true,
+          "flag": "--file"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "result",
+      "read_only": false,
+      "output_schema": "receipt"
+    },
+    {
+      "name": "mock_player.results.query",
+      "executable": "mock-player",
+      "arguments": [
+        "results",
+        "query"
+      ],
+      "parameters": {
+        "cursor": {
+          "type": "string",
+          "required": false,
+          "flag": "--cursor"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "flag": "--limit",
+          "default": 100
+        },
+        "from_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--from-time"
+        },
+        "to_time": {
+          "type": "string",
+          "required": false,
+          "flag": "--to-time"
+        },
+        "agent_id": {
+          "type": "string",
+          "required": false,
+          "flag": "--agent-id"
+        },
+        "status": {
+          "type": "string",
+          "required": false,
+          "flag": "--status"
+        },
+        "task_id": {
+          "type": "integer",
+          "required": false,
+          "flag": "--task-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "result",
+      "read_only": true,
+      "output_schema": "results_page"
+    },
+    {
+      "name": "mock_player.results.get",
+      "executable": "mock-player",
+      "arguments": [
+        "results",
+        "get"
+      ],
+      "parameters": {
+        "result_id": {
+          "type": "string",
+          "required": true,
+          "flag": "--result-id"
+        }
+      },
+      "append_arguments": [
+        "--json"
+      ],
+      "output_family": "result",
+      "read_only": true,
+      "output_schema": "result"
+    }
+  ],
+  "output_schemas": {
+    "task": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "state",
+        "time_range",
+        "attempt_count",
+        "cutoff_sequence"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "processing",
+            "completed",
+            "retryable",
+            "failed"
+          ]
+        },
+        "time_range": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "attempt_count": {
+          "type": "integer"
+        },
+        "cutoff_sequence": {
+          "type": "integer"
+        },
+        "lease_token": {
+          "type": "string",
+          "description": "Only present in a successful claim; required for worker mutations"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "source",
+        "record_ref",
+        "data"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "cv",
+            "sensor",
+            "position",
+            "ppe"
+          ]
+        },
+        "record_ref": {
+          "type": "object",
+          "required": [
+            "table",
+            "id"
+          ],
+          "properties": {
+            "table": {
+              "enum": [
+                "cv_observations",
+                "sensor_readings",
+                "position_readings",
+                "ppe_second_stats"
+              ]
+            },
+            "id": {
+              "type": "integer"
+            }
+          }
+        },
+        "data": {
+          "type": "object"
+        },
+        "processing": {
+          "type": "object"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "result_id",
+        "result_seq",
+        "received_at",
+        "duplicate"
+      ],
+      "properties": {
+        "result_id": {
+          "type": "string"
+        },
+        "result_seq": {
+          "type": "integer"
+        },
+        "received_at": {
+          "type": "string"
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
+    },
+    "player": {
+      "type": "object",
+      "required": [
+        "state",
+        "scenario",
+        "current_second",
+        "counts"
+      ]
+    },
+    "data_status": {
+      "type": "object",
+      "required": [
+        "database",
+        "counts",
+        "earliest_time",
+        "committed_through",
+        "persons",
+        "sensors",
+        "areas"
+      ]
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "status",
+        "task"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "claimed",
+            "no_work"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "task_id",
+                "state",
+                "time_range",
+                "attempt_count",
+                "cutoff_sequence"
+              ],
+              "properties": {
+                "task_id": {
+                  "type": "integer"
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "processing",
+                    "completed",
+                    "retryable",
+                    "failed"
+                  ]
+                },
+                "time_range": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "attempt_count": {
+                  "type": "integer"
+                },
+                "cutoff_sequence": {
+                  "type": "integer"
+                },
+                "lease_token": {
+                  "type": "string",
+                  "description": "Only present in a successful claim; required for worker mutations"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "complete": {
+      "type": "object",
+      "required": [
+        "task",
+        "receipt"
+      ],
+      "properties": {
+        "task": {
+          "type": "object",
+          "required": [
+            "task_id",
+            "state",
+            "time_range",
+            "attempt_count",
+            "cutoff_sequence"
+          ],
+          "properties": {
+            "task_id": {
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "processing",
+                "completed",
+                "retryable",
+                "failed"
+              ]
+            },
+            "time_range": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "attempt_count": {
+              "type": "integer"
+            },
+            "cutoff_sequence": {
+              "type": "integer"
+            },
+            "lease_token": {
+              "type": "string",
+              "description": "Only present in a successful claim; required for worker mutations"
+            }
+          }
+        },
+        "receipt": {
+          "type": "object",
+          "required": [
+            "result_id",
+            "result_seq",
+            "received_at",
+            "duplicate"
+          ],
+          "properties": {
+            "result_id": {
+              "type": "string"
+            },
+            "result_seq": {
+              "type": "integer"
+            },
+            "received_at": {
+              "type": "string"
+            },
+            "duplicate": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "fail": {
+      "type": "object",
+      "required": [
+        "task",
+        "duplicate"
+      ],
+      "properties": {
+        "task": {
+          "type": "object",
+          "required": [
+            "task_id",
+            "state",
+            "time_range",
+            "attempt_count",
+            "cutoff_sequence"
+          ],
+          "properties": {
+            "task_id": {
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "processing",
+                "completed",
+                "retryable",
+                "failed"
+              ]
+            },
+            "time_range": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "attempt_count": {
+              "type": "integer"
+            },
+            "cutoff_sequence": {
+              "type": "integer"
+            },
+            "lease_token": {
+              "type": "string",
+              "description": "Only present in a successful claim; required for worker mutations"
+            }
+          }
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "task_id",
+              "state",
+              "time_range",
+              "attempt_count",
+              "cutoff_sequence"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "integer"
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "processing",
+                  "completed",
+                  "retryable",
+                  "failed"
+                ]
+              },
+              "time_range": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "attempt_count": {
+                "type": "integer"
+              },
+              "cutoff_sequence": {
+                "type": "integer"
+              },
+              "lease_token": {
+                "type": "string",
+                "description": "Only present in a successful claim; required for worker mutations"
+              }
+            }
+          }
+        }
+      }
+    },
+    "records_page": {
+      "type": "object",
+      "required": [
+        "items",
+        "next_cursor",
+        "has_more",
+        "cutoff_sequence"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "record_ref",
+              "data"
+            ],
+            "properties": {
+              "source": {
+                "enum": [
+                  "cv",
+                  "sensor",
+                  "position",
+                  "ppe"
+                ]
+              },
+              "record_ref": {
+                "type": "object",
+                "required": [
+                  "table",
+                  "id"
+                ],
+                "properties": {
+                  "table": {
+                    "enum": [
+                      "cv_observations",
+                      "sensor_readings",
+                      "position_readings",
+                      "ppe_second_stats"
+                    ]
+                  },
+                  "id": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "data": {
+                "type": "object"
+              },
+              "processing": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "cutoff_sequence": {
+          "type": "integer"
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "time_range",
+        "cutoff_sequence",
+        "completeness",
+        "ppe",
+        "sensor",
+        "position",
+        "persons",
+        "sensors",
+        "areas"
+      ]
+    },
+    "results_page": {
+      "type": "object",
+      "required": [
+        "items",
+        "next_cursor",
+        "has_more"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "result_seq",
+        "received_at",
+        "data"
+      ]
+    },
+    "scenarios": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "scenario",
+        "name",
+        "duration_sec",
+        "person_ids"
+      ]
+    }
+  }
+}

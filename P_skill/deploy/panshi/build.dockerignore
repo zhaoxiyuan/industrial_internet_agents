@@ -1,0 +1,10 @@
+state
+.git
+**/.runtime
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.log
+**/data
+**/.env
+**/.env.*

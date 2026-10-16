@@ -1,0 +1,43 @@
+name: p-skill-validation
+services:
+  skill-executor:
+    # Generic interpreter only: all business implementation comes from Skill ZIPs.
+    image: python:3.12-slim
+    container_name: p-skill-python-executor
+    command: ["python", "-c", "import time; time.sleep(2147483647)"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ../.runtime/platform/data/skills:/skills:ro
+      - ../.runtime/shared:/business
+    networks: [pipeline]
+  tools:
+    image: industrial-p-skills:1.0.0
+    build:
+      context: ../..
+      dockerfile: P_skill/Docker/Dockerfile
+    container_name: p-skill-tools-validation
+    volumes:
+      - ../.runtime/platform/data/skills:/skills:ro
+      - ../.runtime/shared:/business
+    networks: [pipeline]
+  player:
+    image: industrial-p-skills:1.0.0
+    command: ["python", "-m", "mock_player", "serve", "--host", "0.0.0.0", "--port", "8090", "--data-dir", "/player"]
+    volumes:
+      - ../.runtime/player:/player
+    ports: ["127.0.0.1:18090:8090"]
+    networks: [pipeline]
+  p10:
+    image: industrial-p-skills:1.0.0
+    command: ["python", "-m", "industrial_skills.p10_bridge", "--root", "/business", "--job-id", "20261013000000001", "--token-file", "/secrets/bridge.token"]
+    environment:
+      P10_MODEL_CONFIG: /secrets/model.json
+    volumes:
+      - ../.runtime/shared:/business
+      - ../.runtime/model.json:/secrets/model.json:ro
+      - ../.runtime/bridge.token:/secrets/bridge.token:ro
+    ports: ["127.0.0.1:18091:8091"]
+    networks: [pipeline]
+networks:
+  pipeline: {}

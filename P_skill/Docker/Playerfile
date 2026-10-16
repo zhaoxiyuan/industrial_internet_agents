@@ -1,0 +1,3 @@
+FROM industrial-p-skills:1.0.0
+COPY P_skill/Docker/mock_player/src/mock_player /opt/timeflow-player/mock_player
+ENV PYTHONPATH=/opt/timeflow-player

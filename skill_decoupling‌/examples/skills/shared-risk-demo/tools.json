@@ -1,0 +1,750 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "save",
+      "description": "P6保存风险描述",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "source_id",
+          "description"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:save",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5
+    },
+    {
+      "name": "claim",
+      "description": "P7原子领取描述",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          }
+        },
+        "required": [
+          "lease_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:claim",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5,
+      "claim_failure": "fail"
+    },
+    {
+      "name": "complete",
+      "description": "P7提交研判",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "claim",
+          "assessment"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:complete",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5
+    },
+    {
+      "name": "fail",
+      "description": "记录模型或执行失败",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "claim",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:fail",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5
+    },
+    {
+      "name": "retry",
+      "description": "主Agent明确安排失败重试",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "record_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:retry",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5
+    },
+    {
+      "name": "query",
+      "description": "主Agent查询状态成果及失败历史",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "record_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "no_work"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "record_id",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "entry": "scripts/queue.py:query",
+      "dependencies": [
+        "sqlite3"
+      ],
+      "storage": [
+        "queue"
+      ],
+      "timeout": 5
+    }
+  ]
+}

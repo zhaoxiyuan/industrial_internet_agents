@@ -1,0 +1,18 @@
+{
+  "bundle_version": 1,
+  "database_contract": "p6-p7-timeflow-v5",
+  "module_sha256": {
+    "__init__.py": "d82f16d8790d9f522b2420b7218893386f6e9cd0c2e117de0d986d3960ec5f5b",
+    "acquisition.py": "41358e9f63c524818ab23153057eb72a2978b71ad588c67388e536993e24479c",
+    "compact_view.py": "da7f73df305b29c7f419bbd3fcf2b1fbba1317b7667d34407a2d3592b4661ab7",
+    "disposition.py": "8c28bf14f81dee5542e8f47640fcdb65dd27fce84f275f140d4ca2623ca2e82a",
+    "main.py": "64350fdd85efa04251c452b3c6824e1f4de488702e44590aae5ff55cc8005687",
+    "monitoring.py": "fbc513845d7867e04225a4ba64e98f2db52d239defeac90663c6a2b3eec09b21",
+    "p7.py": "16bae119502834369ad8a520884fd97a4a6fe245aca288e0910e97c6d1a9bdf1",
+    "participants.py": "5c91ad392e11055c546c6689403acdc7a8b3ae0fa056e91384094757514d5784",
+    "source.py": "7ce247f92193ba12976e5432a61c3f07401913f9e0e5cd18f064f9f2eecf10c0",
+    "store.py": "6a88f01b2ce788c157b7275ee4cd38a0388f0b51c60cd7bbd0bbe9b75ad543ae",
+    "timeflow.py": "14deb32c91590572051e63a9cac16a48942c7f5b593b6d477da4bb133881b339",
+    "work_permits.py": "aa4766da9a5f36f720882bede78d7323f7d176bff2c6c6a72e15a22a307ed002"
+  }
+}

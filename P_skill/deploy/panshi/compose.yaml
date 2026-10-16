@@ -1,0 +1,32 @@
+name: industrial-agents
+services:
+  platform:
+    image: industrial-agents:clean
+    build:
+      context: .
+      dockerfile: P_skill/deploy/panshi/Dockerfile
+    container_name: industrial-skill-platform
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./platform/data:/opt/industrial-agents/platform/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/local/bin/docker:ro
+      - ./state/shared:/opt/industrial-agents/state/shared
+  skill-executor:
+    image: industrial-agents:clean
+    container_name: p-skill-python-executor
+    command: ["python", "-c", "import time; time.sleep(2147483647)"]
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./platform/data/skills:/skills:ro
+      - ./state/shared:/business
+  player:
+    image: industrial-agents:clean
+    container_name: industrial-skill-player
+    command: ["python", "-m", "mock_player", "serve", "--host", "127.0.0.1", "--port", "18090", "--data-dir", "/player"]
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./state/player:/player

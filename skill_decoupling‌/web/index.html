@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>独立 Skill 平台</title><link rel="stylesheet" href="/web/style.css"><link rel="stylesheet" href="/web/topology.css">
+</head>
+<body>
+  <!-- 导航按职责拆分；Skill 列表不出现服务启动或 Docker 操作。 -->
+  <header><div><h1>Skill 平台</h1><p>本地运行 · LangChain / LangGraph · 授权 Tool</p></div><span id="health" class="badge">连接中</span></header>
+  <nav aria-label="平台导航">
+    <button data-tab="skills" class="active">Skill 库</button><button data-tab="feishu">飞书功能</button>
+    <button data-tab="cli">Tool 能力</button><button data-tab="mcp">外部工具接入</button><button data-tab="agents">Agent 与绑定</button>
+    <button data-tab="topology">协作拓扑</button><button data-tab="chat">会话</button><button data-tab="operations">操作记录</button><button data-tab="collaboration">协作任务</button>
+  </nav>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <main>
+    <section id="tab-skills" class="tab active">
+      <div class="grid"><article><h2>导入标准 Skill</h2><p>只校验并保存内容。导入、加载和停用不会启动或停止 MCP 服务。</p>
+        <form id="skill-form"><label>项目内目录<input name="source" value="examples/skills/feishu-communication"></label>
+          <label>或上传 ZIP（包含以 name 命名的 Skill 根目录）<input id="skill-zip" type="file" accept=".zip"></label>
+          <button>校验并导入</button></form>
+      </article><article><h2>Skill 内容</h2><pre id="skill-preview">导入后选择“查看内容”。</pre></article></div>
+      <article><h2>已导入 Skill</h2><div id="skills-list"></div></article>
+    </section>
+    <!-- 飞书页是独立连接器配置页，凭据仅写入本项目数据目录的 env。 -->
+    <section id="tab-feishu" class="tab">
+      <div class="grid"><article><h2>飞书连接配置</h2><label>编辑已有连接<select id="connection-edit"><option value="">新建连接</option></select></label>
+        <form id="connection-form"><input name="id" type="hidden"><label>连接名称<input name="name" required placeholder="例如：现场值班机器人"></label>
+          <label>飞书 App ID<input name="app_id" required placeholder="cli_..."></label>
+          <label>App Secret<input name="app_secret" type="password" autocomplete="new-password" placeholder="编辑时留空保留原值"></label>
+          <label>Verification Token<input name="verification_token" type="password" autocomplete="new-password" placeholder="用于入站事件校验"></label>
+          <label>Encrypt Key<input name="encrypt_key" type="password" autocomplete="new-password" placeholder="启用加密回调时填写"></label>
+          <label>API 地址<input name="api_base" value="https://open.feishu.cn" required></label>
+          <label>入站处理 Agent（可选）<select name="inbound_agent_id" id="inbound-agent"><option value="">仅接收，不自动执行</option></select></label>
+          <!-- 目录由填写行编辑，提交时转换为后端原有映射，不要求用户编写 JSON。 -->
+          <fieldset><legend>群目录</legend><p>填写群名称、chat_id（oc_ 开头）和用途说明。</p>
+            <div id="groups-editor"></div><button type="button" id="group-add" class="secondary">添加群</button></fieldset>
+          <fieldset><legend>用户目录</legend><p>填写用户名称、open_id（ou_ 开头）和岗位。</p>
+            <div id="users-editor"></div><button type="button" id="user-add" class="secondary">添加用户</button></fieldset>
+          <label class="check"><input name="enabled" type="checkbox" checked>启用连接</label>
+          <button>保存到 .env</button><button type="button" id="connection-new" class="secondary">新建</button>
+        </form><p id="env-info">密钥不会通过配置查询接口返回。保存后配置立即生效。</p>
+      </article><article><h2>连接与回调</h2><div id="connections-list"></div>
+        <p>收消息使用已配置连接的 Webhook 地址。真实飞书回调需要你将本地接口接入可达的 HTTPS 入口；本项目仅提供本地服务。</p>
+        <h3>发送测试消息</h3><form id="send-form"><label>飞书连接<select name="connection" id="send-connection" required></select></label>
+          <div class="row"><label>目标类型<select name="type"><option value="group">群</option><option value="user">用户</option></select></label>
+          <label>目标字段<select name="field"><option value="name">名称</option><option value="id">ID</option></select></label></div>
+          <label>目标<input name="target" required placeholder="例如：动火作业群"></label>
+          <label>消息<textarea name="text" required>【连通性测试】这是一条从独立 Skill 平台发送的测试消息。</textarea></label><button>发送一条消息</button>
+        </form>
+      </article></div>
+      <article><h2>入站消息与回复</h2><div class="row"><select id="events-connection"></select><button id="events-refresh" class="secondary">读取入站消息</button></div>
+        <div id="events-list"></div><form id="reply-form">
+          <!-- event_id 由当前消息自动绑定；它是回复 API 的内部事件引用，不是可编辑字段。 -->
+          <input name="event_id" type="hidden"><p id="reply-target">读取消息后自动回复最新一条。</p>
+          <label>回复文本<textarea name="text" required></textarea></label><button id="reply-submit" disabled>回复当前消息</button></form>
+      </article>
+    </section>
+    <!-- MCP 定义独立保存来源、运行方式、工具契约和数据目录。 -->
+    <section id="tab-mcp" class="tab">
+      <div class="grid"><article><h2>注册外部工具</h2><label>接入形式<select id="external-access-type"><option value="mcp">MCP（HTTP/HTTPS）</option><option value="cli">CLI（本机 Docker 容器）</option><option value="http">HTTP（普通 API 直连）</option></select></label><form id="mcp-form"><input name="id" type="hidden"><label>名称<input name="name" required></label>
+        <p>仅接入已运行的 HTTP/HTTPS MCP 服务，包括本机地址。服务部署和启停由独立运行时管理。</p>
+        <label>用途描述<textarea name="description" rows="2"></textarea></label>
+        <!-- 前端限定 URL 协议；后端独立校验，不把启动脚本或文件路径当作调用地址。 -->
+        <label>MCP 连接地址<input name="endpoint" type="url" pattern="https?://.+" required placeholder="http://127.0.0.1:8771/rpc"></label>
+        <label>来源链接（可选，仅记录来源，不自动执行）<input name="source_url" type="url"></label>
+        <label>协议模式<select name="protocol"><option value="2025-11-25">2025-11-25（握手兼容）</option></select></label>
+        <label>Bearer Token（可选）<input name="token" type="password" autocomplete="new-password"></label>
+        <button>保存 MCP 定义</button><button type="button" id="mcp-new" class="secondary">新建定义</button>
+      </form><form id="external-cli-form" hidden><input name="id" type="hidden">
+        <label>CLI 注册名称<input name="name" required></label><label>用途描述<textarea name="description" required></textarea></label>
+        <label>本机容器名称 / ID<input name="container" required placeholder="mock-player"></label><button type="button" id="docker-containers">查看本机运行容器</button><pre id="docker-container-info"></pre>
+        <label>容器内程序路径或 PATH 名称<input name="executable" required placeholder="python"></label>
+        <label>容器内工作目录<input name="working_directory" required value="/app"></label>
+        <label>容器内 runner Python<input name="runner_python" value="python3" required></label>
+        <label>固定参数（JSON 数组）<textarea name="arguments">[]</textarea></label>
+        <label>允许子命令（名称 → 固定 argv，JSON）<textarea name="commands" required>{"status":["status"]}</textarea></label>
+        <label>挂载声明（source、target、read_only，JSON 数组）<textarea name="mounts">[]</textarea></label>
+        <label>超时（秒）<input name="timeout" type="number" min="1" max="120" value="30" required></label>
+        <label>来源链接<input name="source_url" type="url"></label>
+        <p>登记一个 CLI 入口，模型只选择授权子命令并提供业务 JSON。代码、Skill 和 data 通过已有挂载提供；保存不会创建、启动或重建容器。容器必须已运行并安装 Python3 runner。</p>
+        <button>保存 CLI 定义</button><button type="button" id="external-cli-new" class="secondary">新建 CLI 定义</button>
+      </form><form id="http-form" hidden><input name="id" type="hidden">
+      <label>名称<input name="name" required></label><label>用途<textarea name="description" required></textarea></label>
+      <label>固定地址<input name="endpoint" type="url" pattern="https?://.+" required></label>
+      <label>方法<select name="method"><option>POST</option><option>GET</option></select></label>
+      <label>Bearer Token（留空保留）<input name="token" type="password" autocomplete="new-password"></label>
+      <label>超时（秒）<input name="timeout" type="number" value="15" min="1" max="30"></label>
+      <label>输入 Schema<textarea name="input_schema">{"type":"object","properties":{},"additionalProperties":false}</textarea></label>
+      <label>输出 Schema<textarea name="output_schema">{"type":"object","properties":{},"additionalProperties":true}</textarea></label>
+      <button>保存定义</button><button type="button" id="http-new" class="secondary">新建定义</button>
+    </form></article><article><h2>LangChain Tool 接入</h2><p>Skill：官方 SkillsMiddleware 按需加载。MCP：官方适配器发现并转换工具。CLI：一个受控 Tool，在本机 Docker 容器内执行。HTTP：固定接口适配为 Tool，不经 CLI。</p><p>保存定义 → 显式发现/查看目录 → 确认修订 → Agent 授权绑定。非本机 Docker、Kubernetes 与边缘执行待开发。</p></article></div><article><h2>提供者目录、发现与导入</h2><label>OpenAPI 3.x JSON<textarea id="openapi-import"></textarea></label><button type="button" id="openapi-preview">解析 HTTP 候选操作</button><div id="openapi-candidates"></div><div id="provider-catalog"></div><label>接入声明 JSON（kind 为 mcp/cli/http，不含密钥）<textarea id="provider-import"></textarea></label><button id="provider-preview" type="button">校验并预览</button><button id="provider-save-import" type="button" disabled>保存已预览定义</button><pre id="provider-preview-result"></pre></article><article><h2>外部 CLI 定义与工具</h2><div id="external-cli-list"></div></article><article><h2>HTTP 直连定义</h2><div id="http-list"></div></article><article><h2>MCP 实例与工具</h2><div id="mcp-list"></div></article>
+    </section>
+    <section id="tab-agents" class="tab">
+      <div class="grid"><article><h2>Agent 配置</h2><label>编辑已有 Agent<select id="agent-edit"><option value="">新建 Agent</option></select></label>
+        <form id="agent-form"><input name="id" type="hidden"><label>名称<input name="name" required></label>
+          <label>模型名称<input name="model" placeholder="可先创建 Agent，再配置模型"></label>
+          <label>模型 Base URL<input name="base_url" placeholder="https://服务地址/v1"></label>
+          <label>API Key<input name="api_key" type="password" autocomplete="new-password" placeholder="编辑时留空保留"></label>
+          <label>系统提示词<textarea name="system_prompt">你是一个助手。根据实际工具结果回答；调用失败不能声称成功，结果未知时不得重复发送。</textarea></label>
+          <label>最大输出 token<input name="max_tokens" type="number" value="2048" min="1" max="32000"></label>
+          <label>职责说明<textarea name="description" rows="2"></textarea></label>
+          <div class="row"><label>并发上限<input name="concurrency" type="number" value="2" min="1" max="4"></label><label>任务超时（秒）<input name="timeout" type="number" value="180" min="10" max="1800"></label><label>契约版本<input name="contract_version" type="number" value="1" min="1"></label></div>
+          <label class="check"><input name="enabled" type="checkbox" checked>接受任务</label>
+          <label>输入 Schema（定义参数规则，不是本次任务输入）<textarea name="input_schema" rows="3">{"type":"object","properties":{},"additionalProperties":true}</textarea></label>
+          <label>输出 Schema（可选，留空表示文本回答）<textarea name="output_schema" rows="3"></textarea></label>
+          <fieldset id="heartbeat-fields"><legend>心跳任务</legend>
+            <label class="check"><input id="heartbeat-enabled" type="checkbox">启用周期任务（默认关闭）</label>
+            <label>周期间隔 H（秒）<input id="heartbeat-interval" type="number" value="60" min="1" max="86400" step="1"></label>
+            <label>周期任务描述<textarea id="heartbeat-description" rows="2"></textarea></label>
+            <label>结构化 input（例如业务窗口 N：window_seconds）<textarea id="heartbeat-input" rows="3">{}</textarea></label>
+            <label>首次执行<select id="heartbeat-first"><option value="after_interval">一个周期后</option><option value="immediate">立即</option></select></label>
+            <label>防重入范围<select id="heartbeat-scope"><option value="self">仅本Agent（调度者Main）</option><option value="chain">整条协作链</option></select></label>
+            <label>单轮超时秒数（留空用Agent配置）<input id="heartbeat-timeout" type="number" min="1"></label>
+            <label>防重叠策略<select id="heartbeat-policy"><option value="skip">skip：在途时跳过本次触发</option></select></label>
+            <label>共享防重叠键 overlap_key（留空按目标Agent互斥）<input id="heartbeat-overlap" maxlength="128"></label>
+            <p class="muted">N决定一次消费的数据窗口，H决定调度周期。执行耗时可能大于H；skip不丢弃业务窗口，也不解决消费积压。</p>
+          </fieldset>
+          <label>加载的 Skill（Ctrl 可多选）<select id="agent-skills" multiple size="4"></select></label>
+          <label>执行目标<input value="本平台本地运行；分布式、Docker/Kubernetes、边缘部署待开发" readonly></label>
+          <button>保存 Agent</button><button type="button" id="agent-new" class="secondary">新建</button>
+        </form><p id="agent-info"></p></article><article><h2>绑定 LangChain Tool</h2><form id="binding-form">
+          <label>Agent<select name="agent_id" id="binding-agent" required></select></label>
+          <label>工具类别<select id="binding-category"><option value="feishu">飞书</option><option value="collaboration">协作任务表（已实现）</option><option value="spreadsheet">电子表格（Excel/CSV，待开发）</option><option value="external">外部工具</option><option value="skill">Skill 配套工具</option></select></label>
+          <label id="binding-source-label" hidden>外部工具来源<select name="source" id="binding-source"><option value="builtin">飞书</option></select></label>
+          <label id="binding-connection-label">飞书连接<select name="connection_ref" id="binding-connection"></select></label>
+          <fieldset><legend>授权工具（点击勾选，可多选）</legend><div id="binding-tools"></div><p id="binding-tools-hint" class="muted"></p></fieldset>
+          <label id="binding-targets-label">目标 ID 白名单（飞书连接；空数组表示当前连接所有配置目标）<textarea name="allowed_targets" rows="2">[]</textarea></label>
+          <label id="binding-job-label" hidden><span id="binding-scope-name">可信作业 ID（业务 Skill）</span><input name="job_id" maxlength="128"></label>
+          <button id="binding-save">保存能力绑定</button></form><div id="bindings-list"></div>
+        </article></div><article><h2>心跳计划（含Agent工具创建的计划）</h2><p>暂停和停止仅影响未来触发；取消在途任务请在协作任务中另行操作。恢复重新计算下次触发，不补发历史心跳。</p><div id="schedules-list"></div><pre id="schedule-detail">选择计划查看最近执行</pre></article><article><h2>Agent 列表</h2><div id="agents-list"></div></article>
+    </section>
+    <section id="tab-chat" class="tab"><article class="chat-panel">
+      <div class="chat-heading"><div><h2>会话</h2><p>与 Agent 对话，查看回复与执行进度</p></div><span id="chat-status" role="status">准备就绪</span></div>
+      <div class="chat-toolbar"><label>对话 Agent<select id="chat-agent"></select></label><button id="session-new">新建对话</button></div>
+      <div class="session-toolbar"><label>选择对话<select id="session-select"></select></label><form id="session-name-form"><label>对话名称<input id="session-name" name="name" maxlength="80" placeholder="输入对话名称" required></label><button id="session-rename" class="secondary">保存名称</button></form><button id="session-delete" class="danger" type="button">删除对话</button></div>
+      <div id="session-delete-confirmation" class="session-delete-confirmation" hidden><span id="session-delete-text"></span><button id="session-delete-cancel" class="secondary" type="button">取消</button><button id="session-delete-confirm" class="danger" type="button">永久删除</button></div>
+      <div id="chat-messages" role="log" aria-label="对话消息"></div>
+      <form id="chat-form" class="chat-composer"><label for="chat-input">消息</label><textarea id="chat-input" name="content" rows="3" placeholder="输入需求或问题…" required></textarea><div class="composer-actions"><span>Enter 换行 · Ctrl / ⌘ + Enter 发送</span><button id="chat-send">发送消息</button></div></form>
+      <p class="chat-note">回复支持表格、列表与代码块。工具回执折叠显示；运行中可继续查看其他页面。</p>
+    </article></section>
+    <section id="tab-operations" class="tab"><article><h2>后台操作</h2><div id="operations-list"></div></article><article><h2>工具执行记录</h2><div id="runs-list"></div></article></section>
+    <section id="tab-topology" class="tab" aria-labelledby="topology-heading">
+      <article class="topology-panel">
+        <div class="topology-heading"><div><p class="topology-eyebrow">AGENT NETWORK</p><h2 id="topology-heading">协作关系，一图掌握</h2><p class="muted">按平台授权绘制调用方向。点击节点，查看 Agent 配置、上下游和任务。</p></div><button id="topology-refresh" class="secondary">刷新状态</button></div>
+        <div id="topology-stats" class="topology-stats"></div>
+        <div class="topology-toolbar"><label class="topology-search">查找 Agent<input id="topology-search" type="search" placeholder="名称、职责或 ID" autocomplete="off"></label><label class="check"><input id="topology-disabled" type="checkbox" checked>显示停用授权</label><label class="check"><input id="topology-neighbors" type="checkbox">只看选中节点及相邻关系</label><div class="topology-zoom"><button id="topology-minus" class="secondary" aria-label="缩小拓扑">−</button><button id="topology-fit" class="secondary">适应画布</button><button id="topology-plus" class="secondary" aria-label="放大拓扑">＋</button></div></div>
+        <div class="topology-workspace"><div class="topology-map"><div id="topology-viewport" tabindex="0" aria-label="Agent 协作关系画布，可滚动并使用缩放按钮"><div id="topology-spacer"><div id="topology-canvas"></div></div><p id="topology-empty" hidden>暂无 Agent，请先在“Agent 与绑定”中创建。</p></div><div class="topology-legend"><span><i class="topology-dot running"></i>运行中</span><span><i class="topology-dot waiting"></i>等待协作</span><span><i class="topology-dot queued"></i>排队</span><span><i class="topology-dot idle"></i>空闲</span><span><i class="topology-dot disabled"></i>停用 / 待配置</span><span>实线：可派单 →</span><span>点线：查询 / 管理 →</span><span>虚线：授权停用</span></div></div><aside id="topology-detail" aria-label="选中 Agent 详情"><div class="topology-placeholder"><span>◎</span><h3>选择一个 Agent</h3><p>查看实时状态、绑定能力<br>及授权协作关系。</p></div></aside></div>
+        <p id="topology-updated" class="muted">正在读取平台关系…</p>
+      </article>
+    </section>
+    <!-- 协作是平台持久任务，不用模型创建新的 Agent。 -->
+    <section id="tab-collaboration" class="tab">
+      <div class="grid"><article><h2>Agent 协作授权</h2><form id="grant-form">
+        <label>调用方<select id="grant-caller" name="caller_agent_id" required></select></label>
+        <label>被调用方<select id="grant-target" name="target_agent_id" required></select></label>
+        <fieldset><legend>有方向的权限（心跳计划独立于本次协作任务存续）</legend>
+          <label class="check"><input type="checkbox" name="submit" checked>提交子任务</label>
+          <label class="check"><input type="checkbox" name="status" checked>查询状态 / 等待</label>
+          <label class="check"><input type="checkbox" name="result" checked>读取结果</label>
+          <label class="check"><input type="checkbox" name="overview" checked>运行概况</label>
+          <label class="check"><input type="checkbox" name="cancel">请求取消</label>
+          <label class="check"><input type="checkbox" name="schedule">管理持续心跳计划（schedule，默认不授权）</label>
+        </fieldset><button>保存授权</button></form><div id="grants-list"></div></article>
+        <article><h2>协作使用方式</h2><p>在会话中向主 Agent 用自然语言提出需求。主 Agent 根据被调用 Agent 的契约整理参数，信息不足时向用户追问，再通过授权 Tool 分派子任务。</p><p>本页管理协作授权，并查看统一任务表、执行状态和成果。</p><h3>部署范围</h3><p>当前所有 Agent 在同一环境运行。分布式、Docker/Kubernetes、边缘下发：待开发。</p></article></div>
+      <article><h2>统一协作任务大表</h2><div class="row"><select id="task-filter"><option value="">所有状态</option><option>queued</option><option>running</option><option>waiting</option><option>succeeded</option><option>failed</option><option>cancelled</option><option>interrupted</option></select><button id="tasks-refresh">刷新</button></div>
+      <div id="tasks-table" style="overflow:auto"></div><h3>任务详情 / 成果 / 状态历史</h3><pre id="task-detail">选择任务查看详情</pre></article>
+    </section>
+    <section id="tab-cli" class="tab"><article><h2>内置 Tool 能力</h2><p>平台将飞书等内置功能提供为 LangChain Tool。Agent 通过能力绑定使用；配置凭据、连接账号与请求 ID 由平台注入。</p>
+        <div id="builtin-tools"></div><h3>服务部署（待开发）</h3><p>Docker 运行时、Kubernetes 部署与启停管理将在独立模块实现。</p><h3>预留能力</h3><p>文件访问仅保留功能入口。本版本尚未开放文件读写，也没有 Docker 部署项。</p>
+      </article><article><h2>命令执行</h2><p>python cli.py catalog 查看目录；catalog --agent ID 查看该 Agent 获授权命令。Runtime 使用一次性票据调用。业务凭据由后端注入，命令返回结构化 JSON。</p></article></section>
+
+  </main><footer>LangChain / LangGraph 独立平台 · 运行数据保存在项目内 · 仅本机监听</footer>
+  <script src="/web/schema-form.js"></script><script src="/web/binding-controls.js"></script><script src="/web/chat-content.js"></script><script src="/web/app.js"></script><script src="/web/collaboration.js"></script><script src="/web/external-access.js"></script><script src="/web/topology.js"></script>
+</body></html>

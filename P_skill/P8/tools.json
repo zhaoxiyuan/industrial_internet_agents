@@ -1,0 +1,295 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "claim_risk_report",
+      "description": "用途：Main安排intake时领取P7最新待处理通知；名称保留兼容，并非只允许closed报告。优先event_notification pending（open/uncertain/closing/closed皆可），无通知再取旧report pending。lease_seconds可选30–1800，默认600；返claim.kind=event_notification或report，均原样传initialize_disposition；no_work如实结束。不会发送飞书、不创建新Agent。P7持续更新同事件会合并到最新版本，processing/failed不被自动改成pending。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 1800,
+            "description": "领取或续租秒数，30–1800整数；可选领取参数默认600。"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:claim_risk_report",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90,
+      "claim_failure": "fail_risk_report"
+    },
+    {
+      "name": "initialize_disposition",
+      "description": "用途：把领取的最新风险同步到单事件处置记录。claim.kind只允许event_notification/report且需当前有效领取；原样使用id/token。事务读取事件当前最新version，稳定report_id与该事件最终报告相同；没有最终报告时建立is_final=false临时视图，不冒充最终归档。创建或更新disposition.event_snapshot/event_version/risk_state，写card_intent pending，保留人工接取、材料版本、模型意见、人工审核、投递回执和人工risk_level_override。同已完成领取返回原记录，重复版本不重复建卡；成功消费通知并返回真实report_id/status/version/delivery。这里status只表示处置存储状态，非发送成功；再用平台feishu_sync_risk_card(report_id)核对真实或模拟回执。不会自行改变人工状态或调度Agent。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "description": "对象类型；在claim中必须原样使用领取类型，在retry_failed中按工具枚举选择。"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "领取记录标识，必须来自领取回执；证据引用内id是正整数数据库主键。"
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "description": "有效领取凭证，原样传回，不猜测、不外传。"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "token"
+            ],
+            "additionalProperties": false,
+            "description": "原样使用领取工具返回的kind/id/token；平台和业务侧校验角色、归属、期限，不复制到用户回复。"
+          }
+        },
+        "required": [
+          "claim"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:initialize_disposition",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "read_disposition",
+      "description": "用途：读取当前作业report_id对应处置、最新风险快照、材料/人工状态与平台delivery。report_id必须来自initialize_disposition/真实队列，不猜测。只读，delivery pending/unknown不能称送达，simulated只测试。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "report_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "稳定事件处置标识，来自初始化/队列真实回执，同事件开放和最终报告使用同一值。"
+          }
+        },
+        "required": [
+          "report_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_disposition",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "read_review_snapshot",
+      "description": "用途：Main安排review并提供report_id后获取当前整改材料快照。要求disposition.status=materials_in_audit，否则MATERIALS_NOT_READY；返回snapshot_id、material_version、materials、disposition_version和report。快照绑定当前agent_id/run_id，同一次任务依次read_material所有materials，再save_review_opinion；材料更新须重新取快照，不跨任务复用snapshot_id。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "report_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "稳定事件处置标识，来自初始化/队列真实回执，同事件开放和最终报告使用同一值。"
+          }
+        },
+        "required": [
+          "report_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_review_snapshot",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "read_material",
+      "description": "用途：读取本任务review_snapshot包含的material_id，校验snapshot.actor/run_id、材料属于快照、路径在共享根目录与SHA256一致；越界/改动拒绝。当前仅text/plain且UTF-8可解码、大小≤32000字节返回content/readable=true，其他返content=null/readable=false和limitation。工具登记本次材料读取；不能把文件名/上传成功当整改证据。当前save_review_opinion遇到任何不可读材料只允许unknown；外部视觉读取器的结果尚不能替代此读取标记，需受控接入后再扩展。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "本Agent本任务生成的审核快照标识，不跨任务复用。"
+          },
+          "material_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "该审核快照materials中的材料ID。"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "material_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:read_material",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "save_review_opinion",
+      "description": "用途：提交本任务当前材料快照的模型参考意见。snapshot_id来自read_review_snapshot；decision=sufficient/insufficient/unknown，reason写逐项依据，limitations传限制列表。要求快照同Agent/任务、处置仍materials_in_audit且material_version一致、所有材料已read_material；未读报READ_MATERIALS_FIRST，版本改变报MATERIAL_VERSION_CONFLICT，任何readable=false而非unknown报UNREADABLE_MATERIAL_REQUIRES_UNKNOWN。相同意见+快照幂等，保存后status=waiting_human_review并写card_intent pending，再平台同步卡片。sufficient不是批准，不写human_review、不关闭事件/作业；人工审批经平台已验证回调。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "本Agent本任务生成的审核快照标识，不跨任务复用。"
+          },
+          "decision": {
+            "enum": [
+              "sufficient",
+              "insufficient",
+              "unknown"
+            ],
+            "description": "sufficient/insufficient/unknown，表示模型参考意见；不可读材料只能unknown，不表示人工批准。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 1000,
+            "description": "事实/材料缺测、不可读及证据范围等限制字符串列表，没有额外限制传[]。"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "decision",
+          "reason",
+          "limitations"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:save_review_opinion",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "verify_job_closable",
+      "description": "用途：只读检查当前作业闭环屏障，参数{}。要求monitoring_closed且cutoff=p7_through、所有window/description/report/event_notification completed、所有事件closed并有is_final=true报告、所有处置closed并delivered（simulated仅test_mode=true可接受）。返回closable/blockers/job_status。closable=true也只是可供人工确认，不执行关闭、不绕过授权审核；播放结束或模型sufficient不能满足全作业关闭。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:verify_job_closable",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    },
+    {
+      "name": "fail_risk_report",
+      "description": "用途：登记intake领取失败，claim可省略按本run回收；提供时kind只允许report/event_notification，reason为真实错误。completed不回退；有效领取写failed+审计待Main显式retry_failed对应kind，不自动无限重试，不重置已保存处置，不处理unknown飞书发送。 工程上下文：agent_id、run_id、source_id/job_id与共享SQLite路径由平台可信绑定注入，不是模型参数；只能操作当前授权范围。业务工具不会自行创建Agent或调度下一阶段，租约凭证不得向用户输出。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "description": "对象类型；在claim中必须原样使用领取类型，在retry_failed中按工具枚举选择。"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "领取记录标识，必须来自领取回执；证据引用内id是正整数数据库主键。"
+              },
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "description": "有效领取凭证，原样传回，不猜测、不外传。"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "token"
+            ],
+            "additionalProperties": false,
+            "description": "原样使用领取工具返回的kind/id/token；平台和业务侧校验角色、归属、期限，不复制到用户回复。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "description": "实际失败、恢复、监测结束或复核理由；操作审计字段，不填写推测成功或敏感凭据。"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "entry": "scripts/tools.py:fail_risk_report",
+      "dependencies": [],
+      "storage": [
+        "p6_p7"
+      ],
+      "timeout": 90
+    }
+  ]
+}

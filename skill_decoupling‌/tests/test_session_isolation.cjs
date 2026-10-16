@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname,'../web/app.js'),'utf8');
+const fn = source.slice(source.indexOf('function agentSessions('),source.indexOf('function renderSessionControls('));
+let agent = 'a';
+let selected = 'a1';
+const rows = [{id:'a1',agent_id:'a'},{id:'b1',agent_id:'b'}];
+const context = {state:{sessions:rows},byId:()=>({value:agent}),options:(_,list)=>{if(!list.some(s=>s.id===selected))selected='';},result:null};
+vm.createContext(context);vm.runInContext(fn,context);
+assert.equal(context.agentSessions(rows).map(s=>s.id).join(','),'a1');
+agent='b';context.renderSessionOptions();assert.equal(selected,'');
+assert.equal(context.agentSessions(rows).map(s=>s.id).join(','),'b1');
+assert.equal(context.agentSessions([{id:'deleted-a',agent_id:'a'},{id:'deleted-b',agent_id:'b'}])[0].id,'deleted-b');
+agent='missing';assert.equal(context.agentSessions(rows).length,0);
+assert.ok(source.includes("byId('chat-agent').onchange = () => {stopRuntime();"));
+console.log('Agent session isolation passed');

@@ -1,0 +1,7 @@
+langchain==1.4.4
+langgraph==1.2.14
+deepagents==0.7.24
+langchain-openai==1.7.0
+langchain-mcp-adapters==0.3.2
+langgraph-checkpoint-sqlite==3.1.1
+docker==7.2.0
